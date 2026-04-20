@@ -1,0 +1,358 @@
+2026-04-13 17:06:44 | INFO    | rok.main             | ============================================================
+2026-04-13 17:06:44 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:06:44 | INFO    | rok.main             | ============================================================
+2026-04-13 17:06:44 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:06:44 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:06:44 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:06:44 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:06:44 | INFO    | rok.ConfigManager    | Config watching started: .
+2026-04-13 17:06:45 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-13 17:06:53 | INFO    | rok.gem_collect_setup | Gem collection is disabled in config
+2026-04-13 17:06:53 | INFO    | rok.main             | Engine started
+2026-04-13 17:06:53 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:54 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:54 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:55 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:55 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:56 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:56 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:57 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:57 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:58 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:58 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:59 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:06:59 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:00 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:00 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:01 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:01 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:02 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:02 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:03 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:03 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:04 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:04 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:05 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:05 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:05 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:06 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:06 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:06 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:06 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:07 | INFO    | rok.main             | Engine stopped
+2026-04-13 17:07:11 | INFO    | rok.main             | Engine stopped
+2026-04-13 17:07:11 | INFO    | rok.MainWindow       | Main window closed
+2026-04-13 17:07:35 | INFO    | rok.main             | ============================================================
+2026-04-13 17:07:35 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:07:35 | INFO    | rok.main             | ============================================================
+2026-04-13 17:07:35 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:07:35 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:07:35 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:07:35 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:07:35 | INFO    | rok.test             | ==================================================
+2026-04-13 17:07:35 | INFO    | rok.test             | Running basic functionality test
+2026-04-13 17:07:35 | INFO    | rok.test             | ==================================================
+2026-04-13 17:07:35 | INFO    | rok.test             | Test 1: Window search...
+2026-04-13 17:07:35 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-13 17:07:35 | WARNING | rok.test             |   SKIP - Window '万国觉醒' not found
+2026-04-13 17:07:35 | INFO    | rok.test             | Test 2: Screen capture...
+2026-04-13 17:07:35 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:07:35 | WARNING | rok.test             |   SKIP - Capture returned None (window may not be active)
+2026-04-13 17:07:35 | INFO    | rok.test             | Test 3: Model loading...
+2026-04-13 17:07:35 | ERROR   | rok.YOLODetector     | Model file not found: models/current/rok_detector.pt
+2026-04-13 17:07:35 | ERROR   | rok.test             |   FAIL - Model load failed: models/current/rok_detector.pt
+2026-04-13 17:07:35 | INFO    | rok.test             | Test 4: Safety config check...
+2026-04-13 17:07:35 | INFO    | rok.test             |   PASS - Safety: delay=[0.05,0.3]s, offset=+/-5px, max_actions=30/min
+2026-04-13 17:07:35 | INFO    | rok.test             | ==================================================
+2026-04-13 17:07:35 | INFO    | rok.test             | Test completed
+2026-04-13 17:07:35 | INFO    | rok.test             | ==================================================
+2026-04-13 17:08:01 | INFO    | rok.main             | ============================================================
+2026-04-13 17:08:01 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:08:01 | INFO    | rok.main             | ============================================================
+2026-04-13 17:08:01 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:08:01 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:08:01 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:08:01 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:08:01 | INFO    | rok.test             | ==================================================
+2026-04-13 17:08:01 | INFO    | rok.test             | Running basic functionality test
+2026-04-13 17:08:01 | INFO    | rok.test             | ==================================================
+2026-04-13 17:08:01 | INFO    | rok.test             | Test 1: Window search...
+2026-04-13 17:08:01 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-13 17:08:01 | WARNING | rok.test             |   SKIP - Window '万国觉醒' not found
+2026-04-13 17:08:01 | INFO    | rok.test             | Test 2: Screen capture...
+2026-04-13 17:08:01 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:08:01 | WARNING | rok.test             |   SKIP - Capture returned None (window may not be active)
+2026-04-13 17:08:01 | INFO    | rok.test             | Test 3: Model loading...
+2026-04-13 17:08:01 | ERROR   | rok.YOLODetector     | Model file not found: models/current/rok_detector.pt
+2026-04-13 17:08:01 | ERROR   | rok.test             |   FAIL - Model load failed: models/current/rok_detector.pt
+2026-04-13 17:08:01 | INFO    | rok.test             | Test 4: Safety config check...
+2026-04-13 17:08:01 | INFO    | rok.test             |   PASS - Safety: delay=[0.05,0.3]s, offset=+/-5px, max_actions=30/min
+2026-04-13 17:08:01 | INFO    | rok.test             | ==================================================
+2026-04-13 17:08:01 | INFO    | rok.test             | Test completed
+2026-04-13 17:08:01 | INFO    | rok.test             | ==================================================
+2026-04-13 17:24:55 | INFO    | rok.main             | ============================================================
+2026-04-13 17:24:55 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:24:55 | INFO    | rok.main             | ============================================================
+2026-04-13 17:24:55 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:24:55 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:24:55 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:24:55 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:24:55 | INFO    | rok.test             | ==================================================
+2026-04-13 17:24:55 | INFO    | rok.test             | Running basic functionality test
+2026-04-13 17:24:55 | INFO    | rok.test             | ==================================================
+2026-04-13 17:24:55 | INFO    | rok.test             | Test 1: Window search...
+2026-04-13 17:24:55 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-13 17:24:55 | WARNING | rok.test             |   SKIP - Window '万国觉醒' not found
+2026-04-13 17:24:55 | INFO    | rok.test             | Test 2: Screen capture...
+2026-04-13 17:24:55 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:24:55 | WARNING | rok.test             |   SKIP - Capture returned None (window may not be active)
+2026-04-13 17:24:55 | INFO    | rok.test             | Test 3: Model loading...
+2026-04-13 17:24:55 | ERROR   | rok.YOLODetector     | Model file not found: models/current/rok_detector.pt
+2026-04-13 17:24:55 | ERROR   | rok.test             |   FAIL - Model load failed: models/current/rok_detector.pt
+2026-04-13 17:24:55 | INFO    | rok.test             | Test 4: Safety config check...
+2026-04-13 17:24:55 | INFO    | rok.test             |   PASS - Safety: delay=[0.05,0.3]s, offset=+/-5px, max_actions=30/min
+2026-04-13 17:24:55 | INFO    | rok.test             | ==================================================
+2026-04-13 17:24:55 | INFO    | rok.test             | Test completed
+2026-04-13 17:24:55 | INFO    | rok.test             | ==================================================
+2026-04-13 17:25:19 | INFO    | rok.main             | ============================================================
+2026-04-13 17:25:19 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:25:19 | INFO    | rok.main             | ============================================================
+2026-04-13 17:25:19 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:25:20 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:25:20 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:25:20 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:25:20 | INFO    | rok.test             | ==================================================
+2026-04-13 17:25:20 | INFO    | rok.test             | Running basic functionality test
+2026-04-13 17:25:20 | INFO    | rok.test             | ==================================================
+2026-04-13 17:25:20 | INFO    | rok.test             | Test 1: Window search...
+2026-04-13 17:25:20 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-13 17:25:20 | WARNING | rok.test             |   SKIP - Window '万国觉醒' not found
+2026-04-13 17:25:20 | INFO    | rok.test             | Test 2: Screen capture...
+2026-04-13 17:25:20 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:25:20 | WARNING | rok.test             |   SKIP - Capture returned None (window may not be active)
+2026-04-13 17:25:20 | INFO    | rok.test             | Test 3: Model loading...
+2026-04-13 17:25:20 | ERROR   | rok.YOLODetector     | Model file not found: models/current/rok_detector.pt
+2026-04-13 17:25:20 | ERROR   | rok.test             |   FAIL - Model load failed: models/current/rok_detector.pt
+2026-04-13 17:25:20 | INFO    | rok.test             | Test 4: Safety config check...
+2026-04-13 17:25:20 | INFO    | rok.test             |   PASS - Safety: delay=[0.05,0.3]s, offset=+/-5px, max_actions=30/min
+2026-04-13 17:25:20 | INFO    | rok.test             | ==================================================
+2026-04-13 17:25:20 | INFO    | rok.test             | Test completed
+2026-04-13 17:25:20 | INFO    | rok.test             | ==================================================
+2026-04-13 17:26:29 | INFO    | rok.main             | ============================================================
+2026-04-13 17:26:29 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:26:29 | INFO    | rok.main             | ============================================================
+2026-04-13 17:26:29 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:26:29 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:26:29 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:26:29 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:26:29 | INFO    | rok.test             | ==================================================
+2026-04-13 17:26:29 | INFO    | rok.test             | Running basic functionality test
+2026-04-13 17:26:29 | INFO    | rok.test             | ==================================================
+2026-04-13 17:26:29 | INFO    | rok.test             | Test 1: Window search...
+2026-04-13 17:26:29 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-13 17:26:29 | WARNING | rok.test             |   SKIP - Window '万国觉醒' not found
+2026-04-13 17:26:29 | INFO    | rok.test             | Test 2: Screen capture...
+2026-04-13 17:26:29 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:26:29 | WARNING | rok.test             |   SKIP - Capture returned None (window may not be active)
+2026-04-13 17:26:29 | INFO    | rok.test             | Test 3: Model loading...
+2026-04-13 17:26:29 | INFO    | rok.YOLODetector     | Model loaded: yolov8n.pt, classes: 80, device: cpu
+2026-04-13 17:26:29 | INFO    | rok.test             |   PASS - Model loaded, classes: ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+2026-04-13 17:26:29 | INFO    | rok.test             | Test 4: Safety config check...
+2026-04-13 17:26:29 | INFO    | rok.test             |   PASS - Safety: delay=[0.05,0.3]s, offset=+/-5px, max_actions=30/min
+2026-04-13 17:26:29 | INFO    | rok.test             | ==================================================
+2026-04-13 17:26:29 | INFO    | rok.test             | Test completed
+2026-04-13 17:26:29 | INFO    | rok.test             | ==================================================
+2026-04-13 17:28:44 | INFO    | rok.main             | ============================================================
+2026-04-13 17:28:44 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-13 17:28:44 | INFO    | rok.main             | ============================================================
+2026-04-13 17:28:44 | INFO    | rok.main             | Initializing application...
+2026-04-13 17:28:44 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-13 17:28:44 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-13 17:28:44 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-13 17:28:44 | INFO    | rok.ConfigManager    | Config watching started: .
+2026-04-13 17:28:47 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-13 17:28:52 | INFO    | rok.gem_collect_setup | Gem collection is disabled in config
+2026-04-13 17:28:52 | INFO    | rok.main             | Engine started
+2026-04-13 17:28:52 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:53 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:53 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:54 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:54 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:55 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:55 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:56 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:56 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:57 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:57 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:58 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:28:58 | INFO    | rok.main             | Engine stopped
+2026-04-13 17:29:03 | INFO    | rok.gem_collect_setup | Gem collection is disabled in config
+2026-04-13 17:29:03 | INFO    | rok.main             | Engine started
+2026-04-13 17:29:03 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:03 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:04 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:04 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:05 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:05 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:06 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:06 | INFO    | rok.main             | Engine stopped
+2026-04-13 17:29:21 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-13 17:29:23 | INFO    | rok.main             | Engine stopped
+2026-04-13 17:29:23 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 10:53:17 | INFO    | rok.main             | ============================================================
+2026-04-14 10:53:17 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-14 10:53:18 | INFO    | rok.main             | ============================================================
+2026-04-14 10:53:18 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:53:18 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:53:18 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 10:53:18 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:53:18 | INFO    | rok.ConfigManager    | Config watching started: .
+2026-04-14 10:53:20 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 10:54:18 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:54:18 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:54:18 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 10:54:18 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:54:18 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:54:18 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:54:18 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:54:18 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:54:18 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:54:24 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:54:24 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:54:24 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:54:24 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:55:03 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:55:03 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:55:03 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 10:55:03 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:55:03 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:55:03 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:55:03 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:55:03 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:55:03 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to window.found
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to window.lost
+2026-04-14 10:55:04 | DEBUG   | rok.EventBus         | Subscribed to detection.completed
+2026-04-14 10:55:04 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 10:55:21 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:55:21 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:55:22 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:55:22 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:55:45 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:55:45 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:55:45 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:55:45 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:56:18 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:56:18 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:56:18 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 10:56:18 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:56:18 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:56:18 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:56:18 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:56:18 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:56:18 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to window.found
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to window.lost
+2026-04-14 10:56:20 | DEBUG   | rok.EventBus         | Subscribed to detection.completed
+2026-04-14 10:56:20 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 10:56:33 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:56:33 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:56:34 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:56:34 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:57:07 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:57:07 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:57:07 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 10:57:07 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:57:07 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:57:07 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:57:07 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:57:07 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:57:07 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to engine.started
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to engine.stopped
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to engine.error
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to task.completed
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to task.failed
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to window.found
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to window.lost
+2026-04-14 10:57:08 | DEBUG   | rok.EventBus         | Subscribed to detection.completed
+2026-04-14 10:57:08 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 10:57:33 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:57:33 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:57:33 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:57:33 | INFO    | rok.ConfigManager    | Configuration reloaded successfully
+2026-04-14 10:57:35 | INFO    | rok.main             | Engine started
+2026-04-14 10:57:35 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:36 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:36 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:37 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:37 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:38 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:38 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:39 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:39 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:40 | ERROR   | rok.WindowCapture    | Invalid window handle
+2026-04-14 10:57:40 | INFO    | rok.main             | Engine stopped
+2026-04-14 10:57:40 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 10:57:41 | INFO    | rok.main             | Engine stopped
+2026-04-14 10:57:41 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 10:57:43 | INFO    | rok.main             | Engine stopped
+2026-04-14 10:57:43 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 10:57:47 | INFO    | rok.main             | Engine stopped
+2026-04-14 10:57:47 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 10:57:50 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 10:57:51 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 10:58:09 | INFO    | rok.YOLODetector     | Model loaded: yolov8n.pt, classes: 80, device: cpu
+2026-04-14 10:58:10 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 10:59:20 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 11:01:14 | INFO    | rok.main             | Initializing application...
+2026-04-14 11:01:14 | INFO    | rok.ConfigManager    | Config loaded: E:\pyworkspace\todolist\rok_assistant\config.yaml
+2026-04-14 11:01:14 | INFO    | rok.main             | Config loaded: E:\pyworkspace\todolist\rok_assistant\config.yaml
+2026-04-14 11:01:14 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:01:14 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 11:01:24 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:01:24 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 11:10:39 | INFO    | rok.main             | Initializing application...
+2026-04-14 11:10:39 | INFO    | rok.ConfigManager    | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:10:39 | INFO    | rok.main             | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:10:39 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:10:39 | INFO    | rok.WindowCapture    | Window found: hwnd=1903900, size=958x1008
+2026-04-14 11:10:41 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 11:10:48 | INFO    | rok.main             | Engine started
+2026-04-14 11:12:04 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:15:07 | INFO    | rok.main             | Initializing application...
+2026-04-14 11:15:07 | INFO    | rok.ConfigManager    | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:15:07 | INFO    | rok.main             | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:15:07 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:15:07 | INFO    | rok.WindowCapture    | Window found: hwnd=1903900, size=958x1008
+2026-04-14 11:15:08 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 11:15:09 | INFO    | rok.main             | Engine started
+2026-04-14 11:19:54 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:19:54 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 11:19:58 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:19:58 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 11:21:10 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:21:10 | INFO    | rok.WindowCapture    | Window found: hwnd=1903900, size=958x1008
+2026-04-14 11:21:10 | DEBUG   | rok.WindowCapture    | PrintWindow capture success: (1008, 958, 3)
+2026-04-14 11:21:43 | INFO    | rok.main             | Initializing application...
+2026-04-14 11:21:43 | INFO    | rok.ConfigManager    | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:21:43 | INFO    | rok.main             | Config loaded: E:\pyworkspace\todolist\rok_assistant\config_yuanbao.yaml
+2026-04-14 11:21:43 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:21:43 | INFO    | rok.WindowCapture    | Window found: hwnd=1903900, size=958x1008
+2026-04-14 11:21:44 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-14 11:21:46 | INFO    | rok.main             | Engine started
+2026-04-14 11:23:45 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:23:54 | INFO    | rok.main             | Engine stopped
+2026-04-14 11:23:54 | INFO    | rok.MainWindow       | Main window closed
+2026-04-14 11:25:50 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:25:50 | INFO    | rok.WindowCapture    | Window found: hwnd=1903900, size=958x1008

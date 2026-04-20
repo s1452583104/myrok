@@ -1,0 +1,103 @@
+2026-04-14 10:49:32 | INFO    | rok.main             | ============================================================
+2026-04-14 10:49:32 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-14 10:49:32 | INFO    | rok.main             | ============================================================
+2026-04-14 10:49:32 | INFO    | rok.main             | Initializing application...
+2026-04-14 10:49:32 | WARNING | rok.ConfigManager    | Config not found, using defaults: config.yaml
+2026-04-14 11:02:26 | INFO    | rok.main             | ============================================================
+2026-04-14 11:02:26 | INFO    | rok.main             | 万国觉醒辅助工具 - ROK Assistant v1.0.0
+2026-04-14 11:02:26 | INFO    | rok.main             | ============================================================
+2026-04-14 11:02:26 | INFO    | rok.main             | Initializing application...
+2026-04-14 11:02:26 | INFO    | rok.ConfigManager    | Config loaded: config.yaml
+2026-04-14 11:02:26 | INFO    | rok.main             | Config loaded: config.yaml
+2026-04-14 11:02:26 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-14 11:02:26 | INFO    | rok.ConfigManager    | Config watching started: .
+2026-04-14 11:02:27 | INFO    | rok.MainWindow       | Main window initialized
+2026-04-17 15:34:00 | INFO    | rok.gem_collection_demo | === 宝石采集功能集成示例 ===
+2026-04-17 15:34:00 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-17 15:34:00 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-17 15:34:00 | ERROR   | rok.gem_collection_demo | Game window not found
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | === 宝石采集功能集成示例 ===
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 正在加载配置...
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 1. 加载配置文件
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 配置加载成功
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 2. 初始化窗口捕获
+2026-04-17 15:35:05 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-17 15:35:05 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-17 15:35:05 | WARNING | rok.gem_collection_demo | 游戏窗口未找到
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 模拟测试模式启动
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 3. 初始化YOLO检测器
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | YOLO检测器初始化成功
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 4. 初始化后台输入控制器
+2026-04-17 15:35:05 | WARNING | rok.gem_collection_demo | 后台输入控制器未初始化 (窗口未找到)
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 5. 初始化游戏启动管理器
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 游戏启动管理器初始化成功
+2026-04-17 15:35:05 | INFO    | rok.gem_collection_demo | 6. 检查游戏运行状态
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 游戏未运行，准备启动...
+2026-04-17 15:35:07 | ERROR   | rok.GameLauncherManager | Game exe not found: 
+2026-04-17 15:35:07 | WARNING | rok.gem_collection_demo | 游戏启动失败
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 7. 检查宝石采集配置
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 宝石采集状态: 未启用
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 采集模式: redeploy
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 矿点数量: 0
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 队列数量: 0
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 宝石采集未启用，请在config.yaml中设置 automation.gem_collection.enabled: true
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 游戏窗口未找到，无法启动宝石采集
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | 输入控制器未初始化，无法启动宝石采集
+2026-04-17 15:35:07 | INFO    | rok.gem_collection_demo | === 演示完成 ===
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | === 宝石采集功能集成示例 ===
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 正在加载配置...
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 1. 加载配置文件
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 配置加载成功
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 2. 初始化窗口捕获
+2026-04-17 15:36:38 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-17 15:36:38 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-17 15:36:38 | WARNING | rok.gem_collection_demo | 游戏窗口未找到
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 模拟测试模式启动
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 3. 初始化YOLO检测器
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | YOLO检测器初始化成功
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 4. 初始化后台输入控制器
+2026-04-17 15:36:38 | WARNING | rok.gem_collection_demo | 后台输入控制器未初始化 (窗口未找到)
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 5. 初始化游戏启动管理器
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 游戏启动管理器初始化成功
+2026-04-17 15:36:38 | INFO    | rok.gem_collection_demo | 6. 检查游戏运行状态
+2026-04-17 15:36:42 | INFO    | rok.gem_collection_demo | 游戏未运行，准备启动...
+2026-04-17 15:36:42 | ERROR   | rok.GameLauncherManager | Game exe not found: 
+2026-04-17 15:36:42 | WARNING | rok.gem_collection_demo | 游戏启动失败
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 7. 检查宝石采集配置
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 宝石采集状态: 未启用
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 采集模式: redeploy
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 矿点数量: 0
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 队列数量: 0
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 宝石采集未启用，请在config.yaml中设置 automation.gem_collection.enabled: true
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 游戏窗口未找到，无法启动宝石采集
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | 输入控制器未初始化，无法启动宝石采集
+2026-04-17 15:36:43 | INFO    | rok.gem_collection_demo | === 演示完成 ===
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | === 宝石采集功能集成示例 ===
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 正在加载配置...
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 1. 加载配置文件
+2026-04-17 15:38:37 | INFO    | rok.ConfigManager    | Config loaded: E:\pyworkspace\todolist\rok_assistant\config.yaml
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 配置加载成功: E:\pyworkspace\todolist\rok_assistant\config.yaml
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 2. 初始化窗口捕获
+2026-04-17 15:38:37 | INFO    | rok.WindowCapture    | DPI scale: 1.00
+2026-04-17 15:38:37 | ERROR   | rok.WindowCapture    | Window not found: 万国觉醒
+2026-04-17 15:38:37 | WARNING | rok.gem_collection_demo | 游戏窗口未找到
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 模拟测试模式启动
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 3. 初始化YOLO检测器
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | YOLO检测器初始化成功
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 4. 初始化后台输入控制器
+2026-04-17 15:38:37 | WARNING | rok.gem_collection_demo | 后台输入控制器未初始化 (窗口未找到)
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 5. 初始化游戏启动管理器
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 游戏启动管理器初始化成功
+2026-04-17 15:38:37 | INFO    | rok.gem_collection_demo | 6. 检查游戏运行状态
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 游戏未运行，准备启动...
+2026-04-17 15:38:40 | ERROR   | rok.GameLauncherManager | Game exe not found: C:\Program Files\Rise of Kingdoms\RiseOfKingdoms.exe
+2026-04-17 15:38:40 | WARNING | rok.gem_collection_demo | 游戏启动失败
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 7. 检查宝石采集配置
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 宝石采集状态: 未启用
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 采集模式: redeploy
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 矿点数量: 3
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 队列数量: 3
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 宝石采集未启用，请在config.yaml中设置 automation.gem_collection.enabled: true
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 游戏窗口未找到，无法启动宝石采集
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | 输入控制器未初始化，无法启动宝石采集
+2026-04-17 15:38:40 | INFO    | rok.gem_collection_demo | === 演示完成 ===

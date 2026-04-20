@@ -1,0 +1,52 @@
+2026-04-13 16:18:10 | DEBUG   | rok.test_module      | Debug message
+2026-04-13 16:18:10 | INFO    | rok.test_module      | Info message
+2026-04-13 16:18:10 | WARNING | rok.test_module      | Warning message
+2026-04-13 16:18:10 | ERROR   | rok.test_module      | Error message
+2026-04-13 16:18:10 | DEBUG   | rok.EventBus         | Subscribed to test.event
+2026-04-13 16:18:10 | DEBUG   | rok.EventBus         | Unsubscribed from test.event
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task added: test_task, type=test, trigger=interval
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task disabled: test_task
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task enabled: test_task
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task removed: test_task
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task added: manual_task, type=test, trigger=manual
+2026-04-13 16:18:10 | INFO    | rok.TaskScheduler    | Task manually triggered: manual_task
+2026-04-13 16:18:10 | WARNING | rok.TaskScheduler    | Task not found: nonexistent
+2026-04-13 16:22:37 | DEBUG   | rok.test_module      | Debug message
+2026-04-13 16:22:37 | INFO    | rok.test_module      | Info message
+2026-04-13 16:22:37 | WARNING | rok.test_module      | Warning message
+2026-04-13 16:22:37 | ERROR   | rok.test_module      | Error message
+2026-04-13 16:22:37 | DEBUG   | rok.EventBus         | Subscribed to test.event
+2026-04-13 16:22:37 | DEBUG   | rok.EventBus         | Unsubscribed from test.event
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task added: test_task, type=test, trigger=interval
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task disabled: test_task
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task enabled: test_task
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task removed: test_task
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task added: manual_task, type=test, trigger=manual
+2026-04-13 16:22:37 | INFO    | rok.TaskScheduler    | Task manually triggered: manual_task
+2026-04-13 16:22:37 | WARNING | rok.TaskScheduler    | Task not found: nonexistent
+2026-04-13 16:41:46 | DEBUG   | rok.test_module      | Debug message
+2026-04-13 16:41:46 | INFO    | rok.test_module      | Info message
+2026-04-13 16:41:46 | WARNING | rok.test_module      | Warning message
+2026-04-13 16:41:46 | ERROR   | rok.test_module      | Error message
+2026-04-13 16:41:46 | DEBUG   | rok.EventBus         | Subscribed to test.event
+2026-04-13 16:41:46 | DEBUG   | rok.EventBus         | Unsubscribed from test.event
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task added: test_task, type=test, trigger=interval
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task disabled: test_task
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task enabled: test_task
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task removed: test_task
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task added: manual_task, type=test, trigger=manual
+2026-04-13 16:41:46 | INFO    | rok.TaskScheduler    | Task manually triggered: manual_task
+2026-04-13 16:41:46 | WARNING | rok.TaskScheduler    | Task not found: nonexistent
+2026-04-13 16:59:53 | DEBUG   | rok.test_module      | Debug message
+2026-04-13 16:59:53 | INFO    | rok.test_module      | Info message
+2026-04-13 16:59:53 | WARNING | rok.test_module      | Warning message
+2026-04-13 16:59:53 | ERROR   | rok.test_module      | Error message
+2026-04-13 16:59:53 | DEBUG   | rok.EventBus         | Subscribed to test.event
+2026-04-13 16:59:53 | DEBUG   | rok.EventBus         | Unsubscribed from test.event
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task added: test_task, type=test, trigger=interval
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task disabled: test_task
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task enabled: test_task
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task removed: test_task
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task added: manual_task, type=test, trigger=manual
+2026-04-13 16:59:54 | INFO    | rok.TaskScheduler    | Task manually triggered: manual_task
+2026-04-13 16:59:54 | WARNING | rok.TaskScheduler    | Task not found: nonexistent
