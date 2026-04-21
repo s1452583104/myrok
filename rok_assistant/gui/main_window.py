@@ -1,7 +1,7 @@
 import sys
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QStatusBar, QSplitter, QTextEdit, QTabWidget, QFrame
+    QStatusBar, QSplitter, QTextEdit, QTabWidget, QFrame, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
@@ -11,6 +11,7 @@ from infrastructure import get_logger
 from .settings_dialog import SettingsDialog
 from .log_panel import LogPanel
 from .debug_window import DebugWindow
+from core.game_launcher import GameLauncher
 
 
 class MainWindow(QMainWindow):
@@ -172,6 +173,33 @@ class MainWindow(QMainWindow):
     
     def _start_automation(self):
         """开始自动化"""
+        # 检查游戏路径
+        game_path = self._config_manager.get('window.game_path', '')
+        if not game_path:
+            QMessageBox.warning(self, "警告", "请先在设置中配置游戏路径")
+            return
+        
+        # 检查游戏是否运行
+        process_name = self._config_manager.get('window.process_name', 'RiseofKingdoms.exe')
+        launcher = GameLauncher(game_path, process_name)
+        
+        if not launcher.is_game_running():
+            self._logger.info("Game not running, launching game...")
+            self.game_status_label.setText("游戏状态: 启动中...")
+            
+            if not launcher.launch_game():
+                QMessageBox.critical(self, "错误", f"游戏启动失败，请检查路径: {game_path}")
+                return
+            
+            # 等待游戏加载
+            if not launcher.wait_for_game_ready():
+                QMessageBox.warning(self, "警告", "游戏启动超时，请检查游戏是否正常加载")
+                return
+            
+            self._logger.info("Game launched successfully")
+            self.game_status_label.setText("游戏状态: 已连接")
+        
+        # 开始自动化
         self._automation_engine.start()
         self._task_scheduler.start()
         self._logger.info("Automation started")
