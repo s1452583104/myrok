@@ -50,6 +50,11 @@ class ConfigManager:
             with open(self._config_file, 'r', encoding='utf-8') as f:
                 self._config = yaml.safe_load(f)
             
+            # 处理空配置文件
+            if self._config is None:
+                self._config = {}
+                self._logger.warning("Config file is empty, using empty config")
+            
             self._logger.info(f"Config loaded from {self._config_file}")
             
             # 发布配置变更事件
