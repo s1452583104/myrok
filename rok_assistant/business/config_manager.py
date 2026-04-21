@@ -74,7 +74,7 @@ class ConfigManager:
                 os.makedirs(config_dir, exist_ok=True)
             
             with open(self._config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(self._config, f, ensure_ascii=False, indent=2)
+                yaml.dump(self._config, f, default_flow_style=False, allow_unicode=True, indent=2)
             
             self._logger.info(f"Config saved to {self._config_file}")
             return True

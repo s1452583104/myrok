@@ -10,8 +10,9 @@ from infrastructure import get_logger
 class LogPanel(QDialog):
     """日志面板"""
     
-    def __init__(self, parent=None):
+    def __init__(self, log_file: str = "logs/rok_assistant.log", parent=None):
         super().__init__(parent)
+        self._log_file = log_file
         self._logger = get_logger(self.__class__.__name__)
         
         self.setWindowTitle("日志面板")
@@ -59,8 +60,7 @@ class LogPanel(QDialog):
     def _load_log(self):
         """加载日志"""
         try:
-            log_file = "logs/rok_assistant.log"
-            with open(log_file, 'r', encoding='utf-8') as f:
+            with open(self._log_file, 'r', encoding='utf-8') as f:
                 log_content = f.read()
             self.log_text.setText(log_content)
             self._logger.info("Log loaded successfully")
