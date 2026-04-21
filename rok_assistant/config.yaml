@@ -1,6 +1,7 @@
 window:
   title: 万国觉醒
   process_name: RiseofKingdoms.exe
+  game_path: ''
 model:
   path: models/current/rok_detector.pt
   confidence: 0.6

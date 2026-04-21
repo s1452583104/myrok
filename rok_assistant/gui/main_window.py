@@ -8,6 +8,9 @@ from PyQt6.QtGui import QFont
 from business import ConfigManager, DetectionService, GameController, AutomationEngine
 from coordination import EventBus, TaskScheduler, PluginManager
 from infrastructure import get_logger
+from .settings_dialog import SettingsDialog
+from .log_panel import LogPanel
+from .debug_window import DebugWindow
 
 
 class MainWindow(QMainWindow):
@@ -193,13 +196,14 @@ class MainWindow(QMainWindow):
     
     def _show_log(self):
         """显示日志"""
-        # 这里可以实现日志窗口
-        pass
+        log_file = self._config_manager.get('logging.file', 'logs/rok_assistant.log')
+        self._log_window = LogPanel(log_file)
+        self._log_window.show()
     
     def _show_settings(self):
         """显示设置"""
-        # 这里可以实现设置窗口
-        pass
+        self._settings_dialog = SettingsDialog(self._config_manager, self)
+        self._settings_dialog.exec()
     
     def update_plugins_list(self):
         """更新插件列表"""

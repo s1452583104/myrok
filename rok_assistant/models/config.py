@@ -7,6 +7,7 @@ class WindowConfig:
     """窗口配置"""
     title: str
     process_name: str
+    game_path: str = ''
 
 
 @dataclass

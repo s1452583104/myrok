@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox,
-    QComboBox, QSpinBox, QDoubleSpinBox, QPushButton, QGroupBox
+    QComboBox, QSpinBox, QDoubleSpinBox, QPushButton, QGroupBox, QFileDialog
 )
 from PyQt6.QtCore import Qt
 from business import ConfigManager
@@ -42,6 +42,17 @@ class SettingsDialog(QDialog):
         self.process_name_edit = QLineEdit()
         process_layout.addWidget(self.process_name_edit)
         game_layout.addLayout(process_layout)
+        
+        # 游戏路径
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("游戏路径:"))
+        self.game_path_edit = QLineEdit()
+        path_layout.addWidget(self.game_path_edit)
+        self.game_path_browse = QPushButton("浏览...")
+        self.game_path_browse.setFixedWidth(80)
+        self.game_path_browse.clicked.connect(self._browse_game_path)
+        path_layout.addWidget(self.game_path_browse)
+        game_layout.addLayout(path_layout)
         
         main_layout.addWidget(game_group)
         
@@ -168,6 +179,7 @@ class SettingsDialog(QDialog):
         # 游戏设置
         self.window_title_edit.setText(self._config_manager.get('window.title', '万国觉醒'))
         self.process_name_edit.setText(self._config_manager.get('window.process_name', 'RiseofKingdoms.exe'))
+        self.game_path_edit.setText(self._config_manager.get('window.game_path', ''))
         
         # 模型设置
         self.model_path_edit.setText(self._config_manager.get('model.path', 'models/current/rok_detector.pt'))
@@ -187,11 +199,23 @@ class SettingsDialog(QDialog):
         self.training_check.setChecked(self._config_manager.get('automation.army_training.enabled', False))
         self.training_quantity_spin.setValue(self._config_manager.get('automation.army_training.quantity', 1000))
     
+    def _browse_game_path(self):
+        """浏览游戏路径"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择游戏可执行文件",
+            "",
+            "可执行文件 (*.exe);;所有文件 (*.*)"
+        )
+        if file_path:
+            self.game_path_edit.setText(file_path)
+    
     def _save_config(self):
         """保存配置"""
         # 游戏设置
         self._config_manager.set('window.title', self.window_title_edit.text())
         self._config_manager.set('window.process_name', self.process_name_edit.text())
+        self._config_manager.set('window.game_path', self.game_path_edit.text())
         
         # 模型设置
         self._config_manager.set('model.path', self.model_path_edit.text())
