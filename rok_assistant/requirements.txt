@@ -1,16 +1,19 @@
-# ROK Assistant - 万国觉醒游戏辅助工具
-# Core dependencies
-PyQt6>=6.5.0
-torch>=2.0.0
-ultralytics>=8.0.0
-opencv-python>=4.8.0
-pyautogui>=0.9.54
-pywin32>=306
-PyYAML>=6.0
-watchdog>=3.0.0
-numpy>=1.24.0
-pillow>=10.0.0
+# 核心依赖
+PyQt6==6.5.3
+ultralytics==8.0.196
+opencv-python==4.8.1.78
+pywin32==306
+PyYAML==6.0.1
+pyautogui==0.9.54
+numpy==1.24.3
+Pillow==9.4.0
+watchdog==3.0.0
 
-# Testing
-pytest>=7.0.0
-pytest-mock>=3.10.0
+# 可选依赖
+paddleocr==2.7.0.3  # OCR文字识别
+paddlepaddle==2.5.2  # PaddleOCR依赖
+
+# 开发依赖
+pytest==7.4.0
+black==23.11.0
+flake8==6.0.0

@@ -1,2 +1,4 @@
-# ROK Assistant - 万国觉醒游戏辅助工具
-"""Gem collection plugin."""
+from .plugin import GemCollectPlugin
+from .strategy import GemCollectStrategy
+
+__all__ = ['GemCollectPlugin', 'GemCollectStrategy']

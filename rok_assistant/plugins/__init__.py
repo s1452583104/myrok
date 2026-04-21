@@ -1,2 +1,3 @@
-# ROK Assistant - 万国觉醒游戏辅助工具
-"""Plugin modules."""
+from .base_plugin import BasePlugin
+
+__all__ = ['BasePlugin']

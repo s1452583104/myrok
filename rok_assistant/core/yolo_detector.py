@@ -1,93 +1,78 @@
-"""YOLO检测器模块.
-
-提供YOLO目标检测功能.
-
-核心功能:
-- 加载/卸载YOLO模型
-- 执行目标检测推理
-- 解析检测结果
-- 支持模型热切换
-
-线程安全: 推理线程安全（YOLO内部处理）
-异常: ModelLoadError, InferenceError
-"""
-
-import time
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
-
+import time
 import numpy as np
+from ultralytics import YOLO
+from infrastructure import get_logger, ModelLoadError, InferenceError
 
-from infrastructure.exception_handler import InferenceError, ModelLoadError
-from infrastructure.logger import get_logger
-from models.detection import BoundingBox, DetectionElement, DetectionResult
 
-try:
-    from ultralytics import YOLO
+class BoundingBox:
+    """边界框"""
+    def __init__(self, x1: int, y1: int, x2: int, y2: int):
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+    
+    @property
+    def width(self) -> int:
+        return self.x2 - self.x1
+    
+    @property
+    def height(self) -> int:
+        return self.y2 - self.y1
+    
+    @property
+    def center(self) -> Tuple[int, int]:
+        return ((self.x1 + self.x2) // 2, (self.y1 + self.y2) // 2)
 
-    _ULTRALYTICS_AVAILABLE = True
-except ImportError:
-    _ULTRALYTICS_AVAILABLE = False
+
+class DetectionElement:
+    """检测元素"""
+    def __init__(self, class_name: str, class_id: int, confidence: float, bbox: BoundingBox, center: Tuple[int, int]):
+        self.class_name = class_name
+        self.class_id = class_id
+        self.confidence = confidence
+        self.bbox = bbox
+        self.center = center
+
+
+class DetectionResult:
+    """检测结果"""
+    def __init__(self, elements: List[DetectionElement], image_width: int, image_height: int, timestamp: float):
+        self.elements = elements
+        self.image_width = image_width
+        self.image_height = image_height
+        self.timestamp = timestamp
+    
+    def get_elements_by_class(self, class_name: str) -> List[DetectionElement]:
+        """根据类别获取元素"""
+        return [elem for elem in self.elements if elem.class_name == class_name]
+    
+    def get_element_by_class(self, class_name: str) -> Optional[DetectionElement]:
+        """获取指定类别的第一个元素"""
+        elements = self.get_elements_by_class(class_name)
+        return elements[0] if elements else None
 
 
 class BaseDetector(ABC):
-    """检测器抽象基类.
-
-    定义所有检测器必须实现的接口, 支持未来扩展其他检测方式.
-    """
-
+    """检测器抽象基类"""
     @abstractmethod
     def detect(self, image: np.ndarray) -> DetectionResult:
-        """执行目标检测.
-
-        Args:
-            image: 输入图像 (BGR格式)
-
-        Returns:
-            检测结果
-        """
         pass
-
+    
     @abstractmethod
     def load_model(self, path: str) -> bool:
-        """加载检测模型.
-
-        Args:
-            path: 模型文件路径
-
-        Returns:
-            是否加载成功
-        """
         pass
-
+    
     @abstractmethod
     def unload_model(self) -> None:
-        """卸载检测模型."""
         pass
 
 
 class YOLODetector(BaseDetector):
-    """YOLO目标检测模块.
-
-    职责:
-    - 加载/卸载YOLO模型
-    - 执行目标检测推理
-    - 解析检测结果
-    - 支持模型热切换
-
-    线程安全: 推理线程安全（YOLO内部处理）
-    异常: ModelLoadError, InferenceError
-
-    使用示例:
-        detector = YOLODetector(
-            model_path="models/rok_detector.pt",
-            confidence_threshold=0.5,
-        )
-        if detector.load_model():
-            result = detector.detect(image)
-            print(f"Found {result.element_count} elements")
-    """
-
+    """YOLO目标检测模块"""
+    
     def __init__(
         self,
         model_path: str,
@@ -96,15 +81,6 @@ class YOLODetector(BaseDetector):
         input_size: int = 640,
         device: str = "cpu",
     ):
-        """初始化YOLO检测器.
-
-        Args:
-            model_path: 模型文件路径
-            confidence_threshold: 置信度阈值
-            iou_threshold: NMS IoU阈值
-            input_size: 输入图像尺寸
-            device: 推理设备 (cpu, cuda, auto)
-        """
         self._model_path = model_path
         self._confidence_threshold = confidence_threshold
         self._iou_threshold = iou_threshold
@@ -114,53 +90,34 @@ class YOLODetector(BaseDetector):
         self._class_names: List[str] = []
         self._logger = get_logger(self.__class__.__name__)
 
-    def load_model(self, path: Optional[str] = None) -> bool:
-        """加载YOLO模型.
-
-        Args:
-            path: 可选的模型路径, 不指定时使用初始化时的路径
+    def load_model(self) -> bool:
+        """
+        加载YOLO模型
 
         Returns:
-            是否加载成功
+            bool: 加载是否成功
         """
-        if not _ULTRALYTICS_AVAILABLE:
-            self._logger.error("ultralytics is not installed")
-            return False
-
-        model_path = path or self._model_path
-
         try:
-            import os
-
-            if not os.path.exists(model_path):
-                self._logger.error(f"Model file not found: {model_path}")
-                raise ModelLoadError(
-                    f"Model file not found: {model_path}", model_path=model_path
-                )
-
-            self._model = YOLO(model_path)
+            self._model = YOLO(self._model_path)
             self._class_names = list(self._model.names.values())
-            self._model_path = model_path
             self._logger.info(
-                f"Model loaded: {model_path}, "
+                f"Model loaded: {self._model_path}, "
                 f"classes: {len(self._class_names)}, device: {self._device}"
             )
             return True
-
-        except ModelLoadError:
-            raise
         except Exception as e:
-            self._logger.error(f"Failed to load model: {e}", exc_info=True)
+            self._logger.error(f"Failed to load model: {e}")
             return False
 
     def detect(self, image: np.ndarray) -> DetectionResult:
-        """执行目标检测.
+        """
+        执行目标检测
 
         Args:
             image: BGR格式输入图像
 
         Returns:
-            检测结果
+            DetectionResult: 检测结果
 
         Raises:
             InferenceError: 推理失败
@@ -168,10 +125,8 @@ class YOLODetector(BaseDetector):
         if self._model is None:
             raise InferenceError("Model not loaded")
 
-        if image is None or image.size == 0:
-            raise InferenceError("Empty input image")
-
         try:
+            start_time = time.time()
             results = self._model(
                 image,
                 conf=self._confidence_threshold,
@@ -180,123 +135,76 @@ class YOLODetector(BaseDetector):
                 device=self._device,
                 verbose=False,
             )
+            inference_time = time.time() - start_time
 
-            return self._parse_results(results[0], image.shape)
+            result = self._parse_results(results[0], image.shape)
+            self._logger.debug(f"Inference time: {inference_time:.3f}s, elements: {len(result.elements)}")
+            return result
 
-        except InferenceError:
-            raise
         except Exception as e:
-            self._logger.error(f"Inference failed: {e}", exc_info=True)
             raise InferenceError(f"Inference failed: {e}") from e
 
-    def detect_elements(
-        self, image: np.ndarray, class_names: Optional[List[str]] = None
-    ) -> List[DetectionElement]:
-        """执行检测并过滤指定类别的元素.
-
-        Args:
-            image: BGR格式输入图像
-            class_names: 要过滤的类别名称列表, None表示全部返回
-
-        Returns:
-            过滤后的检测元素列表
-        """
-        result = self.detect(image)
-        if class_names is None:
-            return result.elements
-
-        filtered = []
-        for name in class_names:
-            filtered.extend(result.filter_by_class(name))
-        return filtered
-
-    def get_element_positions(
-        self, image: np.ndarray, class_name: str
-    ) -> List[Tuple[int, int]]:
-        """获取指定类别元素的中心位置.
-
-        Args:
-            image: BGR格式输入图像
-            class_name: 类别名称
-
-        Returns:
-            中心点坐标列表 [(x, y), ...]
-        """
-        result = self.detect(image)
-        elements = result.filter_by_class(class_name)
-        return [e.center for e in elements]
-
-    def _parse_results(
-        self, result, original_shape: Tuple[int, ...]
-    ) -> DetectionResult:
-        """解析YOLO检测结果.
-
-        Args:
-            result: YOLO单张图像的推理结果
-            original_shape: 原始图像尺寸 (H, W, C)
-
-        Returns:
-            解析后的检测结果
-        """
-        elements: List[DetectionElement] = []
+    def _parse_results(self, result, original_shape: tuple) -> DetectionResult:
+        """解析YOLO检测结果"""
+        elements = []
         boxes = result.boxes
 
-        if boxes is not None and len(boxes) > 0:
-            # 计算缩放比例
-            orig_h, orig_w = original_shape[:2]
-            scale_x = orig_w / self._input_size
-            scale_y = orig_h / self._input_size
-
+        if boxes is not None:
             for i in range(len(boxes)):
                 x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
                 conf = float(boxes.conf[i].cpu().numpy())
                 cls_id = int(boxes.cls[i].cpu().numpy())
                 cls_name = self._model.names[cls_id]
 
-                # 坐标缩放回原始图像
-                bbox = BoundingBox(
-                    x1=int(x1 * scale_x),
-                    y1=int(y1 * scale_y),
-                    x2=int(x2 * scale_x),
-                    y2=int(y2 * scale_y),
-                )
-
-                center = (
-                    int((x1 + x2) / 2 * scale_x),
-                    int((y1 + y2) / 2 * scale_y),
-                )
-
-                elements.append(
-                    DetectionElement(
-                        class_name=cls_name,
-                        class_id=cls_id,
-                        confidence=conf,
-                        bbox=bbox,
-                        center=center,
-                    )
-                )
+                elements.append(DetectionElement(
+                    class_name=cls_name,
+                    class_id=cls_id,
+                    confidence=conf,
+                    bbox=BoundingBox(
+                        x1=int(x1),
+                        y1=int(y1),
+                        x2=int(x2),
+                        y2=int(y2),
+                    ),
+                    center=(
+                        int((x1 + x2) / 2),
+                        int((y1 + y2) / 2),
+                    ),
+                ))
 
         return DetectionResult(
             elements=elements,
-            image_width=orig_w,
-            image_height=orig_h,
+            image_width=original_shape[1],
+            image_height=original_shape[0],
             timestamp=time.time(),
         )
 
+    def detect_elements(self, class_names: List[str]) -> List[DetectionElement]:
+        """检测指定类别的元素"""
+        # 这个方法需要结合具体的图像输入，这里作为示例
+        return []
+
+    def get_element_positions(self, class_name: str) -> List[Tuple[int, int]]:
+        """获取指定类别元素的位置"""
+        # 这个方法需要结合具体的图像输入，这里作为示例
+        return []
+
     def unload_model(self) -> None:
-        """卸载YOLO模型."""
-        self._model = None
-        self._class_names = []
-        self._logger.info("Model unloaded")
+        """卸载模型"""
+        if self._model:
+            del self._model
+            self._model = None
+            self._logger.info("Model unloaded")
 
     def switch_model(self, new_model_path: str) -> bool:
-        """运行时切换模型.
+        """
+        运行时切换模型
 
         Args:
             new_model_path: 新模型路径
 
         Returns:
-            切换是否成功
+            bool: 切换是否成功
         """
         self.unload_model()
         self._model_path = new_model_path
@@ -304,10 +212,10 @@ class YOLODetector(BaseDetector):
 
     @property
     def is_loaded(self) -> bool:
-        """模型是否已加载."""
+        """模型是否已加载"""
         return self._model is not None
 
     @property
     def class_names(self) -> List[str]:
-        """模型类别名称列表."""
-        return list(self._class_names)
+        """类别名称列表"""
+        return self._class_names

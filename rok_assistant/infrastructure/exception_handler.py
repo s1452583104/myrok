@@ -1,151 +1,85 @@
-"""自定义异常模块.
-
-定义系统中使用的所有异常类型, 按照层次分类:
-- 核心层异常: 窗口、捕获、模型、推理
-- 业务层异常: 任务、元素、频率限制
-- 配置异常: 验证失败
-- 引擎异常: 不可恢复错误
-"""
-
-from typing import List, Optional
+import traceback
+from typing import Optional
+from .logger import get_logger
 
 
-class RokAssistantError(Exception):
-    """基础异常类.
-
-    所有自定义异常的基类, 提供可恢复性标记.
-
-    Attributes:
-        recoverable: 是否可自动恢复
-    """
-
-    def __init__(self, message: str, recoverable: bool = True):
-        super().__init__(message)
-        self.recoverable = recoverable
-        self.message = message
+class ROKAssistantError(Exception):
+    """基础异常类"""
+    pass
 
 
-# ========== 核心层异常 ==========
+class WindowNotFoundError(ROKAssistantError):
+    """窗口未找到异常"""
+    pass
 
 
-class WindowNotFoundError(RokAssistantError):
-    """窗口未找到异常.
-
-    当无法找到匹配的游戏窗口时抛出.
-    """
-
-    def __init__(self, window_title: str = ""):
-        msg = f"Window not found: {window_title}" if window_title else "Window not found"
-        super().__init__(msg, recoverable=True)
-        self.window_title = window_title
+class CaptureError(ROKAssistantError):
+    """截图异常"""
+    pass
 
 
-class CaptureError(RokAssistantError):
-    """截图失败异常.
-
-    当窗口截图操作失败时抛出.
-    """
-
-    def __init__(self, message: str = "Capture failed"):
-        super().__init__(message, recoverable=True)
+class ModelLoadError(ROKAssistantError):
+    """模型加载异常"""
+    pass
 
 
-class ModelLoadError(RokAssistantError):
-    """模型加载失败异常.
-
-    当YOLO模型文件无法加载时抛出, 不可恢复.
-    """
-
-    def __init__(self, message: str = "Model load failed", model_path: str = ""):
-        if model_path:
-            message = f"Model load failed: {model_path}"
-        super().__init__(message, recoverable=False)
-        self.model_path = model_path
+class InferenceError(ROKAssistantError):
+    """推理异常"""
+    pass
 
 
-class InferenceError(RokAssistantError):
-    """推理失败异常.
-
-    当YOLO推理过程出错时抛出.
-    """
-
-    def __init__(self, message: str = "Inference failed"):
-        super().__init__(message, recoverable=True)
+class EngineError(ROKAssistantError):
+    """引擎异常"""
+    pass
 
 
-# ========== 业务层异常 ==========
+class TaskExecutionError(ROKAssistantError):
+    """任务执行异常"""
+    pass
 
 
-class TaskExecutionError(RokAssistantError):
-    """任务执行失败异常.
-
-    当自动化任务执行过程中发生错误时抛出.
-
-    Attributes:
-        task_id: 失败的任务ID
-    """
-
-    def __init__(self, task_id: str, message: str = "Task execution failed"):
-        super().__init__(f"Task {task_id}: {message}", recoverable=True)
-        self.task_id = task_id
+class ConfigError(ROKAssistantError):
+    """配置异常"""
+    pass
 
 
-class ElementNotFoundError(RokAssistantError):
-    """游戏元素未找到异常.
-
-    当检测不到指定的游戏界面元素时抛出.
-
-    Attributes:
-        element_type: 未找到的元素类型
-        context: 上下文信息
-    """
-
-    def __init__(self, element_type: str, context: str = ""):
-        msg = f"Element not found: {element_type}"
+class ExceptionHandler:
+    """异常处理器"""
+    
+    def __init__(self):
+        self._logger = get_logger(self.__class__.__name__)
+    
+    def handle_exception(self, e: Exception, context: Optional[str] = None) -> bool:
+        """处理异常
+        
+        Args:
+            e: 异常对象
+            context: 上下文信息
+            
+        Returns:
+            bool: 是否可以继续执行
+        """
+        error_message = f"Error: {str(e)}"
         if context:
-            msg += f" ({context})"
-        super().__init__(msg, recoverable=True)
-        self.element_type = element_type
-        self.context = context
-
-
-class RateLimitError(RokAssistantError):
-    """操作频率超限异常.
-
-    当操作频率超过安全限制时抛出.
-    """
-
-    def __init__(self, message: str = "Action rate limit exceeded"):
-        super().__init__(message, recoverable=True)
-
-
-# ========== 配置异常 ==========
-
-
-class ConfigValidationError(RokAssistantError):
-    """配置验证失败异常.
-
-    当配置文件格式或内容不合法时抛出, 不可恢复.
-
-    Attributes:
-        errors: 验证错误列表
-    """
-
-    def __init__(self, errors: List[str]):
-        super().__init__(
-            f"Config validation failed: {errors}", recoverable=False
-        )
-        self.errors = errors
-
-
-# ========== 引擎异常 ==========
-
-
-class EngineError(RokAssistantError):
-    """引擎异常.
-
-    当自动化引擎发生不可恢复错误时抛出.
-    """
-
-    def __init__(self, message: str = "Engine error"):
-        super().__init__(message, recoverable=False)
+            error_message = f"{context}: {error_message}"
+        
+        self._logger.error(error_message)
+        self._logger.debug(traceback.format_exc())
+        
+        # 根据异常类型决定处理策略
+        if isinstance(e, (WindowNotFoundError, CaptureError)):
+            # 可恢复的错误
+            self._logger.info("Attempting to recover...")
+            return True
+        elif isinstance(e, (ModelLoadError, InferenceError)):
+            # 需要重新加载模型
+            self._logger.error("Critical error: model issues")
+            return False
+        elif isinstance(e, ConfigError):
+            # 配置错误
+            self._logger.error("Configuration error, please check config.yaml")
+            return False
+        else:
+            # 其他异常
+            self._logger.error("Unexpected error")
+            return True

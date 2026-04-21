@@ -1,2 +1,21 @@
-# ROK Assistant - 万国觉醒游戏辅助工具
-"""Business logic layer modules."""
+from .config_manager import ConfigManager
+from .detection_service import DetectionService
+from .game_controller import GameController
+from .automation_engine import (
+    EngineState,
+    TaskContext,
+    TaskResult,
+    AutomationTask,
+    AutomationEngine
+)
+
+__all__ = [
+    'ConfigManager',
+    'DetectionService',
+    'GameController',
+    'EngineState',
+    'TaskContext',
+    'TaskResult',
+    'AutomationTask',
+    'AutomationEngine'
+]
