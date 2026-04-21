@@ -1,52 +1,52 @@
-window:
-  title: 万国觉醒
-  process_name: RiseofKingdoms.exe
-  game_path: ''
-model:
-  path: models/current/rok_detector.pt
-  confidence: 0.6
-  input_size: 640
-  iou_threshold: 0.45
-  device: cpu
-safety:
-  min_delay: 0.05
-  max_delay: 0.3
-  random_offset: 5
-  click_duration: 0.1
-  max_actions_per_minute: 30
 automation:
-  gem_collect:
+  army_training:
     enabled: false
-    min_level: 5
-    collect_radius: 10
-    army_count: 1
-    army_type: infantry
-    check_interval: 300
-    max_concurrent: 3
-  resource_collect:
-    enabled: false
-    interval: 36000
-    max_storage_percent: 90
+    quantity: 1000
+    troop_type: infantry
   building_upgrade:
     enabled: false
     priority:
     - academy
     - barracks
     - warehouse
-  army_training:
+  gem_collect:
+    army_count: 1
+    army_type: infantry
+    check_interval: 300
+    collect_radius: 10
     enabled: false
-    troop_type: infantry
-    quantity: 1000
+    max_concurrent: 3
+    min_level: 5
+  resource_collect:
+    enabled: false
+    interval: 36000
+    max_storage_percent: 90
 interaction:
+  debug_overlay: true
   detection_fps: 2
   preview_enabled: true
-  debug_overlay: true
 logging:
-  level: INFO
-  file: logs/rok_assistant.log
-  max_size: 10485760
   backup_count: 5
+  file: logs/rok_assistant.log
+  level: INFO
+  max_size: 10485760
+model:
+  confidence: 0.6
+  device: cpu
+  input_size: 640
+  iou_threshold: 0.45
+  path: models/current/rok_detector.pt
 plugins:
   enabled: true
   search_paths:
   - plugins
+safety:
+  click_duration: 0.1
+  max_actions_per_minute: 30
+  max_delay: 0.3
+  min_delay: 0.05
+  random_offset: 5
+window:
+  game_path: C:/个人应用/rok/download/launcher.exe
+  process_name: RiseofKingdoms.exe
+  title: 万国觉醒
