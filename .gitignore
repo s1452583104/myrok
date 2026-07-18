@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Project artifacts
+logs/*.log
+recordings/*.png
+templates/*.png
+!templates/.gitkeep
+!templates/manifest.yaml
+tests/fixtures/*.png
+!tests/fixtures/.gitkeep
+
+# IDE
+.idea/
+.vscode/

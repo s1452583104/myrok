@@ -1,0 +1,39 @@
+[project]
+name = "rok-assistant"
+version = "0.1.0"
+description = "Rise of Kingdoms rally automation tool"
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6>=6.5",
+    "opencv-python>=4.8",
+    "paddleocr>=2.7",
+    "ultralytics>=8.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-qt>=4.4",
+]
+
+[project.scripts]
+rok-assistant = "rok_assistant.gui.main_window:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: requires recorded screenshots",
+    "slow: takes more than 1 second",
+]
