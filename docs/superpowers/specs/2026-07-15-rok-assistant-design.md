@@ -33,7 +33,7 @@
 **不做**（明确 YAGNI）：
 - ❌ 采集宝石（**延期 v2**）
 - ❌ PC 官方客户端支持（**延期 v2**）
-- ❌ 行为仿真 / 防封（决策 0）
+- ❌ 行为仿真 / 防封（v1 仅轻度：随机延时 + 随机偏移；不仿真鼠标轨迹、不做夜休）
 - ❌ 多套模板（仅 1920×1080 中文）
 - ❌ 跨机器/跨进程协调
 - ❌ 大模型识别
@@ -57,7 +57,7 @@
 | D8 | 成员策略 | 成员全权自动加入、出发；按角色粒度 |
 | D9 | 运行方式 | PyQt6 GUI |
 | D10 | 失败处理 | 自动重试下一目标（被锁、人没满、不能加入都跳过） |
-| D11 | 防封策略 | 0（不加任何行为仿真） |
+| D11 | 防封策略 | 轻度：随机延时 + 点击位置随机偏移（防机器行为检测） |
 | D12 | 模板库 | 单套：1920×1080 中文 UI |
 
 ---
@@ -229,6 +229,9 @@ IDLE → SEARCH_FORTRESS → SELECT_LEVEL → CONFIRM_SEARCH
       → LAUNCH → WAIT_MEMBERS → END
 ```
 
+- `WAIT_MEMBERS`：**被动等待**。Worker 不做截图/点击动作，只在 EventBus 订阅 `rally_completed` 事件，倒计时归零后游戏自动出发，session 结束。
+- `END`：Worker 切回 IDLE，可被 Coordinator 再次触发。
+
 **B. MemberStateMachine**（成员）
 ```
 IDLE → WAIT_LAUNCH_EVENT → SWITCH_TO_SELF → OPEN_ALLIANCE 
@@ -325,6 +328,14 @@ app:
   locale: zh-CN
   log_dir: ./logs
   template_dir: ./templates
+  anti_detection:           # D11 详细说明见第 8 节
+    click_offset_px: 8
+    action_delay_min: 0.1
+    action_delay_max: 0.5
+    state_delay_min: 0.3
+    state_delay_max: 1.2
+    jitter_ratio: 0.3
+    debug_no_jitter: false
 
 accounts:
   - id: account_482A
@@ -336,6 +347,9 @@ accounts:
         target_level: 8
         march_preset: 1
         march_troop_types: [infantry, archer]
+
+      # march_preset 必须是 1-5 整数（对应游戏内「组建部队」弹窗
+      # 顶部的 5 个预设槽）。不设 = 用游戏当前已激活的预设。
 
       - id: char_jy
         name: "Jy、阐珊"
@@ -368,13 +382,16 @@ accounts:
 - `target_level` 在 1-10
 - `fill_target_leaders` 是 `nearest` 或非空 list
 - Account 内 `name` 不重复
+- `march_preset` 是 1-5 整数
+
+**校验失败行为**：GUI 弹错误对话框，**拒绝启动**。错误消息必须指出是哪个字段、哪条记录、为什么错。
 
 **模板清单**（`templates/manifest.yaml`）：
 ```yaml
 templates:
   - id: search_icon
     file: search_icon.png
-    roi: [10, 660, 100, 760]
+    roi: [10, 660, 100, 760]   # [x1, y1, x2, y2]，像素坐标
     threshold: 0.9
   - id: barbarian_fortress_tab
     file: tab_barbarian_fortress.png
@@ -387,6 +404,11 @@ templates:
     classes: [rally_card]
     threshold: 0.7
 ```
+
+**ROI 格式**：
+- `[x1, y1, x2, y2]`：矩形区域（像素坐标，左上→右下）
+- `full`：全图（不做裁剪）
+- 留空/不写：默认 `full`
 
 ---
 
@@ -409,7 +431,96 @@ templates:
 
 ---
 
-## 8. GUI（PyQt6）
+## 8. 防封机制（D11：轻度）
+
+### 8.1 策略：随机延时 + 随机偏移
+
+**目的**：避免操作节奏过于机械（同一时间间隔 + 同一点击位置），降低被游戏风控系统检测为"外挂脚本"的概率。
+
+### 8.2 实现位置
+
+集中在 `HandleSource` 层，**所有点击和操作都走这个层**。Worker 状态机调用 `handle_source.click(x, y)` 时，**坐标会先被偏移**，**再 sleep 一段随机时间**。
+
+### 8.3 点击位置随机偏移
+
+```python
+# HandleSource.click 实际行为：
+def click(self, x: int, y: int):
+    # 偏移范围：以 (x, y) 为中心，矩形 [-offset_px, +offset_px] 内随机
+    offset = config.anti_detection.click_offset_px  # 默认 8 像素
+    x_jitter = x + random.randint(-offset, offset)
+    y_jitter = y + random.randint(-offset, offset)
+    # 限制偏移不超出 ROI
+    x_jitter = clamp(x_jitter, roi.x1, roi.x2)
+    y_jitter = clamp(y_jitter, roi.y1, roi.y2)
+    self._raw_click(x_jitter, y_jitter)
+```
+
+**设计要点**：
+- 偏移 **8 像素**（按钮通常 50-100 像素，8 像素偏移在按钮内视觉上察觉不到，但坐标不完全相同）
+- **不能**偏移到按钮外面（用 ROI 框定）
+- 不做"鼠标轨迹仿真"（直线点击），因为 Win32 `PostMessage` 本身没有轨迹概念
+
+### 8.4 随机延时
+
+**两类延时**：
+
+| 延时 | 位置 | 范围 | 目的 |
+|---|---|---|---|
+| **操作间延时**（per action） | 每次 `click`/`swipe` 后 | 0.1 - 0.5 秒（默认） | 模拟人手反应时间 |
+| **状态间延时**（per state） | 每个 State 转移后 | 0.3 - 1.2 秒（默认） | 避免节奏过于规律 |
+
+```python
+# 例：Leader SM 状态机配置
+states:
+  SEARCH_FORTRESS:
+    recognizer: search_icon
+    action: click_center
+    delay_after: 0.5  # 状态结束后 sleep 0.3-0.7 秒
+  CHECK_RESULT:
+    recognizer: rally_attack_popup  # 等「集结进攻」弹窗
+    action: wait_for
+    timeout: 5
+    delay_after: 1.0
+```
+
+**随机性实现**：每次实际 sleep = `delay_after + random.uniform(-jitter, jitter)`，jitter 默认 = delay_after × 30%。
+
+### 8.5 配置项（YAML）
+
+```yaml
+# app 节下新增：
+app:
+  anti_detection:
+    click_offset_px: 8          # 随机偏移半径
+    action_delay_min: 0.1       # 最小操作间延时
+    action_delay_max: 0.5       # 最大操作间延时
+    state_delay_min: 0.3        # 最小状态间延时
+    state_delay_max: 1.2        # 最大状态间延时
+    jitter_ratio: 0.3           # 随机性比例（30%）
+    # debug 模式（测试时用）—— 关闭所有随机化
+    debug_no_jitter: false
+```
+
+### 8.6 不做什么（v1）
+
+- ❌ **鼠标轨迹仿真**（点击之间不是直线）
+- ❌ **夜休**（夜间不操作）
+- ❌ **长时间不操作**（避免被识别为挂机）
+- ❌ **HTTP 代理 / VPN**
+- ❌ **设备指纹伪装**
+
+理由：v1 只做"轻度"，避免过度工程。**如果上线后真被风控，再加 v2 升级**。
+
+### 8.7 测试影响
+
+- 单元测试：设 `debug_no_jitter: true`，所有延时 = 固定值，断言稳定
+- 集成测试：默认有 jitter，用**均值/方差**断言而不是**精确值**
+- 手动验收：跑 10 次完整 session，看是不是每次点击位置/间隔都不同
+
+---
+
+## 9. GUI（PyQt6）
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -437,7 +548,7 @@ templates:
 
 ---
 
-## 9. 测试
+## 10. 测试
 
 ### 9.1 分层
 
@@ -477,12 +588,12 @@ def test_leader_full_session():
 
 ---
 
-## 10. 里程碑
+## 11. 里程碑
 
 | ID | 内容 | 工时 |
 |---|---|---|
 | M0 | 项目脚手架 | 0.5 天 |
-| M1 | 句柄捕获 + 截图 + 点击 | 1-2 天 |
+| M1 | 句柄捕获 + 截图 + 点击（含 D11 随机偏移） | 2 天 |
 | M2 | 模板库（玩家手动采） | 1-2 小时 |
 | M3 | 车头状态机 | 2-3 天 |
 | M4 | 角色切换 | 1-2 天 |
@@ -494,19 +605,20 @@ def test_leader_full_session():
 
 ---
 
-## 11. 风险
+## 12. 风险
 
 | 风险 | 概率 | 影响 | 应对 |
 |---|---|---|---|
 | 模板频繁失效（游戏更新） | 高 | 中 | 模板独立管理 + 失效快速采集 |
 | 4 步角色切换路径耗时太长 | 中 | 中 | 调度器串行化、批量操作合并 |
 | rally 列表 YOLO 检测 mAP 不够 | 中 | 中 | 回退 OCR + 截屏筛选 |
-| 模拟器后台点击被风控 | 中 | 高 | D11 决策是不加防封，赌它不严 |
+| 模拟器后台点击被风控 | 中 | 高 | D11 轻度防封（随机延时 + 偏移），严重时再上 v2 |
+| 随机偏移导致点错按钮 | 低 | 中 | ROI 钳制 + 单元测试覆盖 |
 | `PrintWindow` 截屏黑屏 | 低 | 高 | 回退 `BitBlt` |
 
 ---
 
-## 12. v2 预告（不在本 spec）
+## 13. v2 预告（不在本 spec）
 
 - 采集宝石玩法
 - PC 客户端支持
@@ -528,3 +640,7 @@ def test_leader_full_session():
 | Jy、阐珊 | 6,200 万 | 成员 |
 | 阐珊填1 | 3,300 万 | 成员 |
 | 阐珊填2 | 2,400 万 | 成员 |
+
+## 修订记录
+
+- 2026-07-18: 加入「轻度防封」机制（D11 从 0 改为：随机延时 + 随机偏移），新增第 8 节详细说明。
