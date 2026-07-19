@@ -33,6 +33,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--basetemp=./.pytest_tmp"
 markers = [
     "integration: requires recorded screenshots",
     "slow: takes more than 1 second",
