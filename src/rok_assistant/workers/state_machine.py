@@ -18,6 +18,7 @@ class StateMachine:
         self._transitions: list[Transition] = []
         self.current = initial
         self.history: list[str] = [initial]
+        self._ctx: dict = {}
         self._setup()
 
     def _setup(self) -> None:
@@ -28,7 +29,10 @@ class StateMachine:
         self._transitions.append(Transition(from_state, to_state, action, guard))
 
     def step(self, context: dict | None = None) -> None:
-        context = context or {}
+        if context is None:
+            context = self._ctx
+        else:
+            self._ctx = context
         for t in self._transitions:
             if t.from_state != self.current:
                 continue
