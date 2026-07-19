@@ -1,0 +1,14 @@
+templates:
+  - id: btn_a
+    file: btn_a.png
+    roi: [10, 20, 110, 120]
+    threshold: 0.9
+  - id: btn_b
+    file: btn_b.png
+    roi: full
+    threshold: 0.85
+  - id: card
+    file: card.onnx
+    type: yolo_detect
+    classes: [0]
+    threshold: 0.7
