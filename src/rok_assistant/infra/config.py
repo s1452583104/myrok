@@ -2,6 +2,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 from typing import Literal, Union
+import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .anti_detection import AntiDetectionConfig
 
@@ -60,3 +61,9 @@ class AppConfig(BaseModel):
 class RootConfig(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     accounts: list[AccountConfig] = Field(min_length=1)
+
+
+def load_config(path: Path) -> RootConfig:
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    return RootConfig.model_validate(raw)

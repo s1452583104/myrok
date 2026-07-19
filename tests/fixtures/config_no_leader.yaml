@@ -1,0 +1,11 @@
+app: {}
+accounts:
+  - id: bad
+    window_title_pattern: "x"
+    characters:
+      - id: m1
+        name: "OnlyMember"
+        role: member
+        target_level: 5
+        march_preset: 1
+        march_troop_types: [infantry]

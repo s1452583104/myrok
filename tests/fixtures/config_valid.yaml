@@ -1,0 +1,20 @@
+app:
+  screen_width: 1920
+  screen_height: 1080
+accounts:
+  - id: test_account
+    window_title_pattern: "MuMuPlayer.*"
+    characters:
+      - id: leader1
+        name: "Hero"
+        role: leader
+        target_level: 8
+        march_preset: 1
+        march_troop_types: [infantry, archer]
+      - id: member1
+        name: "M1"
+        role: member
+        target_level: 5
+        march_preset: 2
+        march_troop_types: [cavalry]
+        fill_target_leaders: nearest

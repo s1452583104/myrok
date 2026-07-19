@@ -1,0 +1,11 @@
+app: {}
+accounts:
+  - id: bad
+    window_title_pattern: "x"
+    characters:
+      - id: l
+        name: "L"
+        role: leader
+        target_level: 11
+        march_preset: 1
+        march_troop_types: [infantry]
