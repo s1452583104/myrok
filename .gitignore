@@ -7,12 +7,12 @@ venv/
 
 # Project artifacts
 logs/*.log
-recordings/*.png
+recordings/
 templates/*.png
 !templates/.gitkeep
 !templates/manifest.yaml
-tests/fixtures/*.png
-!tests/fixtures/.gitkeep
+
+# Test fixtures are committed to the repo (test assets, not transient artifacts)
 
 # IDE
 .idea/
