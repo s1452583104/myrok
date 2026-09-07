@@ -1,18 +1,45 @@
 # 万国觉醒游戏助手 · 验收手册
 
-> 状态：v1 实施完成（31 个 task + 3 个工具），等用户实机验收  
-> 日期：2026-07-19
+> 状态：实机验收进行中（2026-09-07 起，ADB 路线）  
+> 日期：2026-07-19 · 更新：2026-09-07
 
 ## 当前状态
 
 | 项 | 状态 | 备注 |
 |---|---|---|
-| 自动化测试 | ✅ 81/81 通过 | `pytest tests/` |
-| 核心代码 | ✅ 完整 | 5 层架构全部就位 |
-| 工具脚本 | ✅ 3 个 | `record.py` / `crop_template.py` / `verify.py` |
-| 真实模板 | ❌ 待采集 | 下面 §1 步骤 |
-| 用户 config | ❌ 待写 | 下面 §2 步骤 |
-| 实机验收 | ⏳ 待跑 | 下面 §3 步骤 |
+| 自动化测试 | ✅ 91/91 通过 | `pytest tests/` |
+| 采集路线 | ✅ **改为 ADB** | `AdbHandleSource`：截图/点击都走 MuMu adb（127.0.0.1:16384），原生 1920×1080，与窗口/DPI 无关 |
+| 真实模板 | 🟡 20/约26 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
+| 用户 config | ❌ 待写 | **角色阵容需用户确认**（见 §2.1） |
+| 实机验收 8 项 | ⏳ 未开始 | §3 |
+
+## §1.4 模板采集进度（2026-09-07）
+
+已采并验证（templates/ + manifest.yaml）：
+
+| 模板 | 验证 |
+|---|---|
+| search_icon, alliance_btn | 跨帧 0.99+；跨角色场景缺失时按预期不匹配（视角问题，见下） |
+| level_plus, level_minus | 5 连点无丢失，等级 1→6 实测 |
+| search_btn, search_back, tab_fortress | 实测点击生效（Tab 切换、搜索触发） |
+| toast_no_fortress | 无结果 toast 实测两场景，conf 0.95+（无 toast 时 0.09） |
+| red_rally, rally_attack_popup, blue_rally, time_5min | 7 级城寨详情+集结进攻弹窗实测，跨帧 1.0 |
+| war_title, sort_dropdown, sort_nearest, war_empty, join_btn | 战争页实测：排序切到「距离最近」成功；空列表文案已采 |
+| profile_title, settings_btn, settings_title | 跨角色 1.0 |
+| char_mgmt_btn, char_mgmt_title, char_avatar_lszz, char_avatar_lswk | 角色管理页 1.0 |
+| switch_confirm_yes, click_to_enter | 切换确认框 + 重登入口实测 |
+
+**未采**（需要真实发起集结才能看到「组建部队」弹窗，等用户确认后采）：
+`march_btn`、`preset_1`~`preset_5`、`troop_infantry`/`troop_cavalry`/`troop_archer`
+
+## §1.5 实测发现的设计修正（重要）
+
+1. **切换角色是 5 步不是 4 步**：头像 → 设置 → 角色管理 → 点目标角色头像 → **「角色登入」确认框点「是」** → 完整重登（登录页「点击进入游戏」→ 加载约 20-25s）。`switcher_sm` 需要加确认步骤和重登处理。
+2. **视角归一化**：重登后城市视角是放大的，搜索放大镜/底部菜单栏不可见。状态机在打寨子流程前需要先把视角恢复到已知状态（缩小视角或进地图视角）。
+3. **主界面左上角没有角色名**（只有头像+战力+时代）——切角色后的 OCR 名字校验不能按原设计读左上角，需改为匹配头像模板或开资料页 OCR。
+4. **搜索无结果有 toast**：「您的城市附近暂未找到符合条件的野蛮人城寨」——已是模板 `toast_no_fortress`，leader_sm 应处理（换等级/稍后重试）。实测 1-6 级城寨均不在附近，7 级有。
+5. **Win32 采集路线放弃**：2560×1600@150% DPI 下 PrintWindow 裁剪且无法保证 1920×1080；ADB 路线已完全替代（点击、截图实测可用）。
+6. 搜索结果详情弹窗有 ⭐ 书签（与锁定无关，WIP 推测正确）；消失倒计时如 19:59:51 在弹窗左下。
 
 ---
 

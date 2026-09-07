@@ -95,3 +95,123 @@ templates:
   - 250
   - 1660
   - 350
+- id: war_btn
+  file: war_btn.png
+  threshold: 0.9
+  roi:
+  - 780
+  - 520
+  - 980
+  - 700
+- id: sort_dropdown
+  file: sort_dropdown.png
+  threshold: 0.9
+  roi:
+  - 200
+  - 120
+  - 740
+  - 200
+- id: join_btn
+  file: join_btn.png
+  threshold: 0.9
+  roi:
+  - 1280
+  - 350
+  - 1400
+  - 760
+- id: war_title
+  file: war_title.png
+  threshold: 0.9
+  roi:
+  - 800
+  - 20
+  - 1120
+  - 110
+- id: sort_nearest
+  file: sort_nearest.png
+  threshold: 0.9
+  roi:
+  - 200
+  - 190
+  - 740
+  - 360
+- id: war_empty
+  file: war_empty.png
+  threshold: 0.9
+  roi:
+  - 400
+  - 480
+  - 1520
+  - 600
+- id: settings_btn
+  file: settings_btn.png
+  threshold: 0.9
+  roi:
+  - 1540
+  - 810
+  - 1720
+  - 960
+- id: profile_title
+  file: profile_title.png
+  threshold: 0.9
+  roi:
+  - 700
+  - 60
+  - 1220
+  - 160
+- id: char_mgmt_btn
+  file: char_mgmt_btn.png
+  threshold: 0.9
+  roi:
+  - 700
+  - 460
+  - 940
+  - 640
+- id: settings_title
+  file: settings_title.png
+  threshold: 0.9
+  roi:
+  - 800
+  - 20
+  - 1120
+  - 120
+- id: char_mgmt_title
+  file: char_mgmt_title.png
+  threshold: 0.9
+  roi:
+  - 750
+  - 80
+  - 1180
+  - 180
+- id: char_avatar_lszz
+  file: char_avatar_lszz.png
+  threshold: 0.9
+  roi:
+  - 250
+  - 300
+  - 950
+  - 500
+- id: char_avatar_lswk
+  file: char_avatar_lswk.png
+  threshold: 0.9
+  roi:
+  - 980
+  - 610
+  - 1660
+  - 810
+- id: switch_confirm_yes
+  file: switch_confirm_yes.png
+  threshold: 0.9
+  roi:
+  - 900
+  - 690
+  - 1500
+  - 830
+- id: click_to_enter
+  file: click_to_enter.png
+  threshold: 0.9
+  roi:
+  - 700
+  - 840
+  - 1250
+  - 970
