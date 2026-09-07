@@ -61,3 +61,28 @@ def test_app_config_default_anti_detection():
 def test_root_config_requires_at_least_one_account():
     with pytest.raises(ValidationError):
         RootConfig(accounts=[])
+
+
+def test_account_config_adb_defaults_empty():
+    acc = AccountConfig(
+        id="a1", window_title_pattern="MuMu",
+        characters=[CharacterConfig(
+            id="l", name="L", role=RoleEnum.LEADER,
+            target_level=5, march_preset=1, march_troop_types=["infantry"]
+        )]
+    )
+    assert acc.adb_address == ""
+    assert acc.adb_path == "adb"
+
+
+def test_account_config_adb_address():
+    acc = AccountConfig(
+        id="a1", window_title_pattern="MuMu", adb_address="127.0.0.1:16384",
+        adb_path=r"C:\模拟器\adb.exe",
+        characters=[CharacterConfig(
+            id="l", name="L", role=RoleEnum.LEADER,
+            target_level=5, march_preset=1, march_troop_types=["infantry"]
+        )]
+    )
+    assert acc.adb_address == "127.0.0.1:16384"
+    assert acc.adb_path.endswith("adb.exe")

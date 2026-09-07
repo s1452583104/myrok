@@ -9,14 +9,16 @@ from pathlib import Path
 # Ensure project src is importable when run from anywhere
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rok_assistant.core.handle_source import Win32HandleSource
+from rok_assistant.core.handle_source import create_handle_source
 from rok_assistant.infra.paths import ProjectPaths
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--account", required=True, help="Account id from config")
-    parser.add_argument("--pattern", required=True, help="Window title pattern")
+    parser.add_argument("--adb", default="", help="ADB address, e.g. 127.0.0.1:16384 (recommended)")
+    parser.add_argument("--adb-path", default="adb", help="Path to adb.exe")
+    parser.add_argument("--pattern", default="", help="Window title pattern (Win32 fallback)")
     parser.add_argument("--interval", type=float, default=0.5)
     parser.add_argument("--max-frames", type=int, default=600)
     parser.add_argument("--out", default="./recordings")
@@ -29,9 +31,16 @@ def main() -> int:
     session_dir.mkdir(parents=True, exist_ok=True)
     print(f"Recording to {session_dir}")
 
-    handle = Win32HandleSource(window_title_pattern=args.pattern)
+    handle = create_handle_source(
+        adb_address=args.adb, adb_path=args.adb_path,
+        window_title_pattern=args.pattern,
+    )
     if not handle.is_alive():
-        print(f"ERROR: Window matching {args.pattern!r} not found")
+        if args.adb:
+            print(f"ERROR: ADB device {args.adb!r} not in 'device' state "
+                  f"(run: {args.adb_path} connect {args.adb})")
+        else:
+            print(f"ERROR: Window matching {args.pattern!r} not found")
         return 1
 
     import cv2

@@ -18,7 +18,10 @@ app:
 
 accounts:
   - id: account_482A
-    window_title_pattern: "MuMuPlayer"   # 改成你模拟器窗口标题的可匹配子串
+    # 推荐走 MuMu 内置 ADB（截图永远是安卓原生 1920x1080，不受窗口大小/DPI 影响）
+    adb_address: "127.0.0.1:16384"
+    adb_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\adb.exe"   # MuMu 安装目录下 nx_main/adb.exe
+    window_title_pattern: "MuMu安卓设备"   # 仅 adb_address 为空时走 Win32 才用到
     characters:
       # 每个账号必须有恰好 1 个 leader，且角色名不能重复
       - id: char_leader

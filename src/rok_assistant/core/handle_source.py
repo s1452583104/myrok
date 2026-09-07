@@ -48,12 +48,73 @@ class MockHandleSource:
         self._alive = alive
 
 
+def create_handle_source(adb_address: str = "", adb_path: str = "adb",
+                         window_title_pattern: str = ""):
+    """Build the best HandleSource for an account.
+
+    adb_address set -> AdbHandleSource (recommended for MuMu: native-resolution
+    capture independent of window size/DPI). Otherwise fall back to Win32.
+    """
+    if adb_address:
+        return AdbHandleSource(adb_address=adb_address, adb_path=adb_path)
+    return Win32HandleSource(window_title_pattern=window_title_pattern)
+
+
+class AdbHandleSource:
+    """HandleSource over MuMu's adb: screencap for capture, input tap/swipe for input.
+
+    Captures at the emulator's native Android resolution (e.g. 1920x1080)
+    regardless of window size or display DPI scaling.
+    """
+
+    def __init__(self, adb_address: str, adb_path: str = "adb", _runner=None):
+        self._address = adb_address
+        self._adb_path = adb_path
+        self._run = _runner if _runner is not None else self._subprocess_run
+
+    @staticmethod
+    def _subprocess_run(args, **kwargs):
+        import subprocess
+        return subprocess.run(args, capture_output=True, check=True, timeout=10)
+
+    def _serial_args(self) -> list:
+        return ["-s", self._address]
+
+    def capture(self) -> np.ndarray:
+        import cv2
+        proc = self._run([self._adb_path, *self._serial_args(), "exec-out", "screencap", "-p"])
+        img = cv2.imdecode(np.frombuffer(proc.stdout, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError(f"screencap returned undecodable data from {self._address}")
+        return img
+
+    def click(self, x: int, y: int) -> None:
+        self._run([self._adb_path, *self._serial_args(),
+                   "shell", "input", "tap", str(int(x)), str(int(y))])
+
+    def swipe(self, x1, y1, x2, y2, duration_ms=300):
+        self._run([self._adb_path, *self._serial_args(), "shell", "input", "swipe",
+                   str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)), str(int(duration_ms))])
+
+    def is_alive(self) -> bool:
+        try:
+            proc = self._run([self._adb_path, "devices"])
+        except Exception:
+            return False
+        for line in proc.stdout.decode(errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == self._address:
+                return parts[1] == "device"
+        return False
+
+
 class Win32HandleSource:
     """Real Windows HandleSource using FindWindowW + PrintWindow + PostMessage."""
     def __init__(self, window_title_pattern: str):
         self._pattern = window_title_pattern
         self._hwnd = None
         self._user32 = ctypes.windll.user32
+        self._gdi32 = ctypes.windll.gdi32
 
     def _find_window_by_title(self, pattern: str):
         hwnd_enum = []
@@ -85,9 +146,9 @@ class Win32HandleSource:
         w = rect.right - rect.left
         h = rect.bottom - rect.top
         hwnd_dc = self._user32.GetWindowDC(hwnd)
-        mfc_dc = self._user32.CreateCompatibleDC(hwnd_dc)
-        bmp = self._user32.CreateCompatibleBitmap(hwnd_dc, w, h)
-        self._user32.SelectObject(mfc_dc, bmp)
+        mfc_dc = self._gdi32.CreateCompatibleDC(hwnd_dc)
+        bmp = self._gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
+        self._gdi32.SelectObject(mfc_dc, bmp)
         self._user32.PrintWindow(hwnd, mfc_dc, 2)
         class BITMAPINFOHEADER(ctypes.Structure):
             _fields_ = [
@@ -105,9 +166,9 @@ class Win32HandleSource:
         bmi.biBitCount = 32
         bmi.biCompression = 0
         buf = (ctypes.c_ubyte * (w * h * 4))()
-        self._user32.GetDIBits(mfc_dc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
-        self._user32.DeleteObject(bmp)
-        self._user32.DeleteDC(mfc_dc)
+        self._gdi32.GetDIBits(mfc_dc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
+        self._gdi32.DeleteObject(bmp)
+        self._gdi32.DeleteDC(mfc_dc)
         self._user32.ReleaseDC(hwnd, hwnd_dc)
         img = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)

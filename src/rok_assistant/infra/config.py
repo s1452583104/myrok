@@ -37,6 +37,8 @@ class CharacterConfig(BaseModel):
 class AccountConfig(BaseModel):
     id: str
     window_title_pattern: str
+    adb_address: str = ""  # e.g. "127.0.0.1:16384"; empty = fall back to Win32 capture
+    adb_path: str = "adb"
     characters: list[CharacterConfig]
 
     @model_validator(mode="after")
