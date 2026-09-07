@@ -1,0 +1,97 @@
+templates:
+- id: search_icon
+  file: search_icon.png
+  threshold: 0.9
+  roi:
+  - 0
+  - 700
+  - 240
+  - 940
+- id: alliance_btn
+  file: alliance_btn.png
+  threshold: 0.9
+  roi:
+  - 1280
+  - 920
+  - 1520
+  - 1080
+- id: level_minus
+  file: level_minus.png
+  threshold: 0.9
+  roi:
+  - 80
+  - 520
+  - 740
+  - 640
+- id: level_plus
+  file: level_plus.png
+  threshold: 0.9
+  roi:
+  - 600
+  - 520
+  - 740
+  - 640
+- id: search_btn
+  file: search_btn.png
+  threshold: 0.9
+  roi:
+  - 200
+  - 640
+  - 620
+  - 790
+- id: search_back
+  file: search_back.png
+  threshold: 0.9
+  roi:
+  - 0
+  - 0
+  - 160
+  - 140
+- id: tab_fortress
+  file: tab_fortress.png
+  threshold: 0.9
+  roi:
+  - 380
+  - 300
+  - 720
+  - 400
+- id: toast_no_fortress
+  file: toast_no_fortress.png
+  threshold: 0.85
+  roi:
+  - 400
+  - 480
+  - 1520
+  - 570
+- id: red_rally
+  file: red_rally.png
+  threshold: 0.9
+  roi:
+  - 1200
+  - 660
+  - 1600
+  - 820
+- id: rally_attack_popup
+  file: rally_attack_popup.png
+  threshold: 0.9
+  roi:
+  - 1150
+  - 40
+  - 1720
+  - 140
+- id: blue_rally
+  file: blue_rally.png
+  threshold: 0.9
+  roi:
+  - 1200
+  - 400
+  - 1620
+  - 540
+- id: time_5min
+  file: time_5min.png
+  threshold: 0.9
+  roi:
+  - 1150
+  - 250
+  - 1660
+  - 350
