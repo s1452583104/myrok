@@ -1,0 +1,46 @@
+# rok-assistant 配置示例
+# 复制为 config.yaml 后按你的账号修改。
+# 校验：python -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
+# 注意：target_level / march_preset / march_troop_types 对每个角色都是必填。
+
+app:
+  screen_width: 1920        # 模板按 1920x1080 中文 UI 采集，勿改
+  screen_height: 1080
+  locale: zh-CN
+  anti_detection:
+    click_offset_px: 8
+    action_delay_min: 0.1
+    action_delay_max: 0.5
+    state_delay_min: 0.3
+    state_delay_max: 1.2
+    jitter_ratio: 0.3
+    debug_no_jitter: false  # 调试时改 true 看真实点击坐标
+
+accounts:
+  - id: account_482A
+    window_title_pattern: "MuMuPlayer"   # 改成你模拟器窗口标题的可匹配子串
+    characters:
+      # 每个账号必须有恰好 1 个 leader，且角色名不能重复
+      - id: char_leader
+        name: "阐珊爱拉野"     # 必须和游戏内显示名一致（OCR 验证用）
+        role: leader
+        target_level: 8        # 打的寨子等级，1-10
+        march_preset: 1        # 组建部队弹窗里的预设槽位，1-5
+        march_troop_types: [infantry]
+
+      - id: char_member_1
+        name: "Jy、阐珊"
+        role: member
+        target_level: 8
+        march_preset: 1
+        march_troop_types: [infantry]
+        fill_target_leaders: nearest   # nearest = 距离排序后加第一个
+
+      - id: char_member_2
+        name: "阐珊填1"
+        role: member
+        target_level: 8
+        march_preset: 1
+        march_troop_types: [infantry]
+        fill_target_leaders:           # 指定车头列表 = 只加这些人发起的集结
+          - { account: account_482A, name: "阐珊爱拉野" }

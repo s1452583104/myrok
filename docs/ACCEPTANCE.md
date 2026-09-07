@@ -149,6 +149,7 @@ accounts:
       - id: char_jy
         name: "Jy、阐珊"     # OCR 验证会读这个名字，注意游戏内写法
         role: member
+        target_level: 8      # 必填（1-10）；member 也参与打这个等级
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders: nearest
@@ -156,6 +157,7 @@ accounts:
       - id: char_tian1
         name: "阐珊填1"
         role: member
+        target_level: 8
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders:
@@ -164,10 +166,13 @@ accounts:
       - id: char_tian2
         name: "阐珊填2"
         role: member
+        target_level: 8
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders: nearest
 ```
+
+> 注意：`target_level` / `march_preset` / `march_troop_types` 对**每个角色都是必填**（schema 无默认值），漏写会在启动时被 pydantic 拒绝。
 
 ### 校验
 

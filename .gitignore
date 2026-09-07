@@ -14,6 +14,13 @@ templates/*.png
 
 # Test fixtures are committed to the repo (test assets, not transient artifacts)
 
+# pytest transient dirs (pyproject pins --basetemp)
+.pytest_tmp/
+tmp_pytest/
+
+# User config (example is committed)
+config.yaml
+
 # IDE
 .idea/
 .vscode/
