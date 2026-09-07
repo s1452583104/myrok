@@ -24,3 +24,6 @@ config.yaml
 # IDE
 .idea/
 .vscode/
+
+# superpowers skill working dirs
+.superpowers/
