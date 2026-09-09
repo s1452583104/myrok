@@ -1,12 +1,15 @@
 # rok-assistant 配置示例
-# 复制为 config.yaml 后按你的账号修改。
-# 校验：python -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
-# 注意：target_level / march_preset / march_troop_types 对每个角色都是必填。
+# 推荐用 GUI 配置：python -m rok_assistant.gui.main_window → 「⚙ 配置」
+# 注意：GUI 与配置加载均使用相对路径，请从项目根目录启动
+# 手动编辑后校验：
+#   python -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
 
 app:
   screen_width: 1920        # 模板按 1920x1080 中文 UI 采集，勿改
   screen_height: 1080
   locale: zh-CN
+  mumu_manager_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\MuMuManager.exe"  # MuMu 安装目录下
+  adb_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\adb.exe"
   anti_detection:
     click_offset_px: 8
     action_delay_min: 0.1
@@ -16,34 +19,41 @@ app:
     jitter_ratio: 0.3
     debug_no_jitter: false  # 调试时改 true 看真实点击坐标
 
-accounts:
-  - id: account_482A
-    # 推荐走 MuMu 内置 ADB（截图永远是安卓原生 1920x1080，不受窗口大小/DPI 影响）
-    adb_address: "127.0.0.1:16384"
-    adb_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\adb.exe"   # MuMu 安装目录下 nx_main/adb.exe
-    window_title_pattern: "MuMu安卓设备"   # 仅 adb_address 为空时走 Win32 才用到
+# 1 个模拟器实例 = 1 个账号 = 1 组角色（同实例多账号切换暂不支持）
+# 接入方式二选一：mumu_index（推荐，adb 地址自动发现）或 adb_address（手动）
+instances:
+  - id: mumu0
+    name: "阑珊号"
+    mumu_index: 0
     characters:
-      # 每个账号必须有恰好 1 个 leader，且角色名不能重复
+      # 每个实例至少 1 个 leader/either；角色名不能重复
       - id: char_leader
-        name: "阐珊爱拉野"     # 必须和游戏内显示名一致（OCR 验证用）
-        role: leader
-        target_level: 8        # 打的寨子等级，1-10
-        march_preset: 1        # 组建部队弹窗里的预设槽位，1-5
+        name: "阑珊寨子号"      # 必须和游戏内显示名一致（OCR 验证用）
+        role: leader            # leader=车头 | member=成员 | either=车头或成员
+        target_level: 7         # 打的寨子等级，1-10
+        march_preset: 1         # 组建部队弹窗里的预设槽位，1-5
         march_troop_types: [infantry]
 
-      - id: char_member_1
-        name: "Jy、阐珊"
-        role: member
-        target_level: 8
+      - id: char_either
+        name: "阑珊种地"
+        role: either            # 先自己开寨集结，随即去填 fill_target_leaders 的集结
+        target_level: 7
         march_preset: 1
         march_troop_types: [infantry]
-        fill_target_leaders: nearest   # nearest = 距离排序后加第一个
+        fill_target_leaders:    # member/either 必填；leader 不能填
+          - { instance: mumu0, name: "阑珊寨子号" }
 
-      - id: char_member_2
-        name: "阐珊填1"
+      - id: char_member
+        name: "阑珊挖矿"
         role: member
-        target_level: 8
+        target_level: 7
         march_preset: 1
         march_troop_types: [infantry]
-        fill_target_leaders:           # 指定车头列表 = 只加这些人发起的集结
-          - { account: account_482A, name: "阐珊爱拉野" }
+        fill_target_leaders:    # 可跨实例：指向其他 instances 里 leader/either 的角色
+          - { instance: mumu0, name: "阑珊寨子号" }
+
+  # 第二个实例（多开 MuMu 实例 1）示例骨架：
+  # - id: mumu1
+  #   name: "二号机"
+  #   mumu_index: 1
+  #   characters: []

@@ -10,7 +10,7 @@
 | 自动化测试 | ✅ 91/91 通过 | `pytest tests/` |
 | 采集路线 | ✅ **改为 ADB** | `AdbHandleSource`：截图/点击都走 MuMu adb（127.0.0.1:16384），原生 1920×1080，与窗口/DPI 无关 |
 | 真实模板 | 🟡 20/约26 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
-| 用户 config | ❌ 待写 | **角色阵容需用户确认**（见 §2.1） |
+| 用户 config | ❌ 待写 | 阵容待用户确认；schema 已升级为 instances（GUI「⚙ 配置」可直接编辑） |
 | 实机验收 8 项 | ⏳ 未开始 | §3 |
 
 ## §1.4 模板采集进度（2026-09-07）
@@ -144,71 +144,14 @@ templates/
 
 ## §2 写你的 config.yaml
 
-参考 spec section 6 写你的实际配置。基于你 482A 账号：
+**推荐方式：** 启动 GUI（`python -m rok_assistant.gui.main_window`，从项目根目录），点「⚙ 配置」，在左树右表单界面里配置全局路径、实例（MuMu 实例号）与角色阵容（分工/等级/预设/兵种/填兵目标），保存时自动校验。配置前先用实例页「测试连接」确认连对了模拟器。
 
-```yaml
-# config.yaml
-
-app:
-  screen_width: 1920
-  screen_height: 1080
-  locale: zh-CN
-  anti_detection:
-    click_offset_px: 8
-    action_delay_min: 0.1
-    action_delay_max: 0.5
-    state_delay_min: 0.3
-    state_delay_max: 1.2
-    jitter_ratio: 0.3
-    debug_no_jitter: false  # 调试时改 true 看真实坐标
-
-accounts:
-  - id: account_482A
-    window_title_pattern: "MuMuPlayer"  # 改成你模拟器窗口实际标题
-    characters:
-      - id: char_leader
-        name: "阐珊爱拉野"   # 必须和游戏内一致（OCR 验证用）
-        role: leader
-        target_level: 8
-        march_preset: 1
-        march_troop_types: [infantry]
-
-      - id: char_jy
-        name: "Jy、阐珊"     # OCR 验证会读这个名字，注意游戏内写法
-        role: member
-        target_level: 8      # 必填（1-10）；member 也参与打这个等级
-        march_preset: 1
-        march_troop_types: [infantry]
-        fill_target_leaders: nearest
-
-      - id: char_tian1
-        name: "阐珊填1"
-        role: member
-        target_level: 8
-        march_preset: 1
-        march_troop_types: [infantry]
-        fill_target_leaders:
-          - { account: account_482A, name: "阐珊爱拉野" }
-
-      - id: char_tian2
-        name: "阐珊填2"
-        role: member
-        target_level: 8
-        march_preset: 1
-        march_troop_types: [infantry]
-        fill_target_leaders: nearest
-```
-
-> 注意：`target_level` / `march_preset` / `march_troop_types` 对**每个角色都是必填**（schema 无默认值），漏写会在启动时被 pydantic 拒绝。
-
-### 校验
-
-```bash
-# 用 load_config 验 schema
-python -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
-```
-
-报错 = config 写错（看错误信息修正）。
+**手动方式：** 复制 `config.example.yaml` 为 `config.yaml` 修改。要点：
+- `instances` 取代旧 `accounts`；1 实例 = 1 账号；`mumu_index` 与 `adb_address` 二选一
+- `role`: `leader`（车头，自己开寨）/ `member`（成员，只填兵）/ `either`（先开寨再填兵）
+- `member`/`either` 必填 `fill_target_leaders`（显式列表，可跨实例）；`leader` 不能配
+- `target_level` / `march_preset` / `march_troop_types` 对每个角色必填
+- 校验命令见 `config.example.yaml` 头部注释
 
 ---
 
