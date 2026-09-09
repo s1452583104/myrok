@@ -1,7 +1,7 @@
 from __future__ import annotations
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QComboBox, QScrollArea, QStatusBar
+    QLabel, QComboBox, QScrollArea, QStatusBar, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -30,6 +30,9 @@ class MainWindow(QMainWindow):
         top.addWidget(QLabel("Mode:"))
         top.addWidget(self.mode_combo)
         top.addWidget(self.refresh_btn)
+        self.config_btn = QPushButton("⚙ 配置")
+        self.config_btn.clicked.connect(self._open_config)
+        top.addWidget(self.config_btn)
         root.addLayout(top)
         # Account area
         self.account_area = QScrollArea()
@@ -50,6 +53,16 @@ class MainWindow(QMainWindow):
     def _on_refresh(self):
         # TODO: update thumbnails from workers
         pass
+
+    def _open_config(self):
+        from pathlib import Path
+        from .config_dialog import ConfigDialog
+        path = Path("config.yaml")
+        if not path.exists():
+            QMessageBox.warning(self, "配置", f"未找到 {path}（请先在项目根目录准备 config.yaml）")
+            return
+        dlg = ConfigDialog(path, self)
+        dlg.exec()
 
 def main():
     import sys

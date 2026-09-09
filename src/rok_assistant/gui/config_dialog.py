@@ -12,6 +12,7 @@ import uuid
 
 import yaml
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 from pydantic import ValidationError
 
+from rok_assistant.core.handle_source import create_handle_source
 from rok_assistant.infra.config import RootConfig, load_config
 
 ROLE_LABELS = {"leader": "车头", "member": "成员", "either": "车头或成员"}
@@ -40,6 +42,8 @@ class ConfigDialog(QDialog):
         self._widgets: dict[tuple, QWidget] = {}
         self._tables: dict[int, QTableWidget] = {}
         self._mode_combos: dict[int, QComboBox] = {}
+        self._status_labels: dict[int, QLabel] = {}
+        self._preview_labels: dict[int, QLabel] = {}
         self._build_ui()
 
     # ---------------- UI 骨架 ----------------
@@ -80,6 +84,8 @@ class ConfigDialog(QDialog):
         self._widgets.clear()
         self._tables.clear()
         self._mode_combos.clear()
+        self._status_labels.clear()
+        self._preview_labels.clear()
 
         g = QTreeWidgetItem(["全局设置"])
         g.setData(0, Qt.ItemDataRole.UserRole, ("page", "global"))
@@ -215,6 +221,13 @@ class ConfigDialog(QDialog):
         self._bind(("app", "anti_detection", "debug_no_jitter"), dbg)
         af.addRow(dbg)
         outer.addWidget(group)
+        detect_btn = QPushButton("检测全部实例")
+        detect_btn.clicked.connect(self._detect_all_instances)
+        outer.addWidget(detect_btn)
+        self._detect_output = QPlainTextEdit()
+        self._detect_output.setReadOnly(True)
+        self._detect_output.setMaximumHeight(120)
+        outer.addWidget(self._detect_output)
         outer.addStretch(1)
         return page
 
@@ -290,10 +303,17 @@ class ConfigDialog(QDialog):
         add_inst_btn.clicked.connect(lambda _c: self._add_instance())
         del_inst_btn = QPushButton("删除本实例")
         del_inst_btn.clicked.connect(lambda _c, i=idx: self._delete_instance(i))
+        test_btn = QPushButton("测试连接")
+        test_btn.clicked.connect(lambda _c, i=idx: self._test_connection(i))
+        btns.addWidget(test_btn)
         for b in (add_btn, del_btn, add_inst_btn, del_inst_btn):
             btns.addWidget(b)
         btns.addStretch(1)
         outer.addLayout(btns)
+        self._status_labels[idx] = QLabel("○ 未测试")
+        outer.addWidget(self._status_labels[idx])
+        self._preview_labels[idx] = QLabel()
+        outer.addWidget(self._preview_labels[idx])
         return page
 
     @staticmethod
@@ -370,6 +390,44 @@ class ConfigDialog(QDialog):
 
     def _set_mumu_index(self, idx: int, value: int):
         self._data_set(("instances", idx, "mumu_index"), value)
+
+    # ---------------- 连接测试 / 在线检测 ----------------
+    def _test_connection(self, idx: int):
+        """spec §5：查实例在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
+        import cv2
+        inst = self._data["instances"][idx]
+        try:
+            handle = create_handle_source(
+                mumu_index=inst.get("mumu_index"),
+                mumu_manager_path=self._data["app"].get("mumu_manager_path", ""),
+                adb_address=inst.get("adb_address", ""),
+                adb_path=self._data["app"].get("adb_path", "adb"))
+            img = handle.capture()
+        except Exception as e:  # 连不上/截图失败都要给非程序员能读懂的提示
+            self._status_labels[idx].setText(f"○ 连接失败：{e}")
+            self._preview_labels[idx].clear()
+            return
+        self._status_labels[idx].setText(
+            f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w, _ = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        self._preview_labels[idx].setPixmap(QPixmap.fromImage(qimg).scaled(
+            320, 180, Qt.AspectRatioMode.KeepAspectRatio))
+
+    def _detect_all_instances(self):
+        """spec §5：全局页「检测全部实例」，列出各实例在线状态。"""
+        from rok_assistant.infra.mumu import MumuLocator
+        lines = []
+        for inst in self._data["instances"]:
+            if inst.get("mumu_index") is not None:
+                loc = MumuLocator(self._data["app"].get("mumu_manager_path", ""),
+                                  self._data["app"].get("adb_path", "adb"))
+                state = "● 在线" if loc.is_running(inst["mumu_index"]) else "○ 离线/未启动"
+                lines.append(f"{inst['id']} (mumu{inst['mumu_index']}): {state}")
+            else:
+                lines.append(f"{inst['id']}: 手动 adb 模式，用实例页「测试连接」检查")
+        self._detect_output.setPlainText("\n".join(lines) or "尚无实例")
 
     # ---------------- 保存 ----------------
     def _on_save(self):

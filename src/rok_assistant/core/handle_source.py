@@ -54,6 +54,8 @@ def create_handle_source(mumu_index: int | None = None, mumu_manager_path: str =
     """Build the best HandleSource for an instance.
 
     mumu_index set -> resolve adb address via MuMuManager, then AdbHandleSource.
+    Precedence: mumu_index WINS over adb_address — mumu mode takes priority
+    even if a manual adb_address is also present.
     adb_address set -> AdbHandleSource directly (manual mode / non-MuMu emulator).
     Otherwise fall back to Win32 capture.
     """

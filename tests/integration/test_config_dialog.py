@@ -5,7 +5,9 @@ from pathlib import Path
 import yaml
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QAbstractItemView, QMessageBox
+from PyQt6.QtWidgets import (
+    QApplication, QAbstractItemView, QLabel, QMessageBox,
+)
 
 from rok_assistant.gui.config_dialog import ConfigDialog
 from rok_assistant.gui.config_dialog import CharacterEditDialog
@@ -246,3 +248,29 @@ def test_reload_tree_preserves_selection(tmp_path, qapp, monkeypatch):
     dlg._add_instance()
     cur = dlg._tree.currentItem()
     assert cur.data(0, Qt.ItemDataRole.UserRole) == ("page", 0)
+
+
+def test_test_connection_reports_error(tmp_path, qapp, monkeypatch):
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._status_labels[0] = QLabel()
+    dlg._preview_labels[0] = QLabel()
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise RuntimeError("no adb")
+
+    monkeypatch.setattr("rok_assistant.gui.config_dialog.create_handle_source", Boom)
+    dlg._test_connection(0)
+    assert "连接失败" in dlg._status_labels[0].text()
+
+
+def test_detect_all_instances_lists_status(tmp_path, qapp, monkeypatch):
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._detect_all_instances()
+    assert "inst0" in dlg._detect_output.toPlainText()
+
+
+def test_main_window_has_config_button(qapp, monkeypatch):
+    from rok_assistant.gui.main_window import MainWindow
+    w = MainWindow()
+    assert w.config_btn.text().endswith("配置")

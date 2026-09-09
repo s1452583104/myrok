@@ -121,3 +121,22 @@ def test_factory_manual_adb_still_works_without_mumu_fields():
     from rok_assistant.core.handle_source import create_handle_source
     src = create_handle_source(adb_address="127.0.0.1:16384", adb_path="adb")
     assert isinstance(src, AdbHandleSource)
+
+
+def test_factory_forwards_manager_and_adb_path_to_locator():
+    from rok_assistant.core.handle_source import create_handle_source
+    captured = {}
+
+    class SpyLocator:
+        def __init__(self, manager_path, adb_path):
+            captured["manager"] = manager_path
+            captured["adb"] = adb_path
+
+        def resolve_adb_address(self, index):
+            return "127.0.0.1:19999"
+
+    src = create_handle_source(mumu_index=1, mumu_manager_path="C:/m/MuMuManager.exe",
+                               adb_path="C:/m/adb.exe", _locator=SpyLocator)
+    assert captured == {"manager": "C:/m/MuMuManager.exe", "adb": "C:/m/adb.exe"}
+    assert src._address == "127.0.0.1:19999"
+    assert src._adb_path == "C:/m/adb.exe"
