@@ -59,9 +59,11 @@ instances:                      # 原 accounts 改名；1 实例 = 1 账号 = 1 
 实例级（InstanceConfig）：
 - `mumu_index` 与 `adb_address` 二选一：都空或都填 → 报错
 - 实例内角色 `name` 不重复
-- 至少 1 个 `role in {leader, either}` 的角色
+
+全局（校验放 RootConfig，因为纯成员实例合法——小号可以只填别的实例车头的集结）：
 
 全局（RootConfig，跨实例交叉校验）：
+- **整个配置至少 1 个 `role in {leader, either}` 的角色**（纯成员实例合法，纯成员配置非法）
 - 实例 `id` 全局唯一
 - `member`/`either` 角色的 `fill_target_leaders` 必填非空；`leader` 角色不允许配置（配了报错）
 - 每个填兵目标 `(instance, name)` 必须指向真实存在的角色，且目标角色 `role in {leader, either}`
