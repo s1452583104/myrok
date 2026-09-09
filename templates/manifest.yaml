@@ -215,3 +215,92 @@ templates:
   - 840
   - 1250
   - 970
+
+- id: march_btn
+  file: march_btn.png
+  threshold: 0.9
+  roi:
+  - 1150
+  - 870
+  - 1620
+  - 1020
+- id: preset_1
+  file: preset_1.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 420
+  - 1700
+  - 520
+- id: preset_2
+  file: preset_2.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 510
+  - 1700
+  - 610
+- id: preset_3
+  file: preset_3.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 590
+  - 1700
+  - 690
+- id: preset_4
+  file: preset_4.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 670
+  - 1700
+  - 770
+- id: preset_5
+  file: preset_5.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 760
+  - 1700
+  - 860
+- id: preset_6
+  file: preset_6.png
+  threshold: 0.9
+  roi:
+  - 1600
+  - 840
+  - 1700
+  - 940
+- id: troop_infantry
+  file: troop_infantry.png
+  threshold: 0.9
+  roi:
+  - 900
+  - 110
+  - 1600
+  - 220
+- id: troop_cavalry
+  file: troop_cavalry.png
+  threshold: 0.9
+  roi:
+  - 900
+  - 110
+  - 1600
+  - 220
+- id: troop_archer
+  file: troop_archer.png
+  threshold: 0.9
+  roi:
+  - 900
+  - 110
+  - 1600
+  - 220
+- id: troop_siege
+  file: troop_siege.png
+  threshold: 0.9
+  roi:
+  - 900
+  - 110
+  - 1600
+  - 220

@@ -9,7 +9,7 @@
 |---|---|---|
 | 自动化测试 | ✅ 142/142 通过 | `pytest tests/` |
 | 采集路线 | ✅ **改为 ADB** | `AdbHandleSource`：截图/点击都走 MuMu adb（127.0.0.1:16384），原生 1920×1080，与窗口/DPI 无关 |
-| 真实模板 | 🟡 20/约26 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
+| 真实模板 | ✅ 31/31 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
 | 用户 config | ✅ 已写（2026-09-09） | 2 实例：mumu0「如愿」阑珊寨子号(either,7级) ⇄ mumu1「15634025219」Jy丶阑珊(either,8级)，互相填兵；骑兵、预设1；`丶`=U+4E36 待 OCR 校验 |
 | 实机验收 8 项 | ⏳ 未开始 | §3 |
 
@@ -28,9 +28,15 @@
 | profile_title, settings_btn, settings_title | 跨角色 1.0 |
 | char_mgmt_btn, char_mgmt_title, char_avatar_lszz, char_avatar_lswk | 角色管理页 1.0 |
 | switch_confirm_yes, click_to_enter | 切换确认框 + 重登入口实测 |
+| march_btn, preset_1~6, troop_infantry/cavalry/archer/siege | 「创建部队」弹窗实测（2026-09-09）：march_btn/preset_2~6/troop_* 跨帧 1.0；见下方注意事项 |
 
-**未采**（需要真实发起集结才能看到「组建部队」弹窗，等用户确认后采）：
-`march_btn`、`preset_1`~`preset_5`、`troop_infantry`/`troop_cavalry`/`troop_archer`
+**「创建部队」弹窗补充（2026-09-09 实测）：**
+
+1. 弹窗标题实际是「**创建部队**」（非设计稿的「组建部队」）；右侧预设槽实际有 **6 个**（蓝色1~6号存档），比 spec 的 5 个多一个，已加采 `preset_6`。
+2. 兵种图标实为 4 个红菱形（步/骑/弓/**车**），已加采 `troop_siege`。
+3. `march_btn`（橙色行军按钮）下方的 00:00:XX 是**行军时长估计**，不是倒计时，不会自动出发；模板只裁了「行军」文字区，跨帧稳定 1.0。
+4. `preset_1` 模板是**未选中态**：弹窗打开时无预设选中，匹配正确；载入预设后槽位高亮（变白）则不匹配（conf 0.38，符合预期）。
+5. 采集方式：点红集结 → 集结进攻弹窗（5分钟默认勾选）→ 蓝集结 → 创建部队弹窗截图后 BACK 关闭，**未点行军**（无出征；集结无人填兵 5 分钟后自动解散）。
 
 ## §1.5 实测发现的设计修正（重要）
 
@@ -114,8 +120,8 @@ python tools/crop_template.py --input recordings/main_city/session_*/frame_00003
 - `red_rally` — 红色集结按钮
 - `blue_rally` — 蓝色集结按钮（确认用）
 - `march_btn` — 行军按钮
-- `preset_1` ~ `preset_5` — 5 个部队预设
-- `troop_infantry` / `troop_cavalry` / `troop_archer` — 3 个兵种
+- `preset_1` ~ `preset_6` — 6 个部队预设（实测为 6 个，非设计稿的 5 个）
+- `troop_infantry` / `troop_cavalry` / `troop_archer` / `troop_siege` — 4 个兵种
 
 **成员（member_sm）用**：
 - `alliance_btn` — 底部联盟按钮
