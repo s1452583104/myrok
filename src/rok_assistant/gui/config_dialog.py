@@ -14,11 +14,11 @@ import yaml
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
-    QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
+    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from pydantic import ValidationError
 
@@ -396,6 +396,13 @@ class ConfigDialog(QDialog):
         """spec §5：查实例在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
         import cv2
         inst = self._data["instances"][idx]
+        if inst.get("mumu_index") is None and not inst.get("adb_address"):
+            self._status_labels[idx].setText(
+                "○ 未配置：请先选择接入方式（MuMu 实例号或 adb 地址）")
+            return
+        self._status_labels[idx].setText("● 测试中…")
+        QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             handle = create_handle_source(
                 mumu_index=inst.get("mumu_index"),
@@ -404,9 +411,18 @@ class ConfigDialog(QDialog):
                 adb_path=self._data["app"].get("adb_path", "adb"))
             img = handle.capture()
         except Exception as e:  # 连不上/截图失败都要给非程序员能读懂的提示
-            self._status_labels[idx].setText(f"○ 连接失败：{e}")
+            msg = f"○ 连接失败：{e}"
+            stderr = getattr(e, "stderr", None)
+            if stderr:  # CalledProcessError 等会带 stderr，取最后一行帮助定位
+                lines = [ln for ln in stderr.decode(errors="replace").splitlines()
+                         if ln.strip()]
+                if lines:
+                    msg += f"\n{lines[-1]}"
+            self._status_labels[idx].setText(msg)
             self._preview_labels[idx].clear()
             return
+        finally:
+            QApplication.restoreOverrideCursor()
         self._status_labels[idx].setText(
             f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -418,15 +434,19 @@ class ConfigDialog(QDialog):
     def _detect_all_instances(self):
         """spec §5：全局页「检测全部实例」，列出各实例在线状态。"""
         from rok_assistant.infra.mumu import MumuLocator
-        lines = []
-        for inst in self._data["instances"]:
-            if inst.get("mumu_index") is not None:
-                loc = MumuLocator(self._data["app"].get("mumu_manager_path", ""),
-                                  self._data["app"].get("adb_path", "adb"))
-                state = "● 在线" if loc.is_running(inst["mumu_index"]) else "○ 离线/未启动"
-                lines.append(f"{inst['id']} (mumu{inst['mumu_index']}): {state}")
-            else:
-                lines.append(f"{inst['id']}: 手动 adb 模式，用实例页「测试连接」检查")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            lines = []
+            for inst in self._data["instances"]:
+                if inst.get("mumu_index") is not None:
+                    loc = MumuLocator(self._data["app"].get("mumu_manager_path", ""),
+                                      self._data["app"].get("adb_path", "adb"))
+                    state = "● 在线" if loc.is_running(inst["mumu_index"]) else "○ 离线/未启动"
+                    lines.append(f"{inst['id']} (mumu{inst['mumu_index']}): {state}")
+                else:
+                    lines.append(f"{inst['id']}: 手动 adb 模式，用实例页「测试连接」检查")
+        finally:
+            QApplication.restoreOverrideCursor()
         self._detect_output.setPlainText("\n".join(lines) or "尚无实例")
 
     # ---------------- 保存 ----------------

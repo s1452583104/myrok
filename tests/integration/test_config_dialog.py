@@ -5,9 +5,7 @@ from pathlib import Path
 import yaml
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QApplication, QAbstractItemView, QLabel, QMessageBox,
-)
+from PyQt6.QtWidgets import QApplication, QAbstractItemView, QMessageBox
 
 from rok_assistant.gui.config_dialog import ConfigDialog
 from rok_assistant.gui.config_dialog import CharacterEditDialog
@@ -252,8 +250,6 @@ def test_reload_tree_preserves_selection(tmp_path, qapp, monkeypatch):
 
 def test_test_connection_reports_error(tmp_path, qapp, monkeypatch):
     dlg = ConfigDialog(_write_config(tmp_path))
-    dlg._status_labels[0] = QLabel()
-    dlg._preview_labels[0] = QLabel()
 
     class Boom:
         def __init__(self, *a, **k):
@@ -262,6 +258,16 @@ def test_test_connection_reports_error(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr("rok_assistant.gui.config_dialog.create_handle_source", Boom)
     dlg._test_connection(0)
     assert "连接失败" in dlg._status_labels[0].text()
+
+
+def test_test_connection_unconfigured_shows_hint(tmp_path, qapp, monkeypatch):
+    data = _valid_config_dict()
+    data["instances"][0]["mumu_index"] = None
+    data["instances"][0]["adb_address"] = "127.0.0.1:16384"  # 先合法加载
+    dlg = ConfigDialog(_write_config(tmp_path, data))
+    dlg._data["instances"][0]["adb_address"] = ""  # 模拟用户清空了地址
+    dlg._test_connection(0)
+    assert "未配置" in dlg._status_labels[0].text()
 
 
 def test_detect_all_instances_lists_status(tmp_path, qapp, monkeypatch):
