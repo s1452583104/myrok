@@ -4,7 +4,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
 import yaml
 import pytest
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QAbstractItemView, QMessageBox
 
 from rok_assistant.gui.config_dialog import ConfigDialog
 from rok_assistant.gui.config_dialog import CharacterEditDialog
@@ -190,3 +191,58 @@ def test_manual_adb_instance_keeps_none_mumu_index(tmp_path, qapp, monkeypatch):
     dlg = ConfigDialog(_write_config(tmp_path, data))
     assert dlg._data["instances"][0]["mumu_index"] is None
     assert dlg._data["instances"][0]["adb_address"] == "127.0.0.1:16384"
+
+
+def test_table_has_no_inline_edit(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    assert dlg._tables[0].editTriggers() == QAbstractItemView.EditTrigger.NoEditTriggers
+
+
+def test_delete_instance_requires_confirmation(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+
+    def _no(*a, **k):
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", _no)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._delete_instance(0)
+    assert len(dlg._data["instances"]) == 1  # 回答 No → 不删
+
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dlg._delete_instance(0)
+    assert dlg._data["instances"] == []  # 回答 Yes → 删除
+
+
+def test_rename_propagates_to_fill_targets(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    hero = dict(dlg._data["instances"][0]["characters"][0])
+    dlg._save_character(0, hero, dict(hero, name="Hero2"))
+    m1 = dlg._data["instances"][0]["characters"][1]
+    assert m1["fill_target_leaders"] == [{"instance": "inst0", "name": "Hero2"}]
+    assert dlg.save() is True
+
+
+def test_mode_switch_to_mumu_clears_addr_field(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    inst = data["instances"][0]
+    inst["mumu_index"] = None
+    inst["adb_address"] = "127.0.0.1:16384"
+    dlg = ConfigDialog(_write_config(tmp_path, data))
+    dlg._mode_combos[0].setCurrentIndex(0)
+    assert dlg._data["instances"][0]["mumu_index"] == 0
+    assert dlg._data["instances"][0]["adb_address"] == ""
+    assert dlg._widgets[("instances", 0, "adb_address")].text() == ""
+
+
+def test_reload_tree_preserves_selection(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))  # 实例 0
+    dlg._add_instance()
+    cur = dlg._tree.currentItem()
+    assert cur.data(0, Qt.ItemDataRole.UserRole) == ("page", 0)

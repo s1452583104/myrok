@@ -13,11 +13,11 @@ import uuid
 import yaml
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
+    QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from pydantic import ValidationError
 
@@ -38,6 +38,8 @@ class ConfigDialog(QDialog):
         self._path = Path(config_path)
         self._data = load_config(self._path).model_dump(mode="json")
         self._widgets: dict[tuple, QWidget] = {}
+        self._tables: dict[int, QTableWidget] = {}
+        self._mode_combos: dict[int, QComboBox] = {}
         self._build_ui()
 
     # ---------------- UI 骨架 ----------------
@@ -68,12 +70,16 @@ class ConfigDialog(QDialog):
         self._reload_tree()
 
     def _reload_tree(self):
+        current = self._tree.currentItem()
+        cur_key = current.data(0, Qt.ItemDataRole.UserRole) if current else None
         self._tree.clear()
         while self._stack.count():
             w = self._stack.widget(0)
             self._stack.removeWidget(w)
             w.deleteLater()
         self._widgets.clear()
+        self._tables.clear()
+        self._mode_combos.clear()
 
         g = QTreeWidgetItem(["全局设置"])
         g.setData(0, Qt.ItemDataRole.UserRole, ("page", "global"))
@@ -94,7 +100,15 @@ class ConfigDialog(QDialog):
             self._tree.addTopLevelItem(item)
             self._stack.addWidget(self._make_instance_page(idx))
 
-        self._tree.setCurrentItem(g)
+        # 重建后恢复先前的选中项（不存在则回落到全局设置）
+        target = g
+        if cur_key is not None:
+            for i in range(self._tree.topLevelItemCount()):
+                it = self._tree.topLevelItem(i)
+                if it.data(0, Qt.ItemDataRole.UserRole) == cur_key:
+                    target = it
+                    break
+        self._tree.setCurrentItem(target)
         self._refresh_yaml_preview()
 
     def _on_tree_change(self, cur, _prev):
@@ -227,6 +241,7 @@ class ConfigDialog(QDialog):
 
         mode = QComboBox()
         mode.addItems(["MuMu 实例号", "手动 adb 地址"])
+        self._mode_combos[idx] = mode
         stack = QStackedWidget()
         spin = QSpinBox()
         spin.setRange(0, 64)
@@ -245,6 +260,7 @@ class ConfigDialog(QDialog):
             if i == 0:
                 inst2["mumu_index"] = int(spin.value())
                 inst2["adb_address"] = ""
+                addr.clear()
             else:
                 inst2["mumu_index"] = None
                 inst2["adb_address"] = addr.text()
@@ -256,7 +272,9 @@ class ConfigDialog(QDialog):
 
         outer.addWidget(QLabel("角色阵容（双击行编辑）"))
         table = QTableWidget(0, 5)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setHorizontalHeaderLabels(["名字", "分工", "目标等级", "预设", "兵种 / 填兵目标"])
+        self._tables[idx] = table
         for c in inst["characters"]:
             self._append_char_row(table, c)
         table.doubleClicked.connect(
@@ -308,10 +326,20 @@ class ConfigDialog(QDialog):
     def _save_character(self, idx: int, existing: dict | None, result: dict):
         chars = self._data["instances"][idx]["characters"]
         if existing is not None:
-            pos = next(i for i, c in enumerate(chars) if c["id"] == existing["id"])
+            pos = next((i for i, c in enumerate(chars) if c["id"] == existing["id"]), None)
+            if pos is None:
+                return
             chars[pos] = result
         else:
             chars.append(result)
+        # 重命名时同步所有实例中的填兵目标引用，避免悬空引用
+        if existing is not None and existing["name"] != result["name"]:
+            inst_id = self._data["instances"][idx]["id"]
+            for inst in self._data["instances"]:
+                for c in inst["characters"]:
+                    for f in c.get("fill_target_leaders", []):
+                        if f["instance"] == inst_id and f["name"] == existing["name"]:
+                            f["name"] = result["name"]
         self._reload_tree()
 
     def _delete_character(self, idx: int, row: int):
@@ -331,6 +359,12 @@ class ConfigDialog(QDialog):
         self._reload_tree()
 
     def _delete_instance(self, idx: int):
+        inst = self._data["instances"][idx]
+        answer = QMessageBox.question(
+            self, "删除实例",
+            f"确定删除实例 {inst.get('name') or inst['id']} 及其全部角色？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self._data["instances"].pop(idx)
         self._reload_tree()
 
