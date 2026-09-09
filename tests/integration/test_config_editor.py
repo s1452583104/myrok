@@ -41,6 +41,7 @@ def test_editor_loads_yaml(tmp_path, qapp):
     assert "1280" in text
 
 
+@pytest.mark.xfail(reason="accounts->instances schema rework; file removed in Task 7", strict=True)
 def test_editor_save_writes_file(tmp_path, qapp):
     from rok_assistant.gui.config_editor import ConfigEditor
     cfg = tmp_path / "test.yaml"

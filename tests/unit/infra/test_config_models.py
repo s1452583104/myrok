@@ -32,23 +32,26 @@ def test_leader_minimal():
 
 
 def test_member_requires_fill_targets():
-    with pytest.raises(ValidationError, match="fill_target_leaders"):
+    with pytest.raises(ValidationError, match="必须配置"):
         _root(_leader(), _member(fill_target_leaders=[]))
 
 
-def test_either_role_with_fill_targets():
-    c = _member(id="c3", name="F1", role=RoleEnum.EITHER)
-    assert c.role == RoleEnum.EITHER
+def test_either_role_roundtrip():
+    cfg = _root(_leader(),
+                _member(id="c3", name="F1", role=RoleEnum.EITHER))
+    either = cfg.instances[0].characters[1]
+    assert either.role == RoleEnum.EITHER
+    assert either.fill_target_leaders[0].name == "Hero"
 
 
 def test_either_requires_fill_targets():
-    with pytest.raises(ValidationError, match="fill_target_leaders"):
+    with pytest.raises(ValidationError, match="必须配置"):
         _root(_leader(), _member(id="c3", name="F1", role=RoleEnum.EITHER,
                                  fill_target_leaders=[]))
 
 
 def test_leader_must_not_have_fill_targets():
-    with pytest.raises(ValidationError, match="leader"):
+    with pytest.raises(ValidationError, match="不能配置"):
         _root(_leader(fill_target_leaders=[FillLeader(instance="i1", name="X")]))
 
 

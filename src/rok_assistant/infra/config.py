@@ -15,12 +15,12 @@ class RoleEnum(str, Enum):
 
 class FillLeader(BaseModel):
     instance: str
-    name: str
+    name: str = Field(min_length=1)
 
 
 class CharacterConfig(BaseModel):
     id: str
-    name: str
+    name: str = Field(min_length=1)
     role: RoleEnum
     target_level: int = Field(ge=1, le=10)
     march_preset: int = Field(ge=1, le=5)
@@ -38,7 +38,7 @@ class CharacterConfig(BaseModel):
 class InstanceConfig(BaseModel):
     id: str
     name: str = ""
-    mumu_index: int | None = None
+    mumu_index: int | None = Field(default=None, ge=0)
     adb_address: str = ""
     window_title_pattern: str = ""  # Win32 备用路线；ADB 路线用不到
     characters: list[CharacterConfig]
@@ -93,6 +93,9 @@ class RootConfig(BaseModel):
                         raise ValueError(
                             f"Character {c.name}: member/either 必须配置 fill_target_leaders")
                     for t in c.fill_target_leaders:
+                        if t.instance == i.id and t.name == c.name:
+                            raise ValueError(
+                                f"Character {c.name}: fill target 不能指向自己")
                         target = by_key.get((t.instance, t.name))
                         if target is None:
                             raise ValueError(
