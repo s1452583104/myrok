@@ -474,13 +474,17 @@ class ConfigDialog(QDialog):
     def _show_errors(self, e: ValidationError):
         for path in self._widgets:
             self._widgets[path].setStyleSheet("")
-        lines = ["以下字段校验未通过（详细原因为英文技术信息，可截图反馈给开发者）："]
+        lines = ["以下字段校验未通过（个别技术性原因为英文，可截图反馈给开发者）："]
         for err in e.errors():
             loc = tuple(err["loc"])
             lines.append(" / ".join(str(x) for x in loc) + f": {err['msg']}")
-            w = self._widgets.get(loc)
-            if w is not None:
-                w.setStyleSheet(ERR_STYLE)
+            if not loc:
+                continue  # 根级错误无对应控件
+            for path in self._widgets:
+                # 前缀匹配：model-validator 的错误落在父路径上（如
+                # ("instances", 0) 或 ()），其下所有控件都要标红
+                if path[:len(loc)] == loc:
+                    self._widgets[path].setStyleSheet(ERR_STYLE)
         QMessageBox.critical(self, "校验失败", "\n".join(lines) or str(e))
 
 

@@ -1,5 +1,4 @@
 from __future__ import annotations
-import time
 from .state_machine import StateMachine
 
 class MemberStateMachine(StateMachine):

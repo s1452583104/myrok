@@ -56,7 +56,7 @@ def test_leader_must_not_have_fill_targets():
 
 
 def test_instance_requires_leader_or_either():
-    with pytest.raises(ValidationError, match="no leader"):
+    with pytest.raises(ValidationError, match="整个配置至少需要"):
         _root(_member(id="c9", name="OnlyM"))
 
 
@@ -104,13 +104,13 @@ def test_cross_instance_fill_target_ok():
 
 
 def test_duplicate_instance_ids():
-    with pytest.raises(ValidationError, match="Duplicate instance"):
+    with pytest.raises(ValidationError, match="实例 id 重复"):
         RootConfig(instances=[InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
                               InstanceConfig(id="i1", mumu_index=1, characters=[_leader(id="c9", name="H2")])])
 
 
 def test_duplicate_character_ids():
-    with pytest.raises(ValidationError, match="Duplicate character"):
+    with pytest.raises(ValidationError, match="角色 id 重复"):
         RootConfig(instances=[InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
                               InstanceConfig(id="i2", mumu_index=1, characters=[_leader(name="H2")])])
 

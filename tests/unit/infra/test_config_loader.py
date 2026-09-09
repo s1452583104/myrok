@@ -16,7 +16,7 @@ def test_load_valid_config():
 
 
 def test_load_no_leader_raises():
-    with pytest.raises(ValidationError, match="no leader"):
+    with pytest.raises(ValidationError, match="整个配置至少需要"):
         load_config(FIX / "config_no_leader.yaml")
 
 

@@ -75,13 +75,13 @@ class RootConfig(BaseModel):
     def _cross_checks(self):
         inst_ids = [i.id for i in self.instances]
         if len(inst_ids) != len(set(inst_ids)):
-            raise ValueError("Duplicate instance ids")
+            raise ValueError("实例 id 重复")
         char_ids = [c.id for i in self.instances for c in i.characters]
         if len(char_ids) != len(set(char_ids)):
-            raise ValueError("Duplicate character ids")
+            raise ValueError("角色 id 重复")
         if not any(c.role in (RoleEnum.LEADER, RoleEnum.EITHER)
                    for i in self.instances for c in i.characters):
-            raise ValueError("Config has no leader/either character")
+            raise ValueError("整个配置至少需要 1 个 leader/either 角色")
         by_key = {(i.id, c.name): c for i in self.instances for c in i.characters}
         for i in self.instances:
             for c in i.characters:
