@@ -1,10 +1,10 @@
 app: {}
-accounts:
+instances:
   - id: bad
-    window_title_pattern: "x"
+    mumu_index: 0
     characters:
-      - id: l
-        name: "L"
+      - id: l1
+        name: "Hero"
         role: leader
         target_level: 11
         march_preset: 1

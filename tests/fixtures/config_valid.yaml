@@ -1,9 +1,12 @@
 app:
   screen_width: 1920
   screen_height: 1080
-accounts:
-  - id: test_account
-    window_title_pattern: "MuMuPlayer.*"
+  mumu_manager_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\MuMuManager.exe"
+  adb_path: "adb"
+instances:
+  - id: inst0
+    name: "阑珊号"
+    mumu_index: 0
     characters:
       - id: leader1
         name: "Hero"
@@ -17,4 +20,5 @@ accounts:
         target_level: 5
         march_preset: 2
         march_troop_types: [cavalry]
-        fill_target_leaders: nearest
+        fill_target_leaders:
+          - { instance: inst0, name: "Hero" }

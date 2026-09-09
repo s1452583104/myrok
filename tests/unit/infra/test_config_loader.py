@@ -9,8 +9,10 @@ FIX = Path(__file__).parent.parent.parent / "fixtures"
 def test_load_valid_config():
     cfg = load_config(FIX / "config_valid.yaml")
     assert isinstance(cfg, RootConfig)
-    assert len(cfg.accounts) == 1
-    assert cfg.accounts[0].id == "test_account"
+    assert len(cfg.instances) == 1
+    assert cfg.instances[0].id == "inst0"
+    assert cfg.instances[0].name == "阑珊号"
+    assert cfg.app.mumu_manager_path.endswith("MuMuManager.exe")
 
 
 def test_load_no_leader_raises():
