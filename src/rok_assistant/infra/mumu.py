@@ -31,6 +31,24 @@ def _extract_port(obj) -> int | None:
     return None
 
 
+def _extract_host(obj) -> str | None:
+    """Recursively find an adb host ip string in decoded MuMuManager JSON output."""
+    if isinstance(obj, dict):
+        v = obj.get("adb_host_ip")
+        if isinstance(v, str) and v:
+            return v
+        for v in obj.values():
+            found = _extract_host(v)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _extract_host(item)
+            if found is not None:
+                return found
+    return None
+
+
 class MumuLocator:
     def __init__(self, mumu_manager_path: str, adb_path: str = "adb", _runner=None):
         self._manager = mumu_manager_path
@@ -55,7 +73,8 @@ class MumuLocator:
         port = _extract_port(data)
         if port is None:
             raise MumuLocatorError(f"MuMuManager 输出中未找到 adb 端口: {data}")
-        return f"127.0.0.1:{port}"
+        host = _extract_host(data) or "127.0.0.1"
+        return f"{host}:{port}"
 
     def is_running(self, index: int) -> bool:
         try:

@@ -39,6 +39,12 @@ def test_resolve_accepts_top_level_port_key():
     assert loc.resolve_adb_address(1) == "127.0.0.1:16385"
 
 
+def test_resolve_uses_adb_host_ip_when_present():
+    out = _json_bytes({"adb_host_ip": "192.168.1.5", "adb_port": 16384})
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(FakeProc(stdout=out)))
+    assert loc.resolve_adb_address(0) == "192.168.1.5:16384"
+
+
 def test_resolve_passes_index_to_manager():
     runner = FakeRunner(FakeProc(stdout=_json_bytes({"adb_port": 16384})))
     loc = MumuLocator("C:/mumu/MuMuManager.exe", _runner=runner)
