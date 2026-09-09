@@ -8,13 +8,15 @@ dict，保存时 RootConfig.model_validate 整体校验，避免编辑过程中�
 from __future__ import annotations
 
 from pathlib import Path
+import uuid
 
 import yaml
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
-    QPushButton, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem,
+    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 from pydantic import ValidationError
@@ -212,14 +214,128 @@ class ConfigDialog(QDialog):
         self._yaml_view.setPlainText(
             yaml.safe_dump(self._data, allow_unicode=True, sort_keys=False))
 
-    # ---------------- 实例页占位（Task 6 实现） ----------------
+    # ---------------- 实例页 ----------------
     def _make_instance_page(self, idx: int) -> QWidget:
+        inst = self._data["instances"][idx]
         page = QWidget()
-        v = QVBoxLayout(page)
-        v.addWidget(QLabel(f"实例 {self._data['instances'][idx].get('name') or self._data['instances'][idx]['id']}"
-                           "（实例/角色编辑在下一个任务实现）"))
-        v.addStretch(1)
+        outer = QVBoxLayout(page)
+        form = QFormLayout()
+
+        outer.addWidget(QLabel(f"实例 ID：{inst['id']}"))
+        name = self._line(("instances", idx, "name"), inst.get("name", ""))
+        form.addRow("显示名", name)
+
+        mode = QComboBox()
+        mode.addItems(["MuMu 实例号", "手动 adb 地址"])
+        stack = QStackedWidget()
+        spin = QSpinBox()
+        spin.setRange(0, 64)
+        spin.setValue(inst.get("mumu_index") or 0)
+        spin.valueChanged.connect(lambda v, i=idx: self._set_mumu_index(i, int(v)))
+        self._bind(("instances", idx, "mumu_index"), spin)
+        addr = self._line(("instances", idx, "adb_address"), inst.get("adb_address", ""))
+        stack.addWidget(spin)
+        stack.addWidget(addr)
+        is_manual = inst.get("mumu_index") is None
+        mode.setCurrentIndex(1 if is_manual else 0)
+        stack.setCurrentIndex(1 if is_manual else 0)
+
+        def _on_mode(i, i2=idx):
+            inst2 = self._data["instances"][i2]
+            if i == 0:
+                inst2["mumu_index"] = int(spin.value())
+                inst2["adb_address"] = ""
+            else:
+                inst2["mumu_index"] = None
+                inst2["adb_address"] = addr.text()
+        mode.currentIndexChanged.connect(_on_mode)
+        mode.currentIndexChanged.connect(stack.setCurrentIndex)
+        form.addRow("接入方式", mode)
+        form.addRow("MuMu 实例号", stack)
+        outer.addLayout(form)
+
+        outer.addWidget(QLabel("角色阵容（双击行编辑）"))
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["名字", "分工", "目标等级", "预设", "兵种 / 填兵目标"])
+        for c in inst["characters"]:
+            self._append_char_row(table, c)
+        table.doubleClicked.connect(
+            lambda _mi, i=idx, t=table: self._edit_character(i, t.currentRow()))
+        outer.addWidget(table, 1)
+
+        btns = QHBoxLayout()
+        add_btn = QPushButton("＋ 添加角色")
+        add_btn.clicked.connect(lambda _c, i=idx, t=table: self._edit_character(i, -1))
+        del_btn = QPushButton("删除选中角色")
+        del_btn.clicked.connect(lambda _c, i=idx, t=table: self._delete_character(i, t.currentRow()))
+        add_inst_btn = QPushButton("＋ 添加实例")
+        add_inst_btn.clicked.connect(lambda _c: self._add_instance())
+        del_inst_btn = QPushButton("删除本实例")
+        del_inst_btn.clicked.connect(lambda _c, i=idx: self._delete_instance(i))
+        for b in (add_btn, del_btn, add_inst_btn, del_inst_btn):
+            btns.addWidget(b)
+        btns.addStretch(1)
+        outer.addLayout(btns)
         return page
+
+    @staticmethod
+    def _append_char_row(table: QTableWidget, c: dict):
+        row = table.rowCount()
+        table.insertRow(row)
+        fills = ", ".join(f"{f['instance']}/{f['name']}" for f in c.get("fill_target_leaders", []))
+        troops = "、".join(TROOP_LABELS[t] for t in c["march_troop_types"])
+        summary = troops + (f" ｜ 填: {fills}" if fills else "")
+        for col, text in enumerate([c["name"], ROLE_LABELS[c["role"]],
+                                    str(c["target_level"]), str(c["march_preset"]), summary]):
+            table.setItem(row, col, QTableWidgetItem(text))
+
+    def _leader_candidates(self, exclude=None) -> list[dict]:
+        out = []
+        for i, inst in enumerate(self._data["instances"]):
+            for j, c in enumerate(inst["characters"]):
+                if c["role"] in ("leader", "either") and (i, j) != exclude:
+                    out.append({"instance": inst["id"], "name": c["name"]})
+        return out
+
+    def _edit_character(self, idx: int, row: int):
+        inst = self._data["instances"][idx]
+        existing = inst["characters"][row] if 0 <= row < len(inst["characters"]) else None
+        dlg = CharacterEditDialog(self, existing, self._leader_candidates(
+            exclude=(idx, row) if existing else None))
+        if dlg.exec() and dlg.get_result():
+            self._save_character(idx, existing, dlg.get_result())
+
+    def _save_character(self, idx: int, existing: dict | None, result: dict):
+        chars = self._data["instances"][idx]["characters"]
+        if existing is not None:
+            pos = next(i for i, c in enumerate(chars) if c["id"] == existing["id"])
+            chars[pos] = result
+        else:
+            chars.append(result)
+        self._reload_tree()
+
+    def _delete_character(self, idx: int, row: int):
+        chars = self._data["instances"][idx]["characters"]
+        if 0 <= row < len(chars):
+            chars.pop(row)
+            self._reload_tree()
+
+    def _add_instance(self):
+        used = {i["id"] for i in self._data["instances"]}
+        n = 0
+        while f"inst{n}" in used:
+            n += 1
+        self._data["instances"].append({
+            "id": f"inst{n}", "name": f"实例{n}", "mumu_index": None,
+            "adb_address": "", "window_title_pattern": "", "characters": []})
+        self._reload_tree()
+
+    def _delete_instance(self, idx: int):
+        self._data["instances"].pop(idx)
+        self._reload_tree()
+
+    def _set_mumu_index(self, idx: int, value: int):
+        self._data_set(("instances", idx, "mumu_index"), value)
 
     # ---------------- 保存 ----------------
     def _on_save(self):
@@ -254,3 +370,134 @@ class ConfigDialog(QDialog):
             if w is not None:
                 w.setStyleSheet(ERR_STYLE)
         QMessageBox.critical(self, "校验失败", "\n".join(lines) or str(e))
+
+
+class CharacterEditDialog(QDialog):
+    """单个角色的编辑表单（spec 2026-09-09 §5 角色编辑表单）。"""
+
+    def __init__(self, parent, character: dict | None, candidates: list[dict]):
+        super().__init__(parent)
+        self.setWindowTitle("角色编辑")
+        self.resize(460, 520)
+        self._character = dict(character) if character else None
+        self._candidates = candidates
+        form = QFormLayout(self)
+
+        self.name_edit = QLineEdit((character or {}).get("name", ""))
+        form.addRow("角色名（须与游戏内一致）", self.name_edit)
+
+        self.role_combo = QComboBox()
+        for r in ("leader", "member", "either"):
+            self.role_combo.addItem(ROLE_LABELS[r])
+        if (character or {}).get("role"):
+            self.role_combo.setCurrentText(ROLE_LABELS[character["role"]])
+        form.addRow("分工", self.role_combo)
+
+        self.level_spin = QSpinBox()
+        self.level_spin.setRange(1, 10)
+        self.level_spin.setValue((character or {}).get("target_level", 7))
+        form.addRow("目标城寨等级", self.level_spin)
+
+        self.preset_spin = QSpinBox()
+        self.preset_spin.setRange(1, 5)
+        self.preset_spin.setValue((character or {}).get("march_preset", 1))
+        form.addRow("行军预设", self.preset_spin)
+
+        troop_row = QHBoxLayout()
+        self.troop_checks = {}
+        for key, label in TROOP_LABELS.items():
+            cb = QCheckBox(label)
+            cb.setChecked(key in (character or {}).get("march_troop_types", ["infantry"]))
+            self.troop_checks[key] = cb
+            troop_row.addWidget(cb)
+        form.addRow("兵种", ConfigDialog._wrap(troop_row))
+
+        form.addRow(QLabel("填兵目标（成员 / 车头或成员 必选，可多选）："))
+        lists = QHBoxLayout()
+        self.cand_list = QListWidget()
+        self.sel_list = QListWidget()
+        selected = {(f["instance"], f["name"])
+                    for f in (character or {}).get("fill_target_leaders", [])}
+        for c in candidates:
+            item = QListWidgetItem(f"{c['instance']} / {c['name']}")
+            item.setData(Qt.ItemDataRole.UserRole, (c["instance"], c["name"]))
+            if (c["instance"], c["name"]) in selected:
+                self.sel_list.addItem(item)
+            else:
+                self.cand_list.addItem(item)
+        lists.addWidget(self.cand_list)
+        moves = QVBoxLayout()
+        add_btn = QPushButton("→")
+        add_btn.clicked.connect(self._move_to_selected)
+        rm_btn = QPushButton("←")
+        rm_btn.clicked.connect(self._move_to_candidates)
+        moves.addStretch(1)
+        moves.addWidget(add_btn)
+        moves.addWidget(rm_btn)
+        moves.addStretch(1)
+        lists.addLayout(moves)
+        lists.addWidget(self.sel_list)
+        form.addRow(ConfigDialog._wrap(lists))
+
+        ok = QPushButton("确定")
+        ok.clicked.connect(self._on_ok)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        form.addRow(ConfigDialog._wrap(btns))
+
+        self.role_combo.currentTextChanged.connect(
+            lambda _t: self.sel_list.setEnabled(
+                self.role_combo.currentText() != ROLE_LABELS["leader"]))
+        self.sel_list.setEnabled(self.role_combo.currentText() != ROLE_LABELS["leader"])
+
+    def _move_to_selected(self):
+        for item in self.cand_list.selectedItems():
+            self.cand_list.takeItem(self.cand_list.row(item))
+            self.sel_list.addItem(item)
+
+    def _move_to_candidates(self):
+        for item in self.sel_list.selectedItems():
+            self.sel_list.takeItem(self.sel_list.row(item))
+            self.cand_list.addItem(item)
+
+    def _selected_fills(self) -> list[dict]:
+        out = []
+        for i in range(self.sel_list.count()):
+            inst, name = self.sel_list.item(i).data(Qt.ItemDataRole.UserRole)
+            out.append({"instance": inst, "name": name})
+        return out
+
+    def validate(self) -> str | None:
+        """返回错误说明；None 表示可保存。"""
+        if not self.name_edit.text().strip():
+            return "角色名不能为空"
+        troops = [k for k, cb in self.troop_checks.items() if cb.isChecked()]
+        if not troops:
+            return "至少选择一个兵种"
+        role = LABEL_ROLES[self.role_combo.currentText()]
+        if role in ("member", "either") and not self._selected_fills():
+            return f"分工为 {ROLE_LABELS[role]} 时必须选择填兵目标"
+        return None
+
+    def _on_ok(self):
+        err = self.validate()
+        if err:
+            QMessageBox.warning(self, "角色编辑", err)
+            return
+        self.accept()
+
+    def get_result(self) -> dict:
+        role = LABEL_ROLES[self.role_combo.currentText()]
+        return {
+            "id": (self._character or {}).get("id") or f"char-{uuid.uuid4().hex[:8]}",
+            "name": self.name_edit.text().strip(),
+            "role": role,
+            "target_level": self.level_spin.value(),
+            "march_preset": self.preset_spin.value(),
+            "march_troop_types": [k for k, cb in self.troop_checks.items() if cb.isChecked()],
+            "fill_target_leaders": [] if role == "leader" else self._selected_fills(),
+        }

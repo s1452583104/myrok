@@ -7,6 +7,8 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from rok_assistant.gui.config_dialog import ConfigDialog
+from rok_assistant.gui.config_dialog import CharacterEditDialog
+from rok_assistant.gui.config_dialog import ROLE_LABELS
 
 
 @pytest.fixture
@@ -126,3 +128,65 @@ def test_yaml_preview_reflects_data(tmp_path, qapp, monkeypatch):
     dlg._refresh_yaml_preview()
     assert "阑珊号" in dlg._yaml_view.toPlainText()
     assert "fill_target_leaders" in dlg._yaml_view.toPlainText()
+
+
+def test_add_instance_generates_unique_id(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._add_instance()
+    assert len(dlg._data["instances"]) == 2
+    assert dlg._data["instances"][1]["id"] == "inst1"
+    assert dlg._data["instances"][1]["characters"] == []
+    # 新实例不合法（无角色），保存必须被拒
+    assert dlg.save() is False
+
+
+def test_add_and_edit_character_roundtrip(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    char = {"id": "c9", "name": "New", "role": "either", "target_level": 7,
+            "march_preset": 3, "march_troop_types": ["archer"],
+            "fill_target_leaders": [{"instance": "inst0", "name": "Hero"}]}
+    dlg._save_character(0, None, char)
+    chars = dlg._data["instances"][0]["characters"]
+    assert len(chars) == 3
+    assert chars[2]["role"] == "either"
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["instances"][0]["characters"][2]["name"] == "New"
+
+
+def test_character_edit_dialog_rejects_member_without_fills(qapp):
+    dlg = CharacterEditDialog(None, None, [{"instance": "inst0", "name": "Hero"}])
+    dlg.name_edit.setText("X")
+    dlg.role_combo.setCurrentText(ROLE_LABELS["member"])
+    assert dlg.validate() is not None  # 返回错误信息（非 None）
+
+
+def test_delete_character(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._delete_character(0, 1)  # 删 M1（有 fill target 引用，删除后 leader 无妨）
+    assert [c["name"] for c in dlg._data["instances"][0]["characters"]] == ["Hero"]
+    assert dlg.save() is True
+
+
+def test_delete_character_with_incoming_reference_blocks_save(tmp_path, qapp, monkeypatch):
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical",
+                        lambda *a, **k: errors.append(str(a)))
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._delete_character(0, 0)  # 删 Hero；M1 的填兵目标悬空
+    assert dlg.save() is False
+
+
+def test_manual_adb_instance_keeps_none_mumu_index(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    inst = data["instances"][0]
+    inst["mumu_index"] = None
+    inst["adb_address"] = "127.0.0.1:16384"
+    dlg = ConfigDialog(_write_config(tmp_path, data))
+    assert dlg._data["instances"][0]["mumu_index"] is None
+    assert dlg._data["instances"][0]["adb_address"] == "127.0.0.1:16384"
