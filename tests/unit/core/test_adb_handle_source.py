@@ -90,9 +90,34 @@ def test_factory_prefers_adb_when_address_set():
     from rok_assistant.core.handle_source import create_handle_source
     src = create_handle_source(adb_address="127.0.0.1:16384", window_title_pattern="MuMu")
     assert isinstance(src, AdbHandleSource)
+    assert src._address == "127.0.0.1:16384"
 
 
 def test_factory_falls_back_to_win32():
     from rok_assistant.core.handle_source import Win32HandleSource, create_handle_source
     src = create_handle_source(window_title_pattern="MuMu")
     assert isinstance(src, Win32HandleSource)
+
+
+class FakeLocator:
+    def __init__(self, manager_path, adb_path):
+        self.manager_path = manager_path
+        self.adb_path = adb_path
+
+    def resolve_adb_address(self, index):
+        return f"127.0.0.1:{17000 + index}"
+
+
+def test_factory_resolves_mumu_index():
+    from rok_assistant.core.handle_source import create_handle_source
+    src = create_handle_source(mumu_index=3, mumu_manager_path="C:/mumu/MuMuManager.exe",
+                               adb_path="adb", _locator=FakeLocator)
+    assert isinstance(src, AdbHandleSource)
+    assert src._address == "127.0.0.1:17003"
+    assert src._adb_path == "adb"
+
+
+def test_factory_manual_adb_still_works_without_mumu_fields():
+    from rok_assistant.core.handle_source import create_handle_source
+    src = create_handle_source(adb_address="127.0.0.1:16384", adb_path="adb")
+    assert isinstance(src, AdbHandleSource)

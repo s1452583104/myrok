@@ -48,13 +48,21 @@ class MockHandleSource:
         self._alive = alive
 
 
-def create_handle_source(adb_address: str = "", adb_path: str = "adb",
-                         window_title_pattern: str = ""):
-    """Build the best HandleSource for an account.
+def create_handle_source(mumu_index: int | None = None, mumu_manager_path: str = "",
+                         adb_address: str = "", adb_path: str = "adb",
+                         window_title_pattern: str = "", _locator=None):
+    """Build the best HandleSource for an instance.
 
-    adb_address set -> AdbHandleSource (recommended for MuMu: native-resolution
-    capture independent of window size/DPI). Otherwise fall back to Win32.
+    mumu_index set -> resolve adb address via MuMuManager, then AdbHandleSource.
+    adb_address set -> AdbHandleSource directly (manual mode / non-MuMu emulator).
+    Otherwise fall back to Win32 capture.
     """
+    if mumu_index is not None:
+        from ..infra.mumu import MumuLocator
+        locator = _locator(mumu_manager_path, adb_path) if _locator is not None \
+            else MumuLocator(mumu_manager_path, adb_path)
+        address = locator.resolve_adb_address(mumu_index)
+        return AdbHandleSource(adb_address=address, adb_path=adb_path)
     if adb_address:
         return AdbHandleSource(adb_address=adb_address, adb_path=adb_path)
     return Win32HandleSource(window_title_pattern=window_title_pattern)
