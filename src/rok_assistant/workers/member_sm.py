@@ -59,12 +59,9 @@ class MemberStateMachine(StateMachine):
         self._click("sort_nearest")
 
     def _filter_rally(self, ctx):
-        # nearest: pick first rally. specific: OCR name, check match.
-        if self._filter == "nearest":
-            ctx["rally_found"] = True
-        else:
-            # TODO: OCR rally card leader name, match against list
-            ctx["rally_found"] = True  # simplified
+        # fill_target_leaders 现在永远是显式列表；按名字 OCR 匹配是后续里程碑
+        # （ACCEPTANCE §3.7），当前简化为加入排序后的第一个集结。
+        ctx["rally_found"] = True
 
     def _click_join(self, ctx):
         self._click("join_btn")

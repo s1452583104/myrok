@@ -15,7 +15,7 @@ def test_member_receives_event_and_joins():
                                             "sort_nearest": rec, "join_btn": rec,
                                             "preset_1": rec, "march_btn": rec},
         march_preset=1, march_troop_types=["infantry"],
-        fill_target_leaders="nearest"
+        fill_target_leaders=[{"instance": "i1", "name": "Boss"}]
     )
 
     sm.on_rally_launched({"rally_id": "r1", "fortress_level": 8, "march_preset": 1})
