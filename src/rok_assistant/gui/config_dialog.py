@@ -104,6 +104,7 @@ class ConfigDialog(QDialog):
         elif key == "global":
             self._stack.setCurrentIndex(0)
         else:
+            self._refresh_yaml_preview()
             self._stack.setCurrentIndex(1)
 
     # ---------------- 小部件帮手 ----------------
@@ -120,6 +121,7 @@ class ConfigDialog(QDialog):
     def _spin(self, path: tuple, value, lo, hi, double=False) -> QWidget:
         w = QDoubleSpinBox() if double else QSpinBox()
         w.setRange(lo, hi)
+        original = value
         if double:
             w.setDecimals(2)
             w.setValue(float(value))
@@ -129,6 +131,15 @@ class ConfigDialog(QDialog):
             w.setValue(int(value))
             w.valueChanged.connect(
                 lambda v, p=path: self._data_set(p, int(v)))
+        # setValue 越界时会被钳制并触发 valueChanged，从而把越界值静默改写进
+        # _data；这里把磁盘上的原值写回，并用 tooltip 提示用户发生了调整。
+        if double:
+            clamped = round(float(w.value()), 2) != round(float(original), 2)
+        else:
+            clamped = w.value() != int(original)
+        if clamped:
+            self._data_set(path, original)
+            w.setToolTip(f"原值 {original} 超出范围，已调整为 {w.value()}")
         return self._bind(path, w)
 
     def _line(self, path: tuple, value) -> QLineEdit:
@@ -221,9 +232,13 @@ class ConfigDialog(QDialog):
         except ValidationError as e:
             self._show_errors(e)
             return False
-        self._path.write_text(
-            yaml.safe_dump(self._data, allow_unicode=True, sort_keys=False),
-            encoding="utf-8")
+        try:
+            self._path.write_text(
+                yaml.safe_dump(self._data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8")
+        except OSError as e:
+            QMessageBox.critical(self, "保存失败", f"无法写入配置文件：{e}")
+            return False
         self._refresh_yaml_preview()
         QMessageBox.information(self, "配置", "保存成功")
         return True
@@ -231,7 +246,7 @@ class ConfigDialog(QDialog):
     def _show_errors(self, e: ValidationError):
         for path in self._widgets:
             self._widgets[path].setStyleSheet("")
-        lines = []
+        lines = ["以下字段校验未通过（详细原因为英文技术信息，可截图反馈给开发者）："]
         for err in e.errors():
             loc = tuple(err["loc"])
             lines.append(" / ".join(str(x) for x in loc) + f": {err['msg']}")

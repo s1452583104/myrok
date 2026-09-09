@@ -72,6 +72,54 @@ def test_save_rejects_invalid_and_keeps_file(tmp_path, qapp, monkeypatch):
         {"instance": "inst0", "name": "Hero"}]
 
 
+def test_save_failure_keeps_data_and_returns_false(tmp_path, qapp, monkeypatch):
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical",
+                        lambda *a, **k: errors.append(k.get("text") or (a[2] if len(a) > 2 else "")))
+    cfg = _write_config(tmp_path)
+    dlg = ConfigDialog(cfg)
+
+    def _raise(*a, **k):
+        raise PermissionError("file locked by editor")
+
+    monkeypatch.setattr(Path, "write_text", _raise)
+    assert dlg.save() is False
+    assert any("无法写入" in e for e in errors)
+
+
+def test_clamped_spin_preserves_original_value(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["app"].setdefault("anti_detection", {})["click_offset_px"] = 100
+    dlg = ConfigDialog(_write_config(tmp_path, data))
+    assert dlg._data["app"]["anti_detection"]["click_offset_px"] == 100
+    w = dlg._widgets[("app", "anti_detection", "click_offset_px")]
+    assert "超出范围" in w.toolTip()
+
+
+def test_tree_navigation_switches_stack(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))
+    assert dlg._stack.currentIndex() == 2
+    dlg._data["app"]["adb_path"] = "C:/x/adb.exe"
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))
+    assert dlg._stack.currentIndex() == 1
+    assert "C:/x/adb.exe" in dlg._yaml_view.toPlainText()
+
+
+def test_on_save_accepts_only_when_valid(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._on_save()
+    assert dlg.result() == 1
+    dlg2 = ConfigDialog(_write_config(tmp_path))
+    dlg2._data["instances"][0]["characters"][1]["fill_target_leaders"] = []
+    dlg2._on_save()
+    assert dlg2.result() == 0
+
+
 def test_yaml_preview_reflects_data(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
