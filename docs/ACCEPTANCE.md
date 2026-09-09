@@ -7,7 +7,7 @@
 
 | 项 | 状态 | 备注 |
 |---|---|---|
-| 自动化测试 | ✅ 91/91 通过 | `pytest tests/` |
+| 自动化测试 | ✅ 142/142 通过 | `pytest tests/` |
 | 采集路线 | ✅ **改为 ADB** | `AdbHandleSource`：截图/点击都走 MuMu adb（127.0.0.1:16384），原生 1920×1080，与窗口/DPI 无关 |
 | 真实模板 | 🟡 20/约26 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
 | 用户 config | ❌ 待写 | 阵容待用户确认；schema 已升级为 instances（GUI「⚙ 配置」可直接编辑） |
@@ -253,7 +253,7 @@ cd C:\coding\workspace\git\myrok
 python -m pytest tests/ -v
 ```
 
-期望 **81 passed**。
+期望**全部测试通过**（以 pytest 实际输出为准，勿依赖本文档写的数字）。
 
 ---
 
