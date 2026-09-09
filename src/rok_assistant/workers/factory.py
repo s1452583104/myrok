@@ -16,6 +16,8 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
         return MemberStateMachine(handle_source, recognizers, character.march_preset,
                                   character.march_troop_types,
                                   character.fill_target_leaders)
-    return EitherStateMachine(handle_source, recognizers, character.target_level,
-                              character.march_preset, character.march_troop_types,
-                              character.fill_target_leaders, event_bus)
+    if character.role == RoleEnum.EITHER:
+        return EitherStateMachine(handle_source, recognizers, character.target_level,
+                                  character.march_preset, character.march_troop_types,
+                                  character.fill_target_leaders, event_bus)
+    raise ValueError(f"Unknown role: {character.role}")

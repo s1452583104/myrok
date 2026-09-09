@@ -8,8 +8,15 @@ class EitherStateMachine:
 
     单次上场流程：搜寨 -> 开集结 -> 不停留，立即转成员流程去填指定车头的
     集结。自己的集结由成员填，满员或倒计时结束自动发车。实现上复用
-    Leader/Member 两个状态机，按阶段委托 step()：leader 到 WAIT_MEMBERS
-    即置 departed 直接收尾，随后把 launch 事件交给 member 状态机。
+    Leader/Member 两个状态机，按阶段委托 step()。
+
+    调度器循环契约（loop contract for the future scheduler）：
+    (a) step(context=None) 在 context 为 None 时复用上次存储的 context，
+        语义与 StateMachine.step 一致；
+    (b) is_terminal() 在 member 阶段到达 END 之前一直为 False，
+        调度器需持续调用 step()；
+    (c) departed 标志由 LeaderStateMachine 拥有（_wait_members 置位、
+        WAIT_MEMBERS -> END 的 guard 消费），调用方不得预置该键。
     """
 
     def __init__(self, handle_source, recognizers: dict, target_level: int,
@@ -30,13 +37,12 @@ class EitherStateMachine:
         ctx = self._ctx
         if self._phase == "leader":
             self._leader.step(ctx)
-            if self._leader.current == "WAIT_MEMBERS":
-                ctx.setdefault("departed", True)  # 不等待，即刻交棒
             self.current = f"LEADER:{self._leader.current}"
             if self._leader.is_terminal():
+                if not self._leader.last_rally_event:
+                    raise RuntimeError("leader finished without launching a rally")
                 self._phase = "member"
-                if self._leader.last_rally_event:
-                    self._member.on_rally_launched(self._leader.last_rally_event)
+                self._member.on_rally_launched(self._leader.last_rally_event)
         else:
             self._member.step(ctx)
             self.current = f"MEMBER:{self._member.current}"

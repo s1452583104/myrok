@@ -9,7 +9,7 @@ class MemberStateMachine(StateMachine):
         self._rec = recognizers
         self._march_preset = march_preset
         self._march_troop_types = march_troop_types
-        self._filter = fill_target_leaders
+        self._filter = fill_target_leaders  # kept for ACCEPTANCE §3.7 OCR name matching; unused by _filter_rally today
         self._switcher = switcher
         self._pending_event = None
         super().__init__(initial="IDLE")

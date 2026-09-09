@@ -46,8 +46,28 @@ def test_delegates_to_leader_then_member():
     assert sm._member._pending_event["rally_id"].startswith("rally_")
 
 
-def test_not_terminal_while_member_phase_running():
+def test_not_terminal_during_leader_phase():
     sm = _make_sm()
     sm.step()  # IDLE -> SEARCH_FORTRESS
     assert not sm.is_terminal()
     assert sm.current.startswith("LEADER:")
+
+
+def test_step_reuses_stored_context():
+    sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
+    sm.step({"marker": "x"})  # context stored; subsequent bare step() must reuse it
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+
+
+def test_empty_fill_targets_still_reaches_member_end():
+    sm = _make_sm()  # fill_targets defaults to []
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
