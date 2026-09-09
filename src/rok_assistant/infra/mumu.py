@@ -17,7 +17,7 @@ def _extract_port(obj) -> int | None:
     if isinstance(obj, dict):
         for key in ("adb_port", "port"):
             v = obj.get(key)
-            if isinstance(v, int):
+            if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 65535:
                 return v
         for v in obj.values():
             found = _extract_port(v)
@@ -61,7 +61,10 @@ class MumuLocator:
         return subprocess.run(args, capture_output=True, timeout=10)
 
     def resolve_adb_address(self, index: int) -> str:
-        proc = self._run([self._manager, "info", "-v", str(index)])
+        try:
+            proc = self._run([self._manager, "info", "-v", str(index)])
+        except Exception as e:
+            raise MumuLocatorError(f"无法运行 MuMuManager（请检查安装路径）: {e}") from e
         if proc.returncode != 0:
             msg = proc.stderr.decode(errors="replace").strip() or f"returncode={proc.returncode}"
             raise MumuLocatorError(f"MuMuManager 查询实例 {index} 失败: {msg}")
@@ -69,10 +72,10 @@ class MumuLocator:
             data = json.loads(proc.stdout.decode(errors="replace"))
         except json.JSONDecodeError:
             raise MumuLocatorError(
-                f"MuMuManager 输出无法解析为 JSON: {proc.stdout[:200]!r}")
+                f"MuMuManager 查询实例 {index} 输出无法解析为 JSON: {proc.stdout[:200]!r}")
         port = _extract_port(data)
         if port is None:
-            raise MumuLocatorError(f"MuMuManager 输出中未找到 adb 端口: {data}")
+            raise MumuLocatorError(f"MuMuManager 输出中未找到 adb 端口: {str(data)[:300]}")
         host = _extract_host(data) or "127.0.0.1"
         return f"{host}:{port}"
 

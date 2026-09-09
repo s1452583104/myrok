@@ -1,4 +1,5 @@
 import json
+import subprocess
 import pytest
 from rok_assistant.infra.mumu import MumuLocator, MumuLocatorError
 
@@ -71,6 +72,53 @@ def test_resolve_missing_port_raises():
     loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(proc))
     with pytest.raises(MumuLocatorError, match="端口"):
         loc.resolve_adb_address(0)
+
+
+def test_resolve_rejects_string_port():
+    proc = FakeProc(stdout=_json_bytes({"adb_port": "16384"}))
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(proc))
+    with pytest.raises(MumuLocatorError, match="端口"):
+        loc.resolve_adb_address(0)
+
+
+def test_resolve_rejects_bool_port():
+    proc = FakeProc(stdout=_json_bytes({"adb_port": True}))
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(proc))
+    with pytest.raises(MumuLocatorError, match="端口"):
+        loc.resolve_adb_address(0)
+
+
+def test_resolve_rejects_out_of_range_port():
+    proc = FakeProc(stdout=_json_bytes({"adb_port": 99999}))
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(proc))
+    with pytest.raises(MumuLocatorError, match="端口"):
+        loc.resolve_adb_address(0)
+
+
+def test_resolve_wraps_subprocess_failure():
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(
+        error=subprocess.TimeoutExpired(cmd="x", timeout=10)))
+    with pytest.raises(MumuLocatorError, match="无法运行"):
+        loc.resolve_adb_address(0)
+
+
+def test_resolve_nonzero_returncode_falls_back_to_returncode():
+    proc = FakeProc(stderr=b"", returncode=1)
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(proc))
+    with pytest.raises(MumuLocatorError, match="returncode="):
+        loc.resolve_adb_address(0)
+
+
+def test_resolve_uses_nested_adb_host_ip():
+    out = _json_bytes({"index": 0, "adb": {"adb_host_ip": "10.0.0.2", "adb_port": 16384}})
+    loc = MumuLocator("MuMuManager.exe", _runner=FakeRunner(FakeProc(stdout=out)))
+    assert loc.resolve_adb_address(0) == "10.0.0.2:16384"
+
+
+def test_is_running_false_on_non_json_payload():
+    proc = FakeProc(stdout=b"not json at all")
+    loc = MumuLocator("m", _runner=FakeRunner(proc))
+    assert loc.is_running(0) is False
 
 
 def test_is_running_true_and_false():
