@@ -22,8 +22,11 @@ class EitherStateMachine:
     def __init__(self, handle_source, recognizers: dict, target_level: int,
                  march_preset: int, march_troop_types: list,
                  fill_target_leaders, event_bus=None):
+        # either 角色不等自己的集结（用户要求）：开完立即转成员流程填
+        # 他人集结，故 wait_members_seconds=0.0（默认 330s 留给纯车头）
         self._leader = LeaderStateMachine(handle_source, recognizers, target_level,
-                                          march_preset, march_troop_types, event_bus)
+                                          march_preset, march_troop_types, event_bus,
+                                          wait_members_seconds=0.0)
         # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数
         self._member = MemberStateMachine(handle_source, recognizers,
                                           fill_target_leaders)
