@@ -31,6 +31,9 @@ class FakeController(QObject):
     def load_config(self) -> bool:
         return self.config_loaded
 
+    def reload_config(self) -> None:
+        pass
+
     def characters(self):
         return list(self._chars)
 

@@ -44,6 +44,15 @@ class GuiController(QObject):
             self.error_occurred.emit(f"配置加载失败：{e}")
             return False
 
+    def reload_config(self) -> None:
+        """强制从磁盘重读 config.yaml（GUI 配置保存后刷新用）。
+
+        与 load_config 的静默信号路径不同：校验/读盘失败直接抛出，
+        由调用方决定如何呈现 —— 避免把陈旧的内存配置当新配置用。
+        """
+        self._config = RootConfig.model_validate(
+            yaml.safe_load(self.config_path.read_text(encoding="utf-8")))
+
     def characters(self) -> list[dict]:
         if self._config is None:
             self.load_config()

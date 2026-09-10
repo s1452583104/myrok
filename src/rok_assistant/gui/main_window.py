@@ -9,6 +9,9 @@ from PyQt6.QtCore import Qt, QTimer
 
 from .character_card import CharacterCard
 from .controller import GuiController
+from ..infra.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -82,12 +85,26 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("未加载到角色：请检查 config.yaml 后点击「刷新配置」")
 
     def _on_refresh_config(self):
+        # 必须强制重读磁盘：controller.characters() 只在未加载时读盘，
+        # 否则配置文件改了界面也不会变
+        if not self._reload_controller_config():
+            return
         self._rebuild_cards()
+
+    def _reload_controller_config(self) -> bool:
+        try:
+            self._controller.reload_config()
+            return True
+        except Exception as e:
+            logger.exception("重读配置失败")
+            QMessageBox.critical(self, "刷新配置", f"重读配置失败：{e}")
+            return False
 
     # ---------------- 运行控制 ----------------
     def _on_start(self):
         if not self._controller.config_loaded and not self._controller.load_config():
             return
+        self._rebuild_cards()   # 懒加载后建卡，状态才有落点
         self._controller.start()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -130,9 +147,10 @@ class MainWindow(QMainWindow):
             return
         from .config_dialog import ConfigDialog
         dlg = ConfigDialog(path, self)
-        dlg.exec()
-        # 配置对话框保存后可能改动了阵容，回来刷新卡片
-        self._rebuild_cards()
+        if dlg.exec():   # accept 只在保存成功后发生
+            # 配置对话框保存后可能改动了阵容，回来强制重读并刷新卡片
+            if self._reload_controller_config():
+                self._rebuild_cards()
 
 
 def main():

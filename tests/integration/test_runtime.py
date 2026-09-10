@@ -1,9 +1,11 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import threading
 import time
 from contextlib import contextmanager
 
 import numpy as np
+import pytest
 from unittest.mock import patch
 
 from rok_assistant.coordination.runtime import RuntimeCoordinator
@@ -94,3 +96,118 @@ def test_coordinator_snapshot_returns_jpeg_bytes(tmp_path):
         data = coord.snapshot("boss")
         assert data is not None
         assert data[:2] == b"\xff\xd8"
+
+
+# ---------------- 用不跑线程的 FakeRunner 精确测路由/生命周期 ----------------
+
+class FakeSM:
+    def __init__(self):
+        self.current = "IDLE"
+        self.events: list[dict] = []
+
+    def on_rally_launched(self, event: dict) -> None:
+        self.events.append(event)
+
+
+class FakeRunner:
+    """不启动线程的 WorkerRunner 替身；类级列表记录创建顺序。"""
+    instances: list["FakeRunner"] = []
+
+    def __init__(self, **kw):
+        self.kw = kw
+        self.sm = FakeSM()
+        self.started = False
+        self.stopped = False
+        # 已结束的线程：is_alive() 为 False，stop() 视为正常终止
+        self._thread = threading.Thread(target=lambda: None, daemon=True)
+        self._thread.start()
+        FakeRunner.instances.append(self)
+
+    @property
+    def char_id(self) -> str:
+        return self.kw["char_id"]
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self.stopped = True
+
+
+class StuckRunner(FakeRunner):
+    """stop() 拦不下来的 worker：线程一直活着，用于验证 stop 不丢引用。"""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._thread = threading.Thread(target=lambda: time.sleep(30), daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self.stopped = True   # 线程假装没听见
+
+
+@contextmanager
+def _fake_runner_coordinator(tmp_path, runner_cls=FakeRunner):
+    cfg = _write_config(tmp_path)
+    (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
+    bus = EventBus()
+    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    FakeRunner.instances = []
+    with patch("rok_assistant.coordination.runtime.create_handle_source",
+               return_value=fake_handle), \
+         patch("rok_assistant.coordination.runtime.WorkerRunner", runner_cls):
+        coord = RuntimeCoordinator(cfg, event_bus=bus, template_dir=tmp_path)
+        coord.start()
+        yield coord
+
+
+def test_router_gate_ignores_event_when_not_waiting(tmp_path):
+    with _fake_runner_coordinator(tmp_path) as coord:
+        member = coord.runners["inst1:worker"]
+        member.sm.current = "FILTER"   # 已在跑的非等待态
+        coord._bus.publish("rally_launched", {"rally_id": "r1"})
+        assert member.sm.events == []
+        member.sm.current = "WAIT_LAUNCH_EVENT"
+        coord._bus.publish("rally_launched", {"rally_id": "r2"})
+        assert member.sm.events == [{"rally_id": "r2"}]
+
+
+def test_stop_unsubscribes_routes_and_restart_resubscribes_once(tmp_path):
+    with _fake_runner_coordinator(tmp_path) as coord:
+        bus = coord._bus
+        coord.stop()
+        bus.publish("rally_launched", {"rally_id": "r1"})
+        for runner in FakeRunner.instances:
+            assert runner.sm.events == []   # 退订后事件不再送达任何 SM
+        # 重新 start 恰好重订阅一次（漏退订会变成 2 个处理器）
+        coord.start()
+        assert len(bus._handlers["rally_launched"]) == 1
+        coord.stop()
+
+
+def test_partial_start_failure_rolls_back(tmp_path):
+    cfg = _write_config(tmp_path)
+    (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
+    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    FakeRunner.instances = []
+    with patch("rok_assistant.coordination.runtime.create_handle_source",
+               side_effect=[fake_handle, RuntimeError("inst1 连不上")]), \
+         patch("rok_assistant.coordination.runtime.WorkerRunner", FakeRunner):
+        coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
+        with pytest.raises(RuntimeError):
+            coord.start()
+        assert coord._running is False
+        assert coord.runners == {} and coord._routes == {}
+        # 第 1 个实例的 runner 已被回滚停掉，不会成为孤儿
+        assert len(FakeRunner.instances) == 1
+        assert FakeRunner.instances[0].started
+        assert FakeRunner.instances[0].stopped
+
+
+def test_stop_keeps_reference_to_stuck_runner(tmp_path):
+    with _fake_runner_coordinator(tmp_path, runner_cls=StuckRunner) as coord:
+        coord.stop()
+        # 超时未停的 runner 必须保留引用，不能被 clear 静默丢弃
+        assert set(coord.runners) == {"inst0:boss", "inst1:worker"}
+        assert coord._running is False
+
