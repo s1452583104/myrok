@@ -28,3 +28,15 @@ def test_unsubscribe():
 def test_publish_with_no_subscribers_is_noop():
     bus = EventBus()
     bus.publish("nothing", {})  # should not raise
+
+def test_raising_subscriber_does_not_break_others():
+    bus = EventBus()
+    received = []
+
+    def boom(_payload):
+        raise RuntimeError("subscriber exploded")
+
+    bus.subscribe("e", boom)
+    bus.subscribe("e", lambda p: received.append(p))
+    bus.publish("e", {"x": 1})  # 抛异常的订阅者不能让 publish 冒出异常
+    assert received == [{"x": 1}]
