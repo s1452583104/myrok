@@ -109,12 +109,17 @@ def test_leader_launches_member_fills_and_runner_rebuilds():
         # 即证明 sm 被换成了新实例）
         leader_states = [s for cid, s in statuses if cid == "boss"]
         assert "END" in leader_states
-        assert "cooldown" in leader_states
+        # 超时兜底：给断言一个可读的信息，而不是让 index() 抛 ValueError
+        assert "cooldown" in leader_states, f"10s 内 leader 未进入冷却: {leader_states}"
         cooldown_at = leader_states.index("cooldown")
+        assert cooldown_at + 1 < len(leader_states), \
+            f"leader 状态序列在 cooldown 处截断: {leader_states}"
         assert leader_states[cooldown_at + 1] == "IDLE"
         assert leader.reached_terminal()
         assert len(leader_sms) >= 2          # 至少重建过一次
-        assert leader.sm is leader_sms[-1]   # 当前 SM 就是最新重建的那个
+        # 当前 SM 已不是最初那个实例（不用 is leader_sms[-1]：轮询间隙若恰好
+        # 又一轮重建，[-1] 会抖动；is not [0] 是无竞态的重建证明）
+        assert leader.sm is not leader_sms[0]
         assert leader_sms[0].last_rally_event is not None   # 首轮真的发过车
 
         # 全程真的发生了点击（mock 识别器全命中，两个 SM 共用同一 handle）
