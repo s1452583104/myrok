@@ -36,7 +36,7 @@ def test_runner_drives_member_to_end_and_publishes_status():
     r.sm.on_rally_launched({"rally_id": "r1"})
     r.start()
     deadline = time.time() + 5
-    while time.time() < deadline and not r.is_terminal_once():
+    while time.time() < deadline and not r.reached_terminal():
         time.sleep(0.02)
     r.stop()
     states = [s["state"] for s in statuses]
@@ -80,3 +80,21 @@ def test_runner_survives_sm_exception_and_saves_screenshot(tmp_path):
     shots = list(tmp_path.glob("failure_*.png"))
     assert shots, "异常时应保存失败截图"
     assert r.status == "error"
+
+
+def test_runner_start_twice_keeps_single_thread():
+    import threading
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(), handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.05,
+                     error_backoff=0.05)
+    before = threading.active_count()
+    r.start()
+    r.start()  # 第二次 start 应被忽略
+    time.sleep(0.1)
+    after = threading.active_count()
+    r.stop()
+    assert after - before == 1  # 只有一个工作线程
+    r._thread.join(timeout=2.0)
+    assert not r._thread.is_alive()
