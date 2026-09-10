@@ -27,6 +27,12 @@ class StateMachine:
     def _setup(self) -> None:
         raise NotImplementedError
 
+    @property
+    def fail_reason(self) -> str | None:
+        """本轮失败原因（give-up/exhausted 出口写入 ctx['fail_reason']）；
+        未失败为 None。WorkerRunner 在 status_update payload 中带出。"""
+        return self._ctx.get("fail_reason")
+
     def add_transition(self, from_state: str, to_state: str,
                        action: Union[str, Callable], guard: Callable | None = None) -> None:
         self._transitions.append(Transition(from_state, to_state, action, guard))

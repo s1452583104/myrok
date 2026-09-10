@@ -12,7 +12,9 @@ class WorkerRunner:
     """每角色一个线程：循环 step 状态机、发布状态、异常截图、终态冷却重建。
 
     状态经 EventBus 的 "status_update" 发布（仅变化时）：
-    payload = {"instance_id", "char_id", "char_name", "state", "ts"}。
+    payload = {"instance_id", "char_id", "char_name", "state", "ts",
+    "fail_reason"}。fail_reason 取自 sm.fail_reason（give-up/exhausted
+    出口写入，未失败为 None）——现有消费方只读各自关心的键，新增键向后兼容。
     state 值域约定：小写 = Runner 自身生命周期状态（"idle" 哨兵、
     "paused"/"cooldown"/"error"）；大写 = SM 当前状态（如 "IDLE"/"END"），
     如实转发。首轮发布的大写 "IDLE" 表示工作线程已启动且 SM 就绪。
@@ -113,6 +115,7 @@ class WorkerRunner:
             self._bus.publish("status_update", {
                 "instance_id": self.instance_id, "char_id": self.char_id,
                 "char_name": self.char_name, "state": state,
+                "fail_reason": getattr(self.sm, "fail_reason", None),
                 "ts": datetime.now().isoformat(timespec="seconds"),
             })
 

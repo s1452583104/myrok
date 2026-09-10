@@ -7,8 +7,9 @@ class MemberStateMachine(StateMachine):
     只在该角色担任集结车头时才有意义（见 LeaderStateMachine）。
 
     v1 已知限制（接受）：动作的点击失败不回读（盲进）。失败的可观测信号是
-    ctx['failed']/ctx['fail_reason']，由 FILTER 耗尽出口 _exhausted 设置；
-    调度器应在 is_terminal() 后检查该标记。
+    ctx['failed']/ctx['fail_reason']，由 FILTER 耗尽出口 _exhausted 设置，
+    经 WorkerRunner 的 status_update payload 带出（sm.fail_reason）；终态
+    冷却后 runner 重建 SM，自动重试新一轮。
     """
 
     def __init__(self, handle_source, recognizers: dict, fill_target_leaders):
@@ -76,7 +77,9 @@ class MemberStateMachine(StateMachine):
         ctx["rally_found"] = ctx.get("war_attempts", 0) <= 10
 
     def _exhausted(self, ctx):
-        # 重试耗尽：置失败标记供调度器检查，避免 FILTER->OPEN_WAR 无限循环
+        # 重试耗尽：置失败标记，避免 FILTER->OPEN_WAR 无限循环。fail_reason
+        # 由 WorkerRunner 在终态的 status_update payload 中带出；冷却重建
+        # 后的 SM 自动重试新一轮。
         ctx["failed"] = True
         ctx["fail_reason"] = "no_rally_found"
 

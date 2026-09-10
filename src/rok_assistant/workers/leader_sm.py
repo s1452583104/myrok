@@ -122,9 +122,10 @@ class LeaderStateMachine(StateMachine):
         self._handle.click(*_EMPTY_GROUND)
 
     def _give_up(self, ctx):
-        # 重试耗尽：结束本轮，置失败标记。ctx["failed"]/ctx["fail_reason"] 是
-        # 调度器/WorkerRunner 的轮级信号（与 member_sm._exhausted 约定一致）；
-        # either_sm.step() 则直接以 last_rally_event is None 判定开集结失败。
+        # 重试耗尽：结束本轮，置失败标记。fail_reason 由 WorkerRunner 在
+        # 终态发布的 status_update payload 中带出（供 GUI/日志观测）；
+        # 冷却后 runner 重建 SM 重试新一轮。either_sm 以 last_rally_event
+        # is None 判定开集结失败，呈现为终态走同一条重建重试路径。
         # fail_reason 按**真正耗尽**的那个上限归因：混有锁定的轮次仍可能是
         # 无结果耗尽（如 1 次锁定 + 3 次无结果）
         ctx["failed"] = True

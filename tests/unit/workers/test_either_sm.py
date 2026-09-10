@@ -27,6 +27,9 @@ def _make_sm(fill_targets=None, bus=None):
                             march_troop_types=["infantry"],
                             fill_target_leaders=fill_targets or [],
                             event_bus=bus)
+    # red_rally 独立 mock：give-up 测试只关掉详情弹窗的命中，
+    # 不影响共享 rec 的其他识别器
+    recs["red_rally"] = _mock_rec()
     return sm
 
 
@@ -73,3 +76,57 @@ def test_empty_fill_targets_still_reaches_member_end():
             break
     assert sm.is_terminal()
     assert sm.current == "MEMBER:END"
+
+
+class _FakeTime:
+    """Deterministic clock（同 test_leader_sm）：state_machine 的
+    _wait_for/_click_retry 在超时重试时会 sleep，替换其 time 模块让等待
+    瞬时推进，避免 give-up 路径在测试里烧真实秒数。"""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def test_leader_give_up_becomes_terminal_with_fail_reason(monkeypatch):
+    # 搜寨永无结果：leader 走 3 次重试后 give_up —— either SM 必须呈现为
+    # 终态（供 runner 冷却重建重试），而不是抛 RuntimeError 卡死在错误循环
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
+    sm._leader._rec["red_rally"].recognize.return_value.matched = False
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm.current == "LEADER:END"
+    assert sm._leader.last_rally_event is None
+    assert sm.fail_reason == "no_fortress_found"
+    # 停在 leader 终态，绝不能带着 None 事件进入 member 阶段
+    assert not any(h.startswith("MEMBER:") for h in sm.history)
+
+
+def test_member_give_up_becomes_terminal_with_fail_reason():
+    # member FILTER 耗尽（与 test_member_sm 相同的白盒预置）：either SM
+    # 同样呈现为终态，runner 重建后重试 —— 与纯 member 语义一致
+    sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
+    sm._ctx["war_attempts"] = 11
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
+    assert sm.fail_reason == "no_rally_found"
+
+
+def test_last_image_delegates_to_active_phase():
+    sm = _make_sm()
+    assert sm.last_image is None  # 尚未运行
+    sm.step()  # IDLE -> NORMALIZE（leader 阶段 _find 捕获过帧）
+    assert sm.last_image is not None

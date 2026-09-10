@@ -164,7 +164,7 @@ templates/
 
 ## §3 跑 8 项手动验收
 
-运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ Start，8 项验收现在可以真跑（每实例每角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
+运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ Start，8 项验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
 
 ```bash
 python tools/verify.py
