@@ -36,7 +36,6 @@ def _fake_rec(matched=True):
     rec = MagicMock()
     rec.recognize.return_value.matched = matched
     rec.recognize.return_value.bbox = MagicMock(center=lambda: (50, 50))
-    rec.recognize.return_value.confidence = 0.95
     return rec
 
 
@@ -57,3 +56,40 @@ def test_base_helpers_click_retry_and_wait_for():
     assert sm._click_retry("x", attempts=1, interval=0.0) is True
     assert handle.clicks == [(50, 50)]
     assert sm._find_retry("nope", attempts=2, interval=0.0) is None
+
+
+def test_wait_for_timeout_bails_false():
+    import numpy as np
+    from rok_assistant.core.handle_source import MockHandleSource
+    from rok_assistant.workers.leader_sm import LeaderStateMachine
+
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, 7, 1, ["cavalry"])
+    assert sm._wait_for("x", timeout=0.0, interval=0.0) is False
+
+
+def test_wait_click_reuses_found_result():
+    import numpy as np
+    from unittest.mock import MagicMock
+    from rok_assistant.core.handle_source import MockHandleSource
+    from rok_assistant.workers.leader_sm import LeaderStateMachine
+
+    screenshot = np.zeros((100, 100, 3), dtype=np.uint8)
+    # always-miss recognizer: _wait_click gives up, no click
+    handle = MockHandleSource(screenshot=screenshot)
+    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, 7, 1, ["cavalry"])
+    assert sm._wait_click("x", timeout=0.0, interval=0.0) is False
+    assert handle.clicks == []
+
+    # hit on the 2nd capture; a 3rd recognize (re-find in _click) would raise
+    # StopIteration since side_effect is exhausted - proves the found result
+    # is clicked directly instead of re-finding.
+    rec = _fake_rec()
+    rec.recognize.side_effect = [
+        MagicMock(matched=False),
+        MagicMock(matched=True, bbox=MagicMock(center=lambda: (50, 50))),
+    ]
+    handle = MockHandleSource(screenshot=screenshot)
+    sm = LeaderStateMachine(handle, {"x": rec}, 7, 1, ["cavalry"])
+    assert sm._wait_click("x", timeout=10.0, interval=0.0) is True
+    assert handle.clicks == [(50, 50)]
