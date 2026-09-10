@@ -304,3 +304,12 @@ templates:
   - 110
   - 1600
   - 220
+
+- id: map_btn
+  file: map_btn.png
+  threshold: 0.9
+  roi:
+  - 0
+  - 900
+  - 250
+  - 1080
