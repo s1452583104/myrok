@@ -63,7 +63,7 @@ def test_build_recognizers_returns_template_matches(image_manifest):
     from rok_assistant.core.recognizers.template_match import TemplateMatch
     reg = TemplateRegistry.load(image_manifest)
     recs = reg.build_recognizers()
-    assert set(recs) >= {"search", "search_roi"}
+    assert set(recs) == {"search", "search_roi"}
     assert all(isinstance(r, TemplateMatch) for r in recs.values())
     img = cv2.imread(str(FIX / "screenshot_with_template.png"))
     # full-screen ROI -> roi=None in the recognizer
@@ -79,4 +79,19 @@ def test_build_recognizers_missing_image_raises(manifest_with_png):
     # btn_a.png is a stub of empty bytes -> cv2.imread returns None
     reg = TemplateRegistry.load(manifest_with_png)
     with pytest.raises(FileNotFoundError):
+        reg.build_recognizers()
+
+def test_build_recognizers_rejects_yolo(tmp_path):
+    (tmp_path / "card.onnx").write_bytes(b"")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "templates:\n"
+        "  - id: card\n"
+        "    file: card.onnx\n"
+        "    type: yolo_detect\n"
+        "    classes: [0]\n"
+        "    threshold: 0.7\n"
+    )
+    reg = TemplateRegistry.load(manifest)
+    with pytest.raises(ValueError, match="unsupported template type for card: yolo_detect"):
         reg.build_recognizers()

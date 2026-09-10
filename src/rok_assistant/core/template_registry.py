@@ -29,16 +29,24 @@ class TemplateRegistry:
     def get(self, k: str) -> TemplateSpec:
         return self._t[k]
 
-    def build_recognizers(self) -> dict:
-        """Build {template_id: TemplateMatch} for all loaded templates."""
+    def build_recognizers(self) -> dict[str, "TemplateMatch"]:
+        """Build {template_id: TemplateMatch} for all loaded templates.
+
+        v1 runtime only builds template_match recognizers; YoloDetect
+        wiring is future work, so yolo specs are rejected with ValueError.
+        """
+        # local imports: deliberate, keeps module import light (cv2/recognizers
+        # are only needed when recognizers are actually built)
         import cv2
         from .recognizers.template_match import TemplateMatch
         from .recognizer import BBox
         out = {}
         for tid, spec in self._t.items():
+            if spec.type != "template_match":
+                raise ValueError(f"unsupported template type for {tid}: {spec.type}")
             img = cv2.imread(str(spec.file))
             if img is None:
-                raise FileNotFoundError(f"template image missing: {spec.file}")
+                raise FileNotFoundError(f"cannot load template image: {spec.file}")
             roi = None if spec.roi.is_full else BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2)
             out[tid] = TemplateMatch(img, threshold=spec.threshold, roi=roi, name=tid)
         return out
