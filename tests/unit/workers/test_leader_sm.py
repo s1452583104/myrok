@@ -8,7 +8,11 @@ from rok_assistant.core.handle_source import MockHandleSource
 class _FakeTime:
     """Deterministic clock. state_machine helpers sleep on timeout retries;
     replacing its `time` module makes _wait_for/_click_retry advance instantly
-    instead of burning real seconds in tests."""
+    instead of burning real seconds in tests.
+
+    Patches `state_machine.time` ONLY. `leader_sm.time` is intentionally NOT
+    patched: with wait_members_seconds=0.0 the _wait_members sleep loop is
+    skipped entirely, and _launch's time.time() only stamps rally_id."""
 
     def __init__(self):
         self.t = 1000.0
@@ -22,9 +26,7 @@ class _FakeTime:
 
 @pytest.fixture(autouse=True)
 def _fast_time(monkeypatch):
-    fake = _FakeTime()
-    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
-    return fake
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
 
 
 def _mock_rec(matched=True):
@@ -63,10 +65,11 @@ def test_happy_path_reaches_end_and_publishes():
     assert len(events) == 1
     assert events[0]["fortress_level"] == 7
     assert sm.last_rally_event["march_preset"] == 1
-    # real flow must have clicked red_rally (the fixed bug: old code never did);
-    # every mock click lands at (50,50): search, 12x minus, 6x plus, search_btn,
-    # red_rally, preset_1, troop_cavalry, march_btn => >= 9 clicks
-    assert handle.clicks.count((50, 50)) >= 9
+    # real flow must have clicked red_rally (the fixed bug: old code never did)
+    # exact click count, all mocks center (50,50): search_icon 1 +
+    # level_minus 12 + level_plus 6 + search_btn 1 + red_rally 1 +
+    # preset_1 1 + troop_cavalry 1 + march_btn 1 = 24
+    assert handle.clicks.count((50, 50)) == 24
 
 
 def test_select_level_resets_with_minus_then_plus():
@@ -88,7 +91,9 @@ def test_no_result_toast_retries_then_ends():
         sm.step()
         steps += 1
     assert sm.is_terminal()
-    assert sm.history.count("CHECK_RESULT") >= 3  # retried
+    # cap math: no_result_count 1,2,3 then the retry guard (count < 3) fails
+    # and CHECK_RESULT takes the END edge — exactly 3 entries, never 4
+    assert sm.history.count("CHECK_RESULT") == 3
     assert sm._ctx.get("failed") is True  # give_up sets the member_sm convention
     assert sm._ctx.get("fail_reason") == "no_fortress_found"
 

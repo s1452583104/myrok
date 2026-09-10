@@ -50,7 +50,7 @@ def test_delegates_to_leader_then_member():
 
 def test_not_terminal_during_leader_phase():
     sm = _make_sm()
-    sm.step()  # IDLE -> SEARCH_FORTRESS
+    sm.step()  # IDLE -> NORMALIZE
     assert not sm.is_terminal()
     assert sm.current.startswith("LEADER:")
 

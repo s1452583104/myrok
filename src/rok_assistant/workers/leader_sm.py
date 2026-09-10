@@ -18,6 +18,9 @@ class LeaderStateMachine(StateMachine):
     无结果 = toast_no_fortress（或干脆没有任何弹窗，慢加载与之不可区分）。
     march_btn 的 00:00:XX 是行军时长估计而非倒计时，点击即发（无自动发车风险），
     但必须在发布 rally_launched 前确认点击成功——点击失败不得唤醒成员。
+
+    v1 已知限制（接受，与 member_sm 同类）：等级设置盲进——level_minus ×12 /
+    level_plus ×N 不回读结果等级，模板误点无法被检测。
     """
 
     def __init__(self, handle_source, recognizers: dict, target_level: int,
@@ -94,9 +97,9 @@ class LeaderStateMachine(StateMachine):
         if self._wait_for("red_rally", timeout=8.0):
             ctx["search_outcome"] = "found"
             return
-        # 没有详情弹窗：toast 可能出现，慢加载与之不可区分——两者都按
-        # 无结果计数
-        self._find("toast_no_fortress")
+        # 没有详情弹窗：toast 可见即为确证的无结果；不可见也可能是慢加载，
+        # 两者行为一致（都计数），但记录实际所见供日志/调试
+        ctx["last_search_toast"] = self._find("toast_no_fortress") is not None
         ctx["search_outcome"] = "no_result"
         ctx["no_result_count"] = ctx["no_result_count"] + 1
 
@@ -119,10 +122,13 @@ class LeaderStateMachine(StateMachine):
         self._handle.click(*_EMPTY_GROUND)
 
     def _give_up(self, ctx):
-        # 重试耗尽：结束本轮，置失败标记供调度器检查（与 member_sm._exhausted
-        # 约定一致）；WorkerRunner 冷却后重建全新状态机
+        # 重试耗尽：结束本轮，置失败标记。ctx["failed"]/ctx["fail_reason"] 是
+        # 调度器/WorkerRunner 的轮级信号（与 member_sm._exhausted 约定一致）；
+        # either_sm.step() 则直接以 last_rally_event is None 判定开集结失败。
+        # fail_reason 按**真正耗尽**的那个上限归因：混有锁定的轮次仍可能是
+        # 无结果耗尽（如 1 次锁定 + 3 次无结果）
         ctx["failed"] = True
-        ctx["fail_reason"] = ("locked_fortress" if ctx.get("locked_count")
+        ctx["fail_reason"] = ("locked_fortress" if ctx.get("locked_count", 0) >= _MAX_LOCKED
                               else "no_fortress_found")
         self.last_rally_event = None
 
