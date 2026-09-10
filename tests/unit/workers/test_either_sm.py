@@ -42,9 +42,10 @@ def test_delegates_to_leader_then_member():
     # leader 阶段完整走完（开集结），member 阶段接手到 END
     assert any("LEADER:LAUNCH" in h for h in sm.history)
     assert any(h.startswith("MEMBER:") for h in sm.history)
-    # 开完集结不停留：member 收到了 launch 事件
-    assert sm._member._pending_event is not None
-    assert sm._member._pending_event["rally_id"].startswith("rally_")
+    # 开完集结不停留：member 收到了 launch 事件（消费后留存于 last_event）
+    assert sm._member._pending_event is None
+    assert sm._member.last_event is not None
+    assert sm._member.last_event["rally_id"].startswith("rally_")
 
 
 def test_not_terminal_during_leader_phase():

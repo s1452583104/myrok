@@ -5,20 +5,22 @@ class MemberStateMachine(StateMachine):
     """成员填兵。用户要求（2026-09-09）：填兵不使用预设操作，直接使用默认的即可 —
     打开创建部队弹窗后直接点行军，使用游戏默认兵队。march_preset/march_troop_types
     只在该角色担任集结车头时才有意义（见 LeaderStateMachine）。
+
+    v1 已知限制（接受）：动作的点击失败不回读（盲进）。失败的可观测信号是
+    ctx['failed']/ctx['fail_reason']，由 FILTER 耗尽出口 _exhausted 设置；
+    调度器应在 is_terminal() 后检查该标记。
     """
 
-    def __init__(self, handle_source, recognizers: dict, fill_target_leaders,
-                 switcher=None):
+    def __init__(self, handle_source, recognizers: dict, fill_target_leaders):
         self._handle = handle_source
         self._rec = recognizers
-        self._filter = fill_target_leaders  # 按 OCR 名字匹配车头是后续里程碑（ACCEPTANCE §3.7）；当前排序后加入第一个集结
-        self._switcher = switcher
+        self._fill_targets = fill_target_leaders  # 按 OCR 名字匹配车头是后续里程碑（ACCEPTANCE §3.7）；当前排序后加入第一个集结
         self._pending_event = None
+        self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
         super().__init__(initial="IDLE")
 
     def _setup(self):
-        self.add_transition("IDLE", "WAIT_LAUNCH_EVENT",
-                            lambda ctx: None,
+        self.add_transition("IDLE", "WAIT_LAUNCH_EVENT", self._consume_event,
                             guard=lambda ctx: self._pending_event is not None)
         self.add_transition("WAIT_LAUNCH_EVENT", "SWITCH_TO_SELF", self._switch_to_self)
         self.add_transition("SWITCH_TO_SELF", "NORMALIZE", self._normalize_view)
@@ -26,6 +28,10 @@ class MemberStateMachine(StateMachine):
         self.add_transition("OPEN_ALLIANCE", "OPEN_WAR", self._open_war)
         self.add_transition("OPEN_WAR", "SORT_BY_NEAREST", self._sort_nearest)
         self.add_transition("SORT_BY_NEAREST", "FILTER", self._filter_rally)
+        # 耗尽出口必须注册在 FILTER->OPEN_WAR 重试边之前：StateMachine.step
+        # 按注册顺序取第一个 from_state 匹配且 guard 通过的转移。
+        self.add_transition("FILTER", "END", self._exhausted,
+                            guard=lambda ctx: ctx.get("war_attempts", 0) > 10)
         self.add_transition("FILTER", "CLICK_JOIN", self._click_join,
                             guard=lambda ctx: ctx.get("rally_found"))
         self.add_transition("FILTER", "OPEN_WAR", self._open_war,
@@ -37,6 +43,10 @@ class MemberStateMachine(StateMachine):
 
     def on_rally_launched(self, event: dict) -> None:
         self._pending_event = event
+
+    def _consume_event(self, ctx):
+        self.last_event = self._pending_event
+        self._pending_event = None
 
     def _switch_to_self(self, ctx):
         # v1: 每个实例单角色，无需切换（多角色切换是 v2）
@@ -61,9 +71,14 @@ class MemberStateMachine(StateMachine):
         self._click_retry("sort_nearest")
 
     def _filter_rally(self, ctx):
-        # fill_target_leaders 按 OCR 名字匹配车头是后续里程碑（ACCEPTANCE §3.7）；
+        # _fill_targets 按 OCR 名字匹配车头是后续里程碑（ACCEPTANCE §3.7）；
         # 当前排序后加入第一个集结。
-        ctx["rally_found"] = ctx.get("war_attempts", 1) <= 10
+        ctx["rally_found"] = ctx.get("war_attempts", 0) <= 10
+
+    def _exhausted(self, ctx):
+        # 重试耗尽：置失败标记供调度器检查，避免 FILTER->OPEN_WAR 无限循环
+        ctx["failed"] = True
+        ctx["fail_reason"] = "no_rally_found"
 
     def _click_join(self, ctx):
         self._click_retry("join_btn")
