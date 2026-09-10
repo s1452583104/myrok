@@ -63,3 +63,26 @@ def test_jittering_handle_source_offset_bounds():
         src.click(100, 100)
         jx, jy = inner.click.call_args.args
         assert 92 <= jx <= 108 and 92 <= jy <= 108
+
+def test_jittering_handle_source_sleeps_before_click(monkeypatch):
+    import rok_assistant.infra.anti_detection as ad_mod
+    calls = []
+    monkeypatch.setattr(ad_mod.time, "sleep", lambda s: calls.append(("sleep", s)))
+    inner = MagicMock()
+    inner.click.side_effect = lambda x, y: calls.append(("click", x, y))
+    cfg = AntiDetectionConfig(click_offset_px=0, action_delay_min=0.01,
+                              action_delay_max=0.02, debug_no_jitter=False)
+    src = JitteringHandleSource(inner, cfg)
+    src.click(100, 200)
+    assert len(calls) == 2
+    assert calls[0][0] == "sleep"
+    assert 0.01 <= calls[0][1] <= 0.02
+    assert calls[1] == ("click", 100, 200)
+
+def test_jittering_handle_source_debug_no_jitter_exact_coords():
+    inner = MagicMock()
+    cfg = AntiDetectionConfig(click_offset_px=8, action_delay_min=0.0,
+                              action_delay_max=0.0, debug_no_jitter=True)
+    src = JitteringHandleSource(inner, cfg)
+    src.click(100, 200)
+    inner.click.assert_called_once_with(100, 200)

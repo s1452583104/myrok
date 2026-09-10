@@ -1,6 +1,10 @@
 import random
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rok_assistant.core.handle_source import HandleSource
 
 @dataclass(frozen=True)
 class AntiDetectionConfig:
@@ -39,12 +43,11 @@ def jitter_delay(base: float, cfg: AntiDetectionConfig) -> float:
 class JitteringHandleSource:
     """Wraps a HandleSource: random click offset + random delay before each click.
 
-    With debug_no_jitter=True, jitter_offset returns the original coords and
-    random_action_delay returns its midpoint, so this wrapper degrades to a
-    pass-through.
+    With debug_no_jitter=True, coordinates and delays become deterministic
+    (offset 0, delay = midpoint of min/max), but clicks are still delayed.
     """
 
-    def __init__(self, inner, cfg: AntiDetectionConfig):
+    def __init__(self, inner: "HandleSource", cfg: AntiDetectionConfig):
         self._inner = inner
         self._cfg = cfg
 
