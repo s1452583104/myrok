@@ -1,4 +1,5 @@
 import random
+import time
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -34,3 +35,29 @@ def jitter_delay(base: float, cfg: AntiDetectionConfig) -> float:
         return base
     jitter = base * cfg.jitter_ratio
     return max(0.0, base + random.uniform(-jitter, jitter))
+
+class JitteringHandleSource:
+    """Wraps a HandleSource: random click offset + random delay before each click.
+
+    With debug_no_jitter=True, jitter_offset returns the original coords and
+    random_action_delay returns its midpoint, so this wrapper degrades to a
+    pass-through.
+    """
+
+    def __init__(self, inner, cfg: AntiDetectionConfig):
+        self._inner = inner
+        self._cfg = cfg
+
+    def capture(self):
+        return self._inner.capture()
+
+    def click(self, x: int, y: int) -> None:
+        time.sleep(self._cfg.random_action_delay())
+        jx, jy = jitter_offset(int(x), int(y), self._cfg)
+        self._inner.click(jx, jy)
+
+    def swipe(self, *args, **kwargs):
+        return self._inner.swipe(*args, **kwargs)
+
+    def is_alive(self) -> bool:
+        return self._inner.is_alive()

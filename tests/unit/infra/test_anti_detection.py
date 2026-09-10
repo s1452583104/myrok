@@ -1,6 +1,7 @@
 import pytest
+from unittest.mock import MagicMock
 from rok_assistant.infra.anti_detection import (
-    AntiDetectionConfig, jitter_offset, jitter_delay
+    AntiDetectionConfig, jitter_offset, jitter_delay, JitteringHandleSource
 )
 
 def test_default_config():
@@ -40,3 +41,25 @@ def test_jitter_delay_zero_base():
 def test_jitter_delay_debug_no_jitter():
     cfg = AntiDetectionConfig(debug_no_jitter=True)
     assert jitter_delay(1.5, cfg) == 1.5
+
+def test_jittering_handle_source_delegates_and_jitters():
+    inner = MagicMock()
+    cfg = AntiDetectionConfig(click_offset_px=0, action_delay_min=0.0,
+                              action_delay_max=0.0, debug_no_jitter=False)
+    src = JitteringHandleSource(inner, cfg)
+    src.click(100, 200)
+    inner.click.assert_called_once_with(100, 200)  # offset 0 -> exact coords
+    assert src.is_alive() is inner.is_alive.return_value
+    assert src.capture() is inner.capture.return_value
+    src.swipe(1, 2, 3, 4, duration_ms=5)
+    inner.swipe.assert_called_once_with(1, 2, 3, 4, duration_ms=5)
+
+def test_jittering_handle_source_offset_bounds():
+    inner = MagicMock()
+    cfg = AntiDetectionConfig(click_offset_px=8, action_delay_min=0.0,
+                              action_delay_max=0.0, debug_no_jitter=False)
+    src = JitteringHandleSource(inner, cfg)
+    for _ in range(50):
+        src.click(100, 100)
+        jx, jy = inner.click.call_args.args
+        assert 92 <= jx <= 108 and 92 <= jy <= 108
