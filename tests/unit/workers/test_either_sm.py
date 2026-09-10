@@ -17,7 +17,8 @@ def _mock_rec():
 def _make_sm(fill_targets=None, bus=None):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     rec = _mock_rec()
-    recs = {k: rec for k in ("search_icon", "level_plus", "search_btn",
+    # map_btn/search_icon: member 视图归一化需要（成员阶段先确认在地图视图）
+    recs = {k: rec for k in ("search_icon", "map_btn", "level_plus", "search_btn",
                              "rally_attack_popup", "red_rally", "preset_1",
                              "troop_infantry", "march_btn", "alliance_btn",
                              "war_btn", "sort_nearest", "join_btn")}

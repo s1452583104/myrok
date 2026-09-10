@@ -24,8 +24,9 @@ class EitherStateMachine:
                  fill_target_leaders, event_bus=None):
         self._leader = LeaderStateMachine(handle_source, recognizers, target_level,
                                           march_preset, march_troop_types, event_bus)
-        self._member = MemberStateMachine(handle_source, recognizers, march_preset,
-                                          march_troop_types, fill_target_leaders)
+        # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数
+        self._member = MemberStateMachine(handle_source, recognizers,
+                                          fill_target_leaders)
         self._phase = "leader"
         self.current = "LEADER:IDLE"
         self.history: list[str] = [self.current]

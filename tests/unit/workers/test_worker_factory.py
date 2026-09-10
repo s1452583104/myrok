@@ -26,6 +26,9 @@ def test_factory_builds_leader():
 def test_factory_builds_member():
     sm = create_state_machine(_char(RoleEnum.MEMBER), _handle(), {})
     assert isinstance(sm, MemberStateMachine)
+    # 填兵不使用预设（用户要求 2026-09-09）：member 构造不接收 march 参数
+    assert not hasattr(sm, "_march_preset")
+    assert not hasattr(sm, "_march_troop_types")
 
 
 def test_factory_builds_either():

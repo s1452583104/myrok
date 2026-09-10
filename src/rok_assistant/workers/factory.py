@@ -13,8 +13,9 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
                                   character.march_preset,
                                   character.march_troop_types, event_bus)
     if character.role == RoleEnum.MEMBER:
-        return MemberStateMachine(handle_source, recognizers, character.march_preset,
-                                  character.march_troop_types,
+        # 填兵不使用预设/兵种选择（用户要求 2026-09-09），
+        # 故不传 march_preset/march_troop_types
+        return MemberStateMachine(handle_source, recognizers,
                                   character.fill_target_leaders)
     if character.role == RoleEnum.EITHER:
         return EitherStateMachine(handle_source, recognizers, character.target_level,
