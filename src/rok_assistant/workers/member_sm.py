@@ -34,15 +34,6 @@ class MemberStateMachine(StateMachine):
     def on_rally_launched(self, event: dict) -> None:
         self._pending_event = event
 
-    def _click(self, rec_id: str) -> bool:
-        img = self._handle.capture()
-        r = self._rec[rec_id].recognize(img)
-        if not r.matched:
-            return False
-        x, y = r.bbox.center()
-        self._handle.click(x, y)
-        return True
-
     def _switch_to_self(self, ctx):
         # In single-character-worker-per-character model, already on self.
         # For multi-char per account, would call switcher.

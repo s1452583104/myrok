@@ -29,3 +29,31 @@ def test_history():
     c.step({"n": 2})
     c.step({"n": 3})
     assert c.history == ["start", "counting", "counting", "counting", "done"]
+
+
+def _fake_rec(matched=True):
+    from unittest.mock import MagicMock
+    rec = MagicMock()
+    rec.recognize.return_value.matched = matched
+    rec.recognize.return_value.bbox = MagicMock(center=lambda: (50, 50))
+    rec.recognize.return_value.confidence = 0.95
+    return rec
+
+
+def test_base_helpers_click_retry_and_wait_for():
+    import numpy as np
+    from unittest.mock import MagicMock
+    from rok_assistant.core.handle_source import MockHandleSource
+    from rok_assistant.workers.leader_sm import LeaderStateMachine
+
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    rec = _fake_rec()
+    # first two captures miss, third+ hits: switch matched via side_effect
+    results = [MagicMock(matched=False), MagicMock(matched=False),
+               MagicMock(matched=True, bbox=MagicMock(center=lambda: (50, 50)))]
+    rec.recognize.side_effect = results + [results[-1]] * 100
+    sm = LeaderStateMachine(handle, {"x": rec}, 7, 1, ["cavalry"])
+    assert sm._wait_for("x", timeout=10.0, interval=0.0) is True
+    assert sm._click_retry("x", attempts=1, interval=0.0) is True
+    assert handle.clicks == [(50, 50)]
+    assert sm._find_retry("nope", attempts=2, interval=0.0) is None

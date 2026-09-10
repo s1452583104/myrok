@@ -30,19 +30,6 @@ class LeaderStateMachine(StateMachine):
         self.add_transition("WAIT_MEMBERS", "END", lambda ctx: None,
                             guard=lambda ctx: ctx.get("departed"))
 
-    def _find(self, rec_id: str):
-        img = self._handle.capture()
-        r = self._rec[rec_id].recognize(img)
-        return r if r.matched else None
-
-    def _click(self, rec_id: str):
-        r = self._find(rec_id)
-        if r is None:
-            return False
-        x, y = r.bbox.center()
-        self._handle.click(x, y)
-        return True
-
     def _search_fortress(self, ctx):
         self._click("search_icon")
 
