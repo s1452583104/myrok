@@ -29,6 +29,20 @@ class TemplateRegistry:
     def get(self, k: str) -> TemplateSpec:
         return self._t[k]
 
+    def build_recognizers(self) -> dict:
+        """Build {template_id: TemplateMatch} for all loaded templates."""
+        import cv2
+        from .recognizers.template_match import TemplateMatch
+        from .recognizer import BBox
+        out = {}
+        for tid, spec in self._t.items():
+            img = cv2.imread(str(spec.file))
+            if img is None:
+                raise FileNotFoundError(f"template image missing: {spec.file}")
+            roi = None if spec.roi.is_full else BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2)
+            out[tid] = TemplateMatch(img, threshold=spec.threshold, roi=roi, name=tid)
+        return out
+
     @staticmethod
     def load(manifest_path: Path) -> "TemplateRegistry":
         with open(manifest_path, "r", encoding="utf-8") as f:
