@@ -26,7 +26,8 @@ def _mock_rec(matched=True):
 
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
-                  "join_btn", "swap_btn", "march_btn", "fill_Boss")
+                  "join_btn", "swap_btn", "march_btn", "fill_Boss",
+                  "queue_panel")
 
 
 def _make_sm():
@@ -129,6 +130,7 @@ def test_normalize_exits_search_then_finds_flag(monkeypatch):
     recs = sm._rec
     recs["alliance_btn"].recognize.return_value.matched = False
     recs["war_title"].recognize.return_value.matched = False   # 无面板残留
+    recs["queue_panel"].recognize.return_value.matched = False  # 无侧栏展开
     sm.on_rally_launched({"rally_id": "r1"})
     try:
         for _ in range(10):
@@ -139,6 +141,32 @@ def test_normalize_exits_search_then_finds_flag(monkeypatch):
         raise AssertionError("应当抛 RuntimeError 而不是静默继续")
     # 唯一一次点击是 search_back（map_btn 在 elif 分支未被触达）
     assert handle.clicks == [(50, 50)]
+
+
+def test_normalize_collapses_queue_sidebar(monkeypatch):
+    # 派遣队列侧栏展开态盖掉整个底部栏（2026-09-11 实机 mumu1 卡死态）：
+    # 归一化须先点侧栏外空地收起（含「创建部队」气泡），再走 map_btn 回图
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["war_title"].recognize.return_value.matched = False
+    recs["search_back"].recognize.return_value.matched = False
+    # 点空地回到城市视图 -> 点 map_btn 回地图后旗帜才可见（真实时序）
+    ares = recs["alliance_btn"].recognize.return_value
+
+    def _ab(img):
+        ares.matched = len(handle.clicks) >= 2   # 收起 + map_btn 之后
+        return ares
+
+    recs["alliance_btn"].recognize.side_effect = _ab
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(6):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert sm.current == "OPEN_WAR"
+    # 收起侧栏空地 + map_btn 回地图 + OPEN_WAR 点联盟旗帜
+    assert handle.clicks == [(1550, 320), (50, 50), (50, 50)]
 
 
 def test_poll_exhaustion_exits_to_end_with_failure_marker(monkeypatch):

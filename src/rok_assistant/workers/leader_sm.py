@@ -10,6 +10,9 @@ logger = get_logger(__name__)
 _MAX_NO_RESULT = 3
 _MAX_LOCKED = 5
 _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
+# 派遣队列侧栏展开态会盖掉整个底部栏（含 search_icon/map_btn，2026-09-11
+# 实机验收 mumu1 卡死态）：点侧栏外空地收起侧栏与「创建部队」引导气泡。
+_QUEUE_SIDEBAR_DISMISS = (1550, 320)
 # 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
 # 0.4s 间隔实测 19 连点零丢失）。测试里置 0 免真实睡眠。
 _LEVEL_CLICK_PACE = 0.35
@@ -85,15 +88,18 @@ class LeaderStateMachine(StateMachine):
 
     def _normalize_view(self, ctx):
         # 城市视图：左下角是 map_btn，看不到搜索放大镜（§1.5.2）；地图视图下
-        # map_btn 不匹配（0.528），模板不会误触发——先查 search_icon 再按需点
+        # map_btn 不匹配（0.528），模板不会误触发——先查 search_icon 再按需点。
+        # 战争列表开着会盖住左下角按钮（成员阶段回流/上一轮残留）：
+        # 点面板右上角 X（固定几何 1671,64）关掉再归一化；派遣队列侧栏
+        # 展开态同样盖住底部栏，先点空地收起。
         if self._find("search_icon"):
             return
-        # 战争列表开着会盖住左下角按钮（成员阶段回流/上一轮残留）：
-        # 点面板右上角 X（固定几何 1671,64）关掉再归一化
         if self._find("war_title"):
             self._handle.click(1671, 64)
             if self._wait_for("search_icon", timeout=6.0):
                 return
+        if self._find("queue_panel"):
+            self._handle.click(*_QUEUE_SIDEBAR_DISMISS)
         self._click("map_btn")
         self._wait_for("search_icon", timeout=6.0)
 

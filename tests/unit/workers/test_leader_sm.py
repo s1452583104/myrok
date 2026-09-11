@@ -41,7 +41,7 @@ def _mock_rec(matched=True):
 RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
-                  "troop_cavalry", "march_btn", "war_title")
+                  "troop_cavalry", "march_btn", "war_title", "queue_panel")
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -177,9 +177,25 @@ def test_normalize_closes_leftover_war_panel(monkeypatch):
     sm, handle = _make_sm()
     recs = sm._rec
     recs["search_icon"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False   # 无侧栏展开
     try:
         for _ in range(5):
             sm.step()
     except RuntimeError:
         pass   # 后续 search 仍会失败（search_icon 恒不可见），只看面板被关
     assert (1671, 64) in handle.clicks
+
+
+def test_normalize_collapses_queue_sidebar(monkeypatch):
+    # 派遣队列侧栏展开态盖掉整个底部栏（2026-09-11 实机 mumu1 卡死态）：
+    # 归一化须先点侧栏外空地收起，再走 map_btn 回地图
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["search_icon"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    try:
+        for _ in range(5):
+            sm.step()
+    except RuntimeError:
+        pass   # 后续 search 仍会失败（search_icon 恒不可见），只看侧栏被收
+    assert (1550, 320) in handle.clicks

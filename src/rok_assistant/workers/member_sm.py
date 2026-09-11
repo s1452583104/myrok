@@ -16,6 +16,10 @@ _PANEL_MAX_ATTEMPTS = 10
 _PLUS_X = 1335
 _NAME_TO_PLUS_DY = 111
 
+# 派遣队列侧栏展开态会盖掉整个底部栏（含联盟旗帜/map_btn，2026-09-11
+# 实机验收 mumu1 卡死态）：点侧栏外空地收起侧栏与「创建部队」引导气泡。
+_QUEUE_SIDEBAR_DISMISS = (1550, 320)
+
 
 class MemberStateMachine(StateMachine):
     """成员填兵（2026-09-11 实机验证的真实链路）：
@@ -110,13 +114,18 @@ class MemberStateMachine(StateMachine):
 
     def _normalize_view(self, ctx):
         # 地图视图的标志是右下角联盟旗帜可见。战争列表开着（上一轮残留）
-        # 会盖住左下角按钮：先点右上角 X（固定几何 1671,64）关掉。搜索面板
+        # 会盖住左下角按钮：先点右上角 X（固定几何 1671,64）关掉；派遣队列
+        # 侧栏展开态则点空地收起（见 _QUEUE_SIDEBAR_DISMISS 注释）。搜索面板
         # 开着时底部栏变成搜索目标栏、旗帜不可见（2026-09-11 实机），先退
         # 搜索；城市视图则点 map_btn 回地图。
         if self._find("alliance_btn"):
             return
         if self._find("war_title"):
             self._handle.click(1671, 64)
+        if self._find("alliance_btn"):
+            return
+        if self._find("queue_panel"):
+            self._handle.click(*_QUEUE_SIDEBAR_DISMISS)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):

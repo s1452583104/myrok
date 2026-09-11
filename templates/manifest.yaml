@@ -11,8 +11,8 @@ templates:
   file: alliance_btn.png
   threshold: 0.9
   roi:
-  - 1790
-  - 810
+  - 1650
+  - 800
   - 1920
   - 930
 - id: level_minus
@@ -305,6 +305,14 @@ templates:
   - 900
   - 250
   - 1080
+- id: queue_panel
+  file: queue_panel.png
+  threshold: 0.9
+  roi:
+  - 1700
+  - 15
+  - 1920
+  - 70
 - id: queue_badge
   file: queue_badge.png
   threshold: 0.9
