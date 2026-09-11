@@ -26,7 +26,7 @@ def _mock_rec(matched=True):
 
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
-                  "join_btn", "swap_btn", "fill_Boss")
+                  "join_btn", "swap_btn", "march_btn", "fill_Boss")
 
 
 def _make_sm():
@@ -62,11 +62,12 @@ def test_member_receives_event_and_joins_without_preset(monkeypatch):
         if sm.is_terminal():
             break
     assert sm.current == "END"
-    # 2 次点击：OPEN_WAR 点联盟旗帜(50,50) + CLICK_JOIN 点目标行的「+」
-    # （mock 名字中心 (50,50) + 固定几何偏移 -> (1335, 161)）。真实链路
-    # （2026-09-11 实机）：点「+」即以默认部队加入并发兵 —— 无表单、
-    # 无行军按钮，swap_btn 出现即成功。
-    assert handle.clicks == [(50, 50), (1335, 161)]
+    # 3 次点击：OPEN_WAR 点联盟旗帜(50,50) + CLICK_JOIN 点目标行的「+」
+    # （mock 名字中心 (50,50) + 固定几何偏移 -> (1335, 161)）+ LAUNCH 点
+    # 行军(50,50)。真实链路（2026-09-11 用户实机确认）：点「+」-> 创建
+    # 部队弹窗 -> 点行军（默认兵队），swap_btn 出现即成功。
+    assert handle.clicks == [(50, 50), (1335, 161), (50, 50)]
+    assert "FORM_TROOP" in sm.history and "LAUNCH" in sm.history
     # 预设槽位与兵种图标从未被识别（识别必先于点击，未被识别即绝无点击）
     assert rec_preset.recognize.call_count == 0
     assert rec_troop.recognize.call_count == 0
@@ -77,8 +78,8 @@ def test_member_receives_event_and_joins_without_preset(monkeypatch):
 
 
 def test_join_click_without_swap_confirmation_reopens_panel(monkeypatch):
-    # 点了「+」但 swap_btn 未出现（点击未生效）：必须重开列表重试而不是
-    # 谎报成功 —— 旧代码盲进（点击失败不回读）是实机幻走事故的根源
+    # 点了「+」走到行军后 swap_btn 未出现（加入未生效）：必须重开列表重试
+    # 而不是谎报成功 —— 旧代码盲进（点击失败不回读）是实机幻走事故的根源
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, _, _ = _make_sm()
     sm.on_rally_launched({"rally_id": "r1"})
@@ -94,6 +95,29 @@ def test_join_click_without_swap_confirmation_reopens_panel(monkeypatch):
     assert sm.current == "OPEN_WAR"   # 回流重开列表，而不是 END
     assert sm._ctx["joined"] is False
     assert sm._ctx.get("fail_reason") is None
+
+
+def test_form_troop_missing_march_btn_reopens_panel(monkeypatch):
+    # 点「+」后创建部队弹窗没出来（march_btn 15s 等不到）：回流重开列表，
+    # 绝不能跳过表单直接宣布成功（用户实机确认 2026-09-11：加入需
+    # 创建部队→行军两步）
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    sm.on_rally_launched({"rally_id": "r1"})
+    sm._rec["march_btn"].recognize.return_value.matched = False
+    reached_form = False
+    for _ in range(40):
+        sm.step()
+        if sm.current == "FORM_TROOP":
+            reached_form = True
+        if reached_form and sm.current == "OPEN_WAR":
+            break
+    assert reached_form
+    assert sm.current == "OPEN_WAR"
+    assert sm._ctx["form_open"] is False
+    # 只有「+」一次点击（mock 下 war_title 直接命中，旗帜点击被跳过），
+    # 行军从未被点过
+    assert handle.clicks == [(1335, 161)]
 
 
 def test_normalize_exits_search_then_finds_flag(monkeypatch):

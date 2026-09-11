@@ -29,7 +29,7 @@ LEADER_IDS = (
 # 实机链路（2026-09-11）：旗帜 -> 战争列表 -> 点绿「+」即默认部队出兵
 MEMBER_IDS = (
     "search_icon", "map_btn", "search_back", "alliance_btn",
-    "war_title", "join_btn", "swap_btn", "fill_车头",
+    "war_title", "join_btn", "swap_btn", "march_btn", "fill_车头",
 )
 
 

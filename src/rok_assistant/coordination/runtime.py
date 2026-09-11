@@ -76,7 +76,9 @@ class RuntimeCoordinator:
         runner = WorkerRunner(
             instance_id=inst.id, char_id=char.id, char_name=char.name,
             sm_factory=lambda: create_state_machine(char, handle, recognizers, self._bus),
-            handle_source=handle, event_bus=self._bus)
+            handle_source=handle, event_bus=self._bus,
+            max_rounds=self._config.app.max_rounds,
+            max_consecutive_failures=self._config.app.max_consecutive_failures)
         self.runners[key] = runner
         if char.role == RoleEnum.MEMBER:
             self._routes[key] = self._make_router(key)

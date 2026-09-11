@@ -21,12 +21,13 @@ class MemberStateMachine(StateMachine):
     """成员填兵（2026-09-11 实机验证的真实链路）：
 
     地图右下角联盟旗帜 -> 战争列表（直接落在列表，无需再点战争页签）
-    -> 点目标行的绿色「+加入」-> 即以默认部队加入并发兵。
+    -> 点目标行的绿色「+加入」-> 「创建部队」弹窗 -> 点行军出发
+    （用户实机确认 2026-09-11：加入仍需 创建部队→行军 两步）。
 
     关键实机事实：
-    - 点「+」没有部队表单、没有行军按钮：游戏直接用默认兵队出兵，
-      天然满足「填兵不使用预设操作，直接使用默认的」（用户要求
-      2026-09-09），因此旧链路的 FORM_TROOP/LAUNCH 全部删除。
+    - 创建部队弹窗不点预设槽位、不点兵种图标，直接点行军 —— 使用游戏
+      默认兵队，满足「填兵不使用预设操作，直接使用默认的」（用户要求
+      2026-09-09）；行军按钮与车头链路共用 march_btn 模板。
     - 行内按钮三态：绿「+加入」=可加入；橙「替换」=已加入；
       红「X取消」=自己开的集结（不可加入自己）。
     - 战争列表排序（距离最近/最新发起）面板会记住上次选择，v1 不主动切。
@@ -81,11 +82,19 @@ class MemberStateMachine(StateMachine):
                             guard=lambda ctx: ctx.get("join_attempts", 0) > _JOIN_MAX_ATTEMPTS)
         self.add_transition("FIND_JOIN", "FIND_JOIN", self._poll_join,
                             guard=lambda ctx: not ctx.get("join_found"))
-        # guard 先于 action 求值：点击与验证在 CLICK_JOIN 的入口 action
-        # 里完成，ctx['joined'] 供下面两条边的 guard 使用
-        self.add_transition("CLICK_JOIN", "END", lambda ctx: None,
+        # guard 先于 action 求值：每步的副作用都放在入口 action 里完成，
+        # 结果写进 ctx 供下一条边的 guard 使用。点击「+」后仍要经过
+        # 「创建部队」「行军」两步（2026-09-11 用户实机确认）
+        self.add_transition("CLICK_JOIN", "FORM_TROOP", self._form_troop)
+        self.add_transition("FORM_TROOP", "LAUNCH", lambda ctx: None,
+                            guard=lambda ctx: ctx.get("form_open"))
+        self.add_transition("FORM_TROOP", "OPEN_WAR", self._join_missed,
+                            guard=lambda ctx: not ctx.get("form_open"))
+        self.add_transition("LAUNCH", "VERIFY_JOINED", self._launch)
+        self.add_transition("VERIFY_JOINED", "JOIN_CHECKED", self._verify_join)
+        self.add_transition("JOIN_CHECKED", "END", lambda ctx: None,
                             guard=lambda ctx: ctx.get("joined"))
-        self.add_transition("CLICK_JOIN", "OPEN_WAR", self._join_missed,
+        self.add_transition("JOIN_CHECKED", "OPEN_WAR", self._join_missed,
                             guard=lambda ctx: not ctx.get("joined"))
 
     def on_rally_launched(self, event: dict) -> None:
@@ -148,16 +157,31 @@ class MemberStateMachine(StateMachine):
         logger.info("成员·暂无指定车头的可加入集结，继续等 (%s/%s)", n, cap)
 
     def _click_join(self, ctx):
-        # 点目标行的「+」即以默认部队加入并发兵（无表单，见类注释），
-        # 一步完成；成功标志是该行按钮从绿「+」变成橙「替换」
-        ctx["joined"] = False
+        # 点目标行的「+」-> 打开「创建部队」弹窗（用户实机确认 2026-09-11：
+        # 加入仍需 创建部队→行军 两步）
         if ctx.get("target_click"):
             self._handle.click(*ctx["target_click"])
             logger.info("成员·点击加入集结")
-            ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
+
+    def _form_troop(self, ctx):
+        # 只等待「创建部队」弹窗的行军按钮出现；不点预设槽位、不点兵种
+        # 图标 —— 使用游戏默认兵队（用户要求 2026-09-09）
+        ctx["form_open"] = self._wait_for("march_btn", timeout=15.0)
+        if ctx["form_open"]:
+            logger.info("成员·创建部队弹窗已打开")
+
+    def _launch(self, ctx):
+        # 点行军，默认部队填兵出发；成功标志是目标行按钮从绿「+」变成
+        # 橙「替换」
+        ctx["marched"] = self._click_retry("march_btn", attempts=3)
+        if ctx["marched"]:
+            logger.info("成员·点击行军，填兵出发")
+
+    def _verify_join(self, ctx):
+        ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
 
     def _join_missed(self, ctx):
-        # 点了「+」但没出现「替换」：点击未生效，重开列表再找
+        # 「+」/行军点击未生效或表单没出来：重开列表再找
         logger.warning("成员·加入未生效，重开战争列表重试")
 
     def _exhausted(self, ctx):

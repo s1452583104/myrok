@@ -40,11 +40,15 @@ _STATE_ZH = {
     "MEMBER:SORT_BY_NEAREST": "成员·按距离排序集结列表",
     "MEMBER:FILTER": "成员·筛选可加入的集结",
     "MEMBER:CLICK_JOIN": "成员·点击加入集结",
+    "MEMBER:VERIFY_JOINED": "成员·确认加入结果",
+    "MEMBER:JOIN_CHECKED": "成员·加入校验完成",
     "MEMBER:FORM_TROOP": "成员·创建部队填兵",
     "MEMBER:LAUNCH": "成员·点击行军，填兵出发",
     "MEMBER:SWITCH_BACK": "成员·返回自己城市",
     # either 角色返城等待
     "WAIT_RETURN": "等待集结部队返城",
+    # Runner 结束态
+    "done": "已达停止条件，收工",
 }
 
 def _zh(state: str) -> str:
@@ -77,7 +81,9 @@ class WorkerRunner:
                  sm_factory, handle_source, event_bus=None,
                  poll_interval: float = 2.0, restart_cooldown: float = 30.0,
                  error_backoff: float = 10.0, pause_poll: float = 5.0,
-                 screenshot_dir: Path | None = None):
+                 screenshot_dir: Path | None = None,
+                 max_rounds: int | None = None,
+                 max_consecutive_failures: int = 3):
         self.instance_id = instance_id
         self.char_id = char_id
         self.char_name = char_name
@@ -90,6 +96,14 @@ class WorkerRunner:
         self._error_backoff = error_backoff
         self._pause_poll = pause_poll
         self._screenshot_dir = Path(screenshot_dir) if screenshot_dir else Path("recordings")
+        # 轮次与停止条件（2026-09-11 验收目标：跑满 N 轮或体力耗尽即收工）
+        self._max_rounds = max_rounds
+        self._max_fail_streak = max_consecutive_failures
+        self._max_error_streak = max_consecutive_failures * 2
+        self.rounds_done = 0          # 已完成的轮数（成功+失败都算）
+        self._fail_streak = 0         # 连续失败终态计数（成功清零）
+        self._error_streak = 0        # 连续 step 异常计数（成功 step 清零）
+        self.stopped_reason: str | None = None   # 非 None = 主循环已退出
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._status = "idle"
@@ -132,10 +146,23 @@ class WorkerRunner:
                 if self.sm.is_terminal():
                     self._reached_terminal = True
                     reason = getattr(self.sm, "fail_reason", None)
+                    self.rounds_done += 1
                     if reason:
-                        logger.warning("worker %s/%s[%s] 本轮失败结束：%s",
+                        self._fail_streak += 1
+                        logger.warning("worker %s/%s[%s] 第 %s 轮失败结束：%s"
+                                       "（连续失败 %s/%s）",
                                        self.instance_id, self.char_id,
-                                       self.char_name, reason)
+                                       self.char_name, self.rounds_done, reason,
+                                       self._fail_streak, self._max_fail_streak)
+                    else:
+                        self._fail_streak = 0
+                        logger.info("worker %s/%s[%s] 第 %s/%s 轮完成",
+                                    self.instance_id, self.char_id,
+                                    self.char_name, self.rounds_done,
+                                    self._max_rounds)
+                    stop = self._check_stop_conditions()
+                    if stop:
+                        break
                     self._set_status("cooldown")
                     self._stop_event.wait(self._cooldown)
                     if self._stop_event.is_set():
@@ -144,15 +171,41 @@ class WorkerRunner:
                     self._set_status(self.sm.current)
                     continue
                 self.sm.step()
+                self._error_streak = 0
                 self._set_status(self.sm.current)
             except Exception as e:   # 任何异常：截图 + 记录 + 退避后继续（不杀线程）
                 logger.exception("worker %s/%s step failed: %s",
                                  self.instance_id, self.char_id, e)
                 self._save_failure_screenshot()
                 self._set_status("error")
+                self._error_streak += 1
+                if self._error_streak >= self._max_error_streak:
+                    self.stopped_reason = (
+                        f"连续 {self._error_streak} 次 step 异常（疑似体力耗尽"
+                        "或环境异常），停止")
+                    logger.warning("worker %s/%s[%s] %s", self.instance_id,
+                                   self.char_id, self.char_name,
+                                   self.stopped_reason)
+                    self._set_status("done")
+                    break
                 self._stop_event.wait(self._error_backoff)
                 continue   # 退避即全部恢复延时，不再叠加 poll 等待
             self._stop_event.wait(self._poll)
+
+    def _check_stop_conditions(self) -> bool:
+        """终态后的停止条件检查（2026-09-11 验收目标：跑满 N 轮或连续失败
+        即收工）。命中时置 stopped_reason、发 "done" 状态并让主循环退出。"""
+        if self._max_rounds is not None and self.rounds_done >= self._max_rounds:
+            self.stopped_reason = f"已完成 {self.rounds_done} 轮，达到轮数上限"
+        elif self._fail_streak >= self._max_fail_streak:
+            self.stopped_reason = (f"连续 {self._fail_streak} 轮失败"
+                                   "（疑似体力耗尽或环境异常），停止")
+        if self.stopped_reason is None:
+            return False
+        logger.info("worker %s/%s[%s] %s", self.instance_id, self.char_id,
+                    self.char_name, self.stopped_reason)
+        self._set_status("done")
+        return True
 
     def _set_status(self, state: str) -> None:
         if state == self._status:

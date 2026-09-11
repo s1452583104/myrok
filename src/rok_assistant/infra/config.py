@@ -64,6 +64,11 @@ class AppConfig(BaseModel):
     adb_path: str = "adb"         # 全局；adb.exe 完整路径
     log_dir: Path = Path("./logs")
     template_dir: Path = Path("./templates")
+    # 每个角色最多完成多少轮（开集结+填兵+返城算一轮）后自动停止
+    max_rounds: int = Field(default=10, ge=1)
+    # 连续多少轮以失败终态（no_fortress_found/locked_fortress/no_rally_found）
+    # 后自动停止；连续 step 异常则按此数的 2 倍计（异常不走终态）
+    max_consecutive_failures: int = Field(default=3, ge=1)
     anti_detection: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
 
 

@@ -10,6 +10,8 @@ app:
   locale: zh-CN
   mumu_manager_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\MuMuManager.exe"  # MuMu 安装目录下
   adb_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\adb.exe"
+  max_rounds: 10                 # 每角色最多完成多少轮（开集结+填兵+返城）后自动收工
+  max_consecutive_failures: 3    # 连续 N 轮失败（或 2N 次 step 异常，疑似体力耗尽）自动收工
   anti_detection:
     click_offset_px: 8
     action_delay_min: 0.1

@@ -20,7 +20,7 @@ def _member_factory(recognizers=None):
         handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
         recs = {k: recognizers or _mock_rec() for k in (
             "map_btn", "search_icon", "alliance_btn", "war_title",
-            "join_btn", "swap_btn", "fill_B")}
+            "join_btn", "swap_btn", "march_btn", "fill_B")}
         return MemberStateMachine(handle, recs, [{"instance": "i1", "name": "B"}])
     return build
 
@@ -70,7 +70,8 @@ def test_runner_survives_sm_exception_and_saves_screenshot(tmp_path):
                      handle_source=MockHandleSource(
                          screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
                      event_bus=None, poll_interval=0.01, restart_cooldown=0.05,
-                     error_backoff=0.05, screenshot_dir=tmp_path)
+                     error_backoff=0.05, screenshot_dir=tmp_path,
+                     max_consecutive_failures=100)  # 本测试只看异常恢复，不触发熔断
     # 必须先发集结事件：SM 停在 IDLE 且无 pending event 时 step 不触发任何
     # _find，坏识别器永远不会被调用，异常路径无法覆盖。
     r.sm.on_rally_launched({"rally_id": "r1"})
@@ -107,7 +108,7 @@ def test_runner_publishes_fail_reason_on_status_update():
         handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
         recs = {k: _mock_rec() for k in ("map_btn", "search_icon", "alliance_btn",
                                          "war_title", "join_btn", "swap_btn",
-                                         "fill_B")}
+                                         "march_btn", "fill_B")}
         return MemberStateMachine(handle, recs, [{"instance": "i1", "name": "B"}])
 
     bus = EventBus()
@@ -180,3 +181,91 @@ def test_runner_rebuilds_after_either_leader_give_up(monkeypatch):
     r.stop()
     assert len(made) >= 2, "leader give-up 后 runner 未重建重试"
     assert made[1] is not made[0]
+
+
+def test_runner_stops_after_max_rounds():
+    # 验收目标（2026-09-11）：跑满 N 轮自动收工 —— 全绿 mock 每轮成功，
+    # max_rounds=2 时主循环退出、不再重建
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(), handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.05,
+                     max_rounds=2)
+    r.sm.on_rally_launched({"rally_id": "r1"})
+    r.start()
+    seen = set()
+    deadline = time.time() + 5
+    while time.time() < deadline and r.stopped_reason is None:
+        # 冷却重建后的新 SM 需要重新喂 launch 事件（复刻协调器路由）
+        if id(r.sm) not in seen:
+            seen.add(id(r.sm))
+            r.sm.on_rally_launched({"rally_id": f"r{len(seen)}"})
+        time.sleep(0.02)
+    r.stop()
+    assert r.rounds_done == 2
+    assert r.stopped_reason is not None and "轮数上限" in r.stopped_reason
+    assert r.status == "done"
+    assert not r._thread.is_alive()
+
+
+def test_runner_stops_after_consecutive_failures(monkeypatch):
+    # 白盒预置 war_attempts（同 fail_reason 测试）：每轮 no_rally_found，
+    # max_consecutive_failures=2 时第 2 轮失败后停止，不再重建
+    def build():
+        handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+        recs = {k: _mock_rec() for k in ("map_btn", "search_icon", "alliance_btn",
+                                         "war_title", "join_btn", "swap_btn",
+                                         "march_btn", "fill_B")}
+        sm = MemberStateMachine(handle, recs, [{"instance": "i1", "name": "B"}])
+        sm._ctx["war_attempts"] = 11
+        return sm
+
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=build, handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.05,
+                     max_consecutive_failures=2)
+    r.sm.on_rally_launched({"rally_id": "r1"})
+    r.start()
+    seen = set()
+    deadline = time.time() + 5
+    while time.time() < deadline and r.stopped_reason is None:
+        if id(r.sm) not in seen:
+            seen.add(id(r.sm))
+            r.sm.on_rally_launched({"rally_id": f"r{len(seen)}"})
+        time.sleep(0.02)
+    r.stop()
+    assert r.rounds_done == 2
+    assert r._fail_streak == 2
+    assert r.stopped_reason is not None and "连续" in r.stopped_reason
+    assert r.status == "done"
+
+
+def test_runner_stops_after_consecutive_step_errors():
+    # 体力耗尽的表现是 step 持续异常（blue_rally 点不动 RuntimeError），
+    # 不走终态 —— 连续异常计数达上限同样要收工，不能无限截图循环
+    class _BoomSM:
+        current = "LEADER:SELECT_RALLY_TIME"
+        last_image = None
+        fail_reason = None
+
+        def is_terminal(self):
+            return False
+
+        def step(self):
+            raise RuntimeError("blue_rally 不可见（模拟体力耗尽）")
+
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_BoomSM, handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.05,
+                     error_backoff=0.01, max_consecutive_failures=2)
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and r.stopped_reason is None:
+        time.sleep(0.02)
+    r.stop()
+    assert r.rounds_done == 0   # 异常不算轮次
+    assert r._error_streak == 4  # max_consecutive_failures * 2
+    assert r.stopped_reason is not None and "step 异常" in r.stopped_reason
+    assert r.status == "done"
