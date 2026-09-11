@@ -81,6 +81,10 @@ class LeaderStateMachine(StateMachine):
             raise RuntimeError("search_icon 不可见且 map_btn 归一化失败")
 
     def _select_level(self, ctx):
+        # 面板记住上次的 Tab（实测落在「野蛮人」上，2026-09-11 实机验收发现）。
+        # tab_fortress 模板采的是未选中（灰色）态：匹配到 ⇔ 当前不在城寨页，
+        # 点它切换；已在城寨页（棕色选中态）不匹配，_click 自动跳过。
+        self._click("tab_fortress")
         # 搜索面板记住上次的等级（观察到 8）：先 minus 连点 12 次压到 1 级
         # 下限，再 plus 到目标等级
         for _ in range(12):

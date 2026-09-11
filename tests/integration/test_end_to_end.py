@@ -21,8 +21,8 @@ from rok_assistant.workers.runner import WorkerRunner
 # 两个 SM 源码里 _find/_click/_wait_for 触碰过的全部识别器 id；
 # MagicMock 识别器全部命中，流程零等待快速走完。
 LEADER_IDS = (
-    "search_icon", "map_btn", "level_minus", "level_plus", "search_btn",
-    "toast_no_fortress", "red_rally", "rally_attack_popup",
+    "search_icon", "map_btn", "tab_fortress", "level_minus", "level_plus",
+    "search_btn", "toast_no_fortress", "red_rally", "rally_attack_popup",
     "march_btn", "preset_1", "troop_cavalry",
 )
 # member 填兵不点预设/兵种（用户要求 2026-09-09）：无 preset_*/troop_* id
