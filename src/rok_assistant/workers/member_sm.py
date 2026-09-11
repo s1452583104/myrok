@@ -178,7 +178,13 @@ class MemberStateMachine(StateMachine):
             logger.info("成员·点击加入集结")
 
     def _form_troop(self, ctx):
-        # 只等待「创建部队」弹窗的行军按钮出现；不点预设槽位、不点兵种
+        # 「+」点击后（面板关闭、地图跳转）出现的是派遣队列侧栏展开态 +
+        # 「创建部队」引导气泡（2026-09-12 实机连拍实锤）：真正的创建部队
+        # 表单要点气泡里的蓝色「创建部队」按钮才出现，之后才能点行军。
+        # 气泡不在（游戏某些入口直接给表单）就只浪费 ~2s 重试，不影响。
+        if self._click_retry("join_create_btn", attempts=2, interval=1.0):
+            logger.info("成员·点击「创建部队」气泡按钮")
+        # 只等待创建部队弹窗的行军按钮出现；不点预设槽位、不点兵种
         # 图标 —— 使用游戏默认兵队（用户要求 2026-09-09）
         ctx["form_open"] = self._wait_for("march_btn", timeout=15.0)
         if ctx["form_open"]:

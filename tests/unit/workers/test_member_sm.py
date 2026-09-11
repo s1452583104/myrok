@@ -27,7 +27,7 @@ def _mock_rec(matched=True):
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
                   "join_btn", "swap_btn", "march_btn", "fill_Boss",
-                  "queue_panel")
+                  "queue_panel", "join_create_btn")
 
 
 def _make_sm():
@@ -63,11 +63,12 @@ def test_member_receives_event_and_joins_without_preset(monkeypatch):
         if sm.is_terminal():
             break
     assert sm.current == "END"
-    # 3 次点击：OPEN_WAR 点联盟旗帜(50,50) + CLICK_JOIN 点目标行的「+」
-    # （mock 名字中心 (50,50) + 固定几何偏移 -> (1335, 161)）+ LAUNCH 点
-    # 行军(50,50)。真实链路（2026-09-11 用户实机确认）：点「+」-> 创建
-    # 部队弹窗 -> 点行军（默认兵队），swap_btn 出现即成功。
-    assert handle.clicks == [(50, 50), (1335, 161), (50, 50)]
+    # 4 次点击：OPEN_WAR 点联盟旗帜(50,50) + CLICK_JOIN 点目标行的「+」
+    # （mock 名字中心 (50,50) + 固定几何偏移 -> (1335, 161)）+ FORM_TROOP
+    # 点「创建部队」气泡按钮 + LAUNCH 点行军(50,50)。真实链路（2026-09-12
+    # 实机连拍实锤）：点「+」-> 派遣队列侧栏展开 +「创建部队」气泡 -> 点
+    # 气泡蓝色按钮出表单 -> 点行军（默认兵队），swap_btn 出现即成功。
+    assert handle.clicks == [(50, 50), (1335, 161), (50, 50), (50, 50)]
     assert "FORM_TROOP" in sm.history and "LAUNCH" in sm.history
     # 预设槽位与兵种图标从未被识别（识别必先于点击，未被识别即绝无点击）
     assert rec_preset.recognize.call_count == 0
@@ -116,9 +117,9 @@ def test_form_troop_missing_march_btn_reopens_panel(monkeypatch):
     assert reached_form
     assert sm.current == "OPEN_WAR"
     assert sm._ctx["form_open"] is False
-    # 「+」一次点击 + _join_missed 的清残留空地点击（960,300）；
-    # 行军从未被点过
-    assert handle.clicks == [(1335, 161), (960, 300)]
+    # 「+」一次点击 + 「创建部队」气泡按钮（表单仍没出来）+ _join_missed
+    # 的清残留空地点击（960,300）；行军从未被点过
+    assert handle.clicks == [(1335, 161), (50, 50), (960, 300)]
 
 
 def test_normalize_exits_search_then_finds_flag(monkeypatch):

@@ -321,3 +321,11 @@ templates:
   - 150
   - 1920
   - 300
+- id: join_create_btn
+  file: join_create.png
+  threshold: 0.9
+  roi:
+  - 1350
+  - 150
+  - 1700
+  - 280
