@@ -46,7 +46,7 @@ def test_delegates_to_leader_then_member():
     sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
     assert isinstance(sm._leader, LeaderStateMachine)
     assert isinstance(sm._member, MemberStateMachine)
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break
@@ -70,7 +70,7 @@ def test_not_terminal_during_leader_phase():
 def test_step_reuses_stored_context():
     sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
     sm.step({"marker": "x"})  # context stored; subsequent bare step() must reuse it
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break
@@ -79,7 +79,7 @@ def test_step_reuses_stored_context():
 
 def test_empty_fill_targets_still_reaches_member_end():
     sm = _make_sm()  # fill_targets defaults to []
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break
@@ -108,7 +108,7 @@ def test_leader_give_up_becomes_terminal_with_fail_reason(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
     sm._leader._rec["red_rally"].recognize.return_value.matched = False
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break
@@ -125,7 +125,7 @@ def test_member_give_up_becomes_terminal_with_fail_reason():
     # 同样呈现为终态，runner 重建后重试 —— 与纯 member 语义一致
     sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
     sm._ctx["war_attempts"] = 11
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break
@@ -155,7 +155,7 @@ def test_wait_return_polls_queue_badge_until_empty(monkeypatch):
     sm = _make_sm(fill_targets=[])
     badge = _mock_rec()
     sm._leader._rec["queue_badge"] = badge
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.current == "WAIT_RETURN":
             break
@@ -178,7 +178,7 @@ def test_wait_return_without_badge_keeps_old_behavior():
     # 未配置 queue_badge（v1 模板缺失时）：member END 即终态，行为不变
     sm = _make_sm(fill_targets=[])
     assert "queue_badge" not in sm._leader._rec
-    for _ in range(60):
+    for _ in range(200):
         sm.step()
         if sm.is_terminal():
             break

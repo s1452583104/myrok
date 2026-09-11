@@ -187,7 +187,7 @@ def test_poll_exhaustion_exits_to_end_with_failure_marker(monkeypatch):
     assert sm.current == "END"
     assert sm._ctx["failed"] is True
     assert sm._ctx["fail_reason"] == "no_rally_found"
-    assert sm.history.count("FIND_JOIN") == 12   # 1 次进入 + 11 次轮询自环
+    assert sm.history.count("FIND_JOIN") == 62   # 1 次进入 + 61 步（60 自环 + 耗尽出边各记一次）
 
 
 def test_failed_join_clears_stale_match_and_repolls(monkeypatch):
@@ -210,7 +210,7 @@ def test_failed_join_clears_stale_match_and_repolls(monkeypatch):
     assert reached_click
     # 回流后目标行消失：不得再点第二次「+」，必须走轮询并耗尽
     sm._rec["fill_Boss"].recognize.return_value.matched = False
-    for _ in range(60):
+    for _ in range(130):
         sm.step()
         if sm.is_terminal():
             break
