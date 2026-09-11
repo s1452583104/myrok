@@ -210,6 +210,7 @@ def test_normalize_exits_leftover_search_panel(monkeypatch):
     recs["search_icon"].recognize.return_value.matched = False
     recs["war_title"].recognize.return_value.matched = False
     recs["queue_panel"].recognize.return_value.matched = False
+    recs["rally_attack_popup"].recognize.return_value.matched = False  # 无弹窗残留
     recs["map_btn"].recognize.return_value.matched = False   # 退搜索后已在地图视图
     # search_back 点击后搜索面板关闭、地图视图 search_icon 可见（真实时序）
     sres = recs["search_back"].recognize.return_value

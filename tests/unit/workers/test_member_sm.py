@@ -27,7 +27,7 @@ def _mock_rec(matched=True):
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
                   "join_btn", "swap_btn", "march_btn", "fill_Boss",
-                  "queue_panel", "join_create_btn")
+                  "queue_panel", "join_create_btn", "rally_attack_popup")
 
 
 def _make_sm():
@@ -41,6 +41,9 @@ def _make_sm():
     rec_troop = _mock_rec()
     recs["preset_1"] = rec_preset
     recs["troop_cavalry"] = rec_troop
+    # 集结进攻弹窗默认不在场（只有残留专项测试置 True）；默认 True 会让
+    # 所有 normalize 链路多出一次 (960,540) 空地点击
+    recs["rally_attack_popup"] = _mock_rec(matched=False)
     sm = MemberStateMachine(handle_source=handle, recognizers=recs,
                             fill_target_leaders=[{"instance": "i1", "name": "Boss"}])
     return sm, handle, rec_preset, rec_troop
@@ -215,3 +218,31 @@ def test_failed_join_clears_stale_match_and_repolls(monkeypatch):
     assert sm._ctx["failed"] is True
     assert sm._ctx["fail_reason"] == "no_rally_found"
     assert handle.clicks.count((1335, 161)) == 1   # 陈旧坐标没有被再次点击
+
+
+def test_normalize_dismisses_leftover_rally_popup(monkeypatch):
+    # 集结进攻弹窗残留（either 角色上轮被杀在选时间步，2026-09-12 实机
+    # mumu1）：模态弹窗压住 HUD，归一化须点空地关闭
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["alliance_btn"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    recs["rally_attack_popup"].recognize.return_value.matched = True
+    # 弹窗被点掉后地图视图旗帜可见（真实时序）
+    ares = recs["alliance_btn"].recognize.return_value
+
+    def _ab(img):
+        ares.matched = len(handle.clicks) >= 1
+        return ares
+
+    recs["alliance_btn"].recognize.side_effect = _ab
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(5):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert sm.current == "OPEN_WAR"
+    # 弹窗空地关闭 + OPEN_WAR 点联盟旗帜
+    assert handle.clicks == [(960, 540), (50, 50)]

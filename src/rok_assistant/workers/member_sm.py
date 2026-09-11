@@ -126,6 +126,10 @@ class MemberStateMachine(StateMachine):
             return
         if self._find("queue_panel"):
             self._handle.click(*_QUEUE_SIDEBAR_DISMISS)
+        if self._find("rally_attack_popup"):
+            # 集结进攻弹窗残留（either 角色上轮被杀在选时间步）：模态弹窗
+            # 压住 HUD，点空地关闭后再继续归一化
+            self._handle.click(960, 540)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):

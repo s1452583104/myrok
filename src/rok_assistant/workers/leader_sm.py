@@ -100,6 +100,10 @@ class LeaderStateMachine(StateMachine):
                 return
         if self._find("queue_panel"):
             self._handle.click(*_QUEUE_SIDEBAR_DISMISS)
+        if self._find("rally_attack_popup"):
+            # 集结进攻弹窗残留（上轮进程被杀在选时间步，2026-09-12 实机
+            # mumu1）：模态弹窗压住 HUD，点空地关闭后再继续归一化
+            self._handle.click(*_EMPTY_GROUND)
         if self._find("search_back"):
             # 搜索面板残留（上轮进程被杀在搜索中、或成员阶段回流遗留）：
             # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图
