@@ -158,7 +158,11 @@ class MainWindow(QMainWindow):
 
 def main():
     import sys
-    from PyQt6.QtWidgets import QApplication
+    from pathlib import Path
+    from rok_assistant.infra.logger import setup_logging
+    # 2026-09-11 实机验收发现：入口从未接 setup_logging —— 日志文件缺失，
+    # 控制台报错无 traceback。日志目录优先取项目 logs/（§3.8 验收要求）。
+    setup_logging(Path("logs"))
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()

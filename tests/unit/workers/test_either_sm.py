@@ -26,9 +26,9 @@ def _make_sm(fill_targets=None, bus=None):
     rec = _mock_rec()
     # map_btn/search_icon: member 视图归一化需要（成员阶段先确认在地图视图）
     recs = {k: rec for k in ("search_icon", "map_btn", "level_plus", "search_btn",
-                             "rally_attack_popup", "red_rally", "preset_1",
-                             "troop_infantry", "march_btn", "alliance_btn",
-                             "war_btn", "sort_nearest", "join_btn")}
+                             "rally_attack_popup", "red_rally", "blue_rally",
+                             "preset_1", "troop_infantry", "march_btn",
+                             "alliance_btn", "war_btn", "sort_nearest", "join_btn")}
     sm = EitherStateMachine(handle_source=handle, recognizers=recs,
                             target_level=8, march_preset=1,
                             march_troop_types=["infantry"],

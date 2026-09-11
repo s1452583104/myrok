@@ -23,7 +23,7 @@ from rok_assistant.workers.runner import WorkerRunner
 LEADER_IDS = (
     "search_icon", "map_btn", "tab_fortress", "level_minus", "level_plus",
     "search_btn", "toast_no_fortress", "red_rally", "rally_attack_popup",
-    "march_btn", "preset_1", "troop_cavalry",
+    "blue_rally", "march_btn", "preset_1", "troop_cavalry",
 )
 # member 填兵不点预设/兵种（用户要求 2026-09-09）：无 preset_*/troop_* id
 MEMBER_IDS = (

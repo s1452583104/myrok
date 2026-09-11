@@ -40,7 +40,8 @@ def _mock_rec(matched=True):
 
 RECOGNIZER_IDS = ("map_btn", "search_icon", "level_plus", "level_minus",
                   "search_btn", "red_rally", "toast_no_fortress",
-                  "rally_attack_popup", "preset_1", "troop_cavalry", "march_btn")
+                  "rally_attack_popup", "blue_rally", "preset_1",
+                  "troop_cavalry", "march_btn")
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -70,8 +71,8 @@ def test_happy_path_reaches_end_and_publishes():
     # real flow must have clicked red_rally (the fixed bug: old code never did)
     # exact click count, all mocks center (50,50): search_icon 1 +
     # level_minus 12 + level_plus 6 + search_btn 1 + red_rally 1 +
-    # preset_1 1 + troop_cavalry 1 + march_btn 1 = 24
-    assert handle.clicks.count((50, 50)) == 24
+    # blue_rally 1 + preset_1 1 + troop_cavalry 1 + march_btn 1 = 25
+    assert handle.clicks.count((50, 50)) == 25
 
 
 def test_select_level_resets_with_minus_then_plus():

@@ -14,8 +14,9 @@ class LeaderStateMachine(StateMachine):
     """集结车头。真实 UI 流程（2026-09 实测，ACCEPTANCE §1.4/§1.5）：
     归一化视图（城市视图先点 map_btn）→ 搜寨 → 设等级（minus 连点到底再
     plus 到目标，搜索面板会记住上次等级，观察值为 8）→ 搜索 → 城寨详情
-    弹窗（red_rally 可见）→ 点 red_rally → 集结攻击弹窗（默认预选 5 分钟）
-    → 创建部队（预设槽 + 兵种）→ 行军 → 被动等待成员填兵。
+    弹窗（red_rally 可见）→ 点 red_rally → 集结进攻弹窗（默认预选 5 分钟）
+    → 点蓝色「集结」（blue_rally）→ 创建部队（预设槽 + 兵种）→ 行军 →
+    被动等待成员填兵。
 
     锁定 = 点 red_rally 后 5 秒内 rally_attack_popup 未出现（§3.3）；
     无结果 = toast_no_fortress（或干脆没有任何弹窗，慢加载与之不可区分）。
@@ -55,7 +56,7 @@ class LeaderStateMachine(StateMachine):
         self.add_transition("CHECK_RESULT", "END", self._give_up,
                             guard=lambda ctx: ctx.get("search_outcome") == "no_result")
         self.add_transition("CLICK_RED_RALLY", "VERIFY_UNLOCKED", self._verify_unlocked)
-        self.add_transition("VERIFY_UNLOCKED", "SELECT_RALLY_TIME", lambda ctx: None,
+        self.add_transition("VERIFY_UNLOCKED", "SELECT_RALLY_TIME", self._open_troop_form,
                             guard=lambda ctx: ctx.get("not_locked"))
         # 恢复边必须先于放弃边注册（同上）
         self.add_transition("VERIFY_UNLOCKED", "NORMALIZE", self._recover_locked,
@@ -141,6 +142,14 @@ class LeaderStateMachine(StateMachine):
         ctx["fail_reason"] = ("locked_fortress" if ctx.get("locked_count", 0) >= _MAX_LOCKED
                               else "no_fortress_found")
         self.last_rally_event = None
+
+    def _open_troop_form(self, ctx):
+        # 集结进攻弹窗（默认预选 5 分钟）→ 点蓝色「集结」按钮才出创建部队
+        # 弹窗。2026-09-11 实机验收发现：旧代码此步是空操作，march_btn 永远
+        # 等不到（15s 超时 RuntimeError → 错误循环）。5 分钟复选框保持默认，
+        # 不点（再点一次可能取消勾选）。
+        if not self._click_retry("blue_rally"):
+            raise RuntimeError("blue_rally 不可见（集结进攻弹窗异常）")
 
     def _form_troop(self, ctx):
         if not self._wait_for("march_btn", timeout=15.0):
