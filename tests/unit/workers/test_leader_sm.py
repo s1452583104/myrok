@@ -235,3 +235,23 @@ def test_normalize_exits_leftover_search_panel(monkeypatch):
     # search_back（归一化）+ search_icon（进入 SEARCH_FORTRESS 的动作）；
     # map_btn 未被点（真实地图视图不匹配）
     assert handle.clicks == [(50, 50), (50, 50)]
+
+
+def test_no_result_invalidates_level_cache_and_resyncs_on_retry():
+    # 等级缓存失步自愈：plus 连点被游戏丢失后缓存停在目标值、面板低 1 级，
+    # 「跳过调整」永远搜错等级（2026-09-12 实机 mumu0：缓存 7 实际 6，
+    # 连续 9 搜全空 -> 断路器停机）。无结果必须清缓存，重试前全量重同步
+    from rok_assistant.workers.leader_sm import _LEVEL_CACHE, _LEVEL_CACHE_LOCK
+    sm, handle = _make_sm(target_level=3)
+    with _LEVEL_CACHE_LOCK:
+        _LEVEL_CACHE[handle] = 3   # 假缓存：声称已是目标等级
+    recs = sm._rec
+    recs["red_rally"].recognize.return_value.matched = False
+    ctx = {}
+    sm._check_result(ctx)
+    assert ctx["search_outcome"] == "no_result"
+    with _LEVEL_CACHE_LOCK:
+        assert _LEVEL_CACHE.get(handle) is None    # 缓存已被清
+    sm._retry_search(ctx)
+    # tab_fortress 1 + 降底 12 + 升到 3 级 2 + search_btn 1 = 16 次点击
+    assert len(handle.clicks) == 16

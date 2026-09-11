@@ -159,12 +159,20 @@ class LeaderStateMachine(StateMachine):
         ctx["last_search_toast"] = self._find("toast_no_fortress") is not None
         ctx["search_outcome"] = "no_result"
         ctx["no_result_count"] = ctx["no_result_count"] + 1
+        # 无结果先怀疑等级缓存失步：等级设置盲进，plus 连点被游戏丢失后
+        # 缓存停在目标值、面板实际低 1 级，之后每轮「跳过调整」永远搜错
+        # 等级（2026-09-12 实机 mumu0：缓存 7 实际 6，连续 9 搜全空）。
+        # 清缓存让重试/下一轮强制全量重同步。
+        with _LEVEL_CACHE_LOCK:
+            _LEVEL_CACHE.pop(self._handle, None)
         logger.warning("[车头] 搜索无结果（第 %s/%s 次，toast 可见=%s）",
                        ctx["no_result_count"], _MAX_NO_RESULT,
                        ctx["last_search_toast"])
 
     def _retry_search(self, ctx):
-        # toast 弹出时搜索面板仍在背后——直接再搜一次
+        # toast 弹出时搜索面板仍在背后——重同步等级（缓存已被
+        # _check_result 清掉，_select_level 走全量降底+升级）再搜
+        self._select_level(ctx)
         self._click_retry("search_btn")
 
     def _click_red_rally(self, ctx):
