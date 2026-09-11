@@ -1,9 +1,16 @@
 import numpy as np
 from unittest.mock import MagicMock
+import pytest
 from rok_assistant.workers.either_sm import EitherStateMachine
 from rok_assistant.workers.leader_sm import LeaderStateMachine
 from rok_assistant.workers.member_sm import MemberStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
+
+
+@pytest.fixture(autouse=True)
+def _no_level_pace(monkeypatch):
+    # leader 等级连点停顿（防丢点击）在单测里置 0，免真实睡眠
+    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
 
 
 def _mock_rec():
