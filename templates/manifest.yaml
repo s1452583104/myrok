@@ -329,3 +329,11 @@ templates:
   - 150
   - 1700
   - 280
+- id: ap_refill
+  file: ap_refill.png
+  threshold: 0.9
+  roi:
+  - 800
+  - 90
+  - 1300
+  - 170

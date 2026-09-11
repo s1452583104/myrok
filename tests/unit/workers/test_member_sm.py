@@ -27,7 +27,8 @@ def _mock_rec(matched=True):
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
                   "join_btn", "swap_btn", "march_btn", "fill_Boss",
-                  "queue_panel", "join_create_btn", "rally_attack_popup")
+                  "queue_panel", "join_create_btn", "rally_attack_popup",
+                  "ap_refill")
 
 
 def _make_sm():
@@ -42,8 +43,9 @@ def _make_sm():
     recs["preset_1"] = rec_preset
     recs["troop_cavalry"] = rec_troop
     # 集结进攻弹窗默认不在场（只有残留专项测试置 True）；默认 True 会让
-    # 所有 normalize 链路多出一次 (960,540) 空地点击
+    # 所有 normalize 链路多出一次 (960,540) 空地点击。ap_refill 同理
     recs["rally_attack_popup"] = _mock_rec(matched=False)
+    recs["ap_refill"] = _mock_rec(matched=False)
     sm = MemberStateMachine(handle_source=handle, recognizers=recs,
                             fill_target_leaders=[{"instance": "i1", "name": "Boss"}])
     return sm, handle, rec_preset, rec_troop

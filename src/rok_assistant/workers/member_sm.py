@@ -132,6 +132,12 @@ class MemberStateMachine(StateMachine):
             # 集结进攻弹窗残留（either 角色上轮被杀在选时间步）：模态弹窗
             # 压住 HUD，点空地关闭后再继续归一化
             self._handle.click(960, 540)
+        if self._find("ap_refill"):
+            # 行动力不足弹窗（行军点击时行动力 <140 弹出，2026-09-12 实机
+            # mumu0 77/140）：关闭让流程按「加入未生效」自然回流 —— 连续
+            # 3 轮失败后 runner 以疑似体力耗尽停止（目标停止条件），而非
+            # 死堵在弹窗上 6 连异常停机
+            self._handle.click(1638, 120)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):

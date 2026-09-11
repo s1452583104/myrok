@@ -42,7 +42,7 @@ RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
                   "troop_cavalry", "march_btn", "war_title", "queue_panel",
-                  "search_back")
+                  "search_back", "ap_refill")
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -211,6 +211,7 @@ def test_normalize_exits_leftover_search_panel(monkeypatch):
     recs["war_title"].recognize.return_value.matched = False
     recs["queue_panel"].recognize.return_value.matched = False
     recs["rally_attack_popup"].recognize.return_value.matched = False  # 无弹窗残留
+    recs["ap_refill"].recognize.return_value.matched = False   # 无行动力弹窗
     recs["map_btn"].recognize.return_value.matched = False   # 退搜索后已在地图视图
     # search_back 点击后搜索面板关闭、地图视图 search_icon 可见（真实时序）
     sres = recs["search_back"].recognize.return_value
