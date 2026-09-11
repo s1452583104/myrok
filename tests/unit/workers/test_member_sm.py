@@ -26,7 +26,7 @@ def _mock_rec(matched=True):
 
 
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
-                  "join_btn", "swap_btn")
+                  "join_btn", "swap_btn", "fill_Boss")
 
 
 def _make_sm():
@@ -62,10 +62,11 @@ def test_member_receives_event_and_joins_without_preset(monkeypatch):
         if sm.is_terminal():
             break
     assert sm.current == "END"
-    # 2 次点击：OPEN_WAR 点联盟旗帜 + CLICK_JOIN 点绿「+」。真实链路
+    # 2 次点击：OPEN_WAR 点联盟旗帜(50,50) + CLICK_JOIN 点目标行的「+」
+    # （mock 名字中心 (50,50) + 固定几何偏移 -> (1335, 161)）。真实链路
     # （2026-09-11 实机）：点「+」即以默认部队加入并发兵 —— 无表单、
     # 无行军按钮，swap_btn 出现即成功。
-    assert len(handle.clicks) == 2
+    assert handle.clicks == [(50, 50), (1335, 161)]
     # 预设槽位与兵种图标从未被识别（识别必先于点击，未被识别即绝无点击）
     assert rec_preset.recognize.call_count == 0
     assert rec_troop.recognize.call_count == 0
@@ -121,7 +122,7 @@ def test_poll_exhaustion_exits_to_end_with_failure_marker(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, _, _ = _make_sm()
     sm.on_rally_launched({"rally_id": "r1"})
-    sm._rec["join_btn"].recognize.return_value.matched = False
+    sm._rec["fill_Boss"].recognize.return_value.matched = False
     for _ in range(120):
         sm.step()
         if sm.is_terminal():

@@ -111,6 +111,22 @@ templates:
   - 340
   - 1420
   - 780
+- id: fill_Jy丶阑珊
+  file: fill_jy.png
+  threshold: 0.9
+  roi:
+  - 460
+  - 240
+  - 760
+  - 660
+- id: fill_阑珊寨子号
+  file: fill_lszz.png
+  threshold: 0.9
+  roi:
+  - 460
+  - 240
+  - 760
+  - 660
 - id: war_title
   file: war_title.png
   threshold: 0.9

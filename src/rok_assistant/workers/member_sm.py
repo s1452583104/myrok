@@ -11,6 +11,11 @@ _JOIN_POLL_TIMEOUT = 3.0
 _JOIN_MAX_ATTEMPTS = 10
 _PANEL_MAX_ATTEMPTS = 10
 
+# 战争列表固定几何（1920x1080 实机测量）：「+加入」按钮列横坐标固定；
+# 名字行中心到同行「+」按钮中心的纵向偏移（两行实测 112/110px）。
+_PLUS_X = 1335
+_NAME_TO_PLUS_DY = 111
+
 
 class MemberStateMachine(StateMachine):
     """成员填兵（2026-09-11 实机验证的真实链路）：
@@ -28,19 +33,33 @@ class MemberStateMachine(StateMachine):
     - 搜索面板开着时右下角旗帜被底部搜索栏替换（搜索模式专属底栏），
       归一化需先退搜索（search_back）。
 
-    按名字匹配指定车头是后续里程碑（ACCEPTANCE §3.7）；当前加入列表里
-    第一个可加入的集结。失败语义：重试耗尽经 _exhausted 写
-    ctx['fail_reason'] 呈现终态，由 runner 冷却重建重试；环境异常
-    （旗帜不可见）直接抛 RuntimeError 走 runner 错误路径（带截图）。
+    填兵指向：只填 fill_target_leaders 里点名的车头 —— 名字模板
+    （manifest id 为 fill_<车头名>，如 fill_Jy丶阑珊）在战争列表名字列
+    匹配出目标行，再按固定几何点该行的「+」。列表里他人的集结一律不填
+    （兵出去填陌生人会错过车头的下一轮集结）。
     """
 
     def __init__(self, handle_source, recognizers: dict, fill_target_leaders):
         self._handle = handle_source
         self._rec = recognizers
-        self._fill_targets = fill_target_leaders
+        # 归一化：config 侧是 FillLeader pydantic 对象，测试/事件侧是 dict
+        self._fill_targets = [
+            {"instance": t["instance"], "name": t["name"]} if isinstance(t, dict)
+            else {"instance": t.instance, "name": t.name}
+            for t in fill_target_leaders
+        ]
+        missing = [t["name"] for t in self._fill_targets
+                   if self._target_rec_id(t) not in recognizers]
+        if missing:
+            logger.warning("成员·填兵目标缺少名字模板: %s "
+                           "（templates/manifest.yaml 需有 fill_<名字> 项）", missing)
         self._pending_event = None
         self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
         super().__init__(initial="IDLE")
+
+    @staticmethod
+    def _target_rec_id(target: dict) -> str:
+        return f"fill_{target['name']}"
 
     def _setup(self):
         self.add_transition("IDLE", "WAIT_LAUNCH_EVENT", self._consume_event,
@@ -110,19 +129,30 @@ class MemberStateMachine(StateMachine):
             logger.info("成员·战争列表已打开")
 
     def _poll_join(self, ctx):
-        # 原地轮询绿「+」：联盟集结每隔几分钟才开一轮，列表可能暂时为空
+        # 原地轮询点名车头的集结：名字模板在名字列匹配出目标行，记录该行
+        # 「+」按钮的固定几何位置。联盟集结每隔几分钟才开一轮，暂时没有
+        # 就继续等；他人的集结一律不填（见类注释）
         ctx["join_attempts"] = ctx.get("join_attempts", 0) + 1
         n, cap = ctx["join_attempts"], _JOIN_MAX_ATTEMPTS
-        ctx["join_found"] = self._wait_for("join_btn", timeout=_JOIN_POLL_TIMEOUT)
-        if ctx["join_found"]:
+        for t in self._fill_targets:
+            r = self._wait_for_result(self._target_rec_id(t),
+                                      timeout=_JOIN_POLL_TIMEOUT)
+            if r is None:
+                continue
+            _, cy = r.bbox.center()
+            ctx["target_click"] = (_PLUS_X, cy + _NAME_TO_PLUS_DY)
+            ctx["join_found"] = True
+            logger.info("成员·找到车头 %s 的集结，准备加入", t["name"])
             return
-        logger.info("成员·暂无可加入的集结，继续等 (%s/%s)", n, cap)
+        ctx["join_found"] = False
+        logger.info("成员·暂无指定车头的可加入集结，继续等 (%s/%s)", n, cap)
 
     def _click_join(self, ctx):
-        # 点「+」即以默认部队加入并发兵（无表单，见类注释），一步完成；
-        # 成功标志是目标行按钮从绿「+」变成橙「替换」
+        # 点目标行的「+」即以默认部队加入并发兵（无表单，见类注释），
+        # 一步完成；成功标志是该行按钮从绿「+」变成橙「替换」
         ctx["joined"] = False
-        if self._click_retry("join_btn"):
+        if ctx.get("target_click"):
+            self._handle.click(*ctx["target_click"])
             logger.info("成员·点击加入集结")
             ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
 
