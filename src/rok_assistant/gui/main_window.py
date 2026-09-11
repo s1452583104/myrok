@@ -54,6 +54,9 @@ class MainWindow(QMainWindow):
         root.addLayout(top)
         # Account area
         self.account_area = QScrollArea()
+        # 内部容器必须随卡片撑开，否则真机窗口里卡片区一片空白
+        # （离屏测试只断言卡片对象存在，测不出不可见——2026-09-11 实机验收发现）
+        self.account_area.setWidgetResizable(True)
         self.account_widget = QWidget()
         self.account_layout = QVBoxLayout(self.account_widget)
         self.account_layout.addStretch()
