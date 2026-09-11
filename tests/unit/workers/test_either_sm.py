@@ -137,3 +137,49 @@ def test_last_image_delegates_to_active_phase():
     assert sm.last_image is None  # 尚未运行
     sm.step()  # IDLE -> NORMALIZE（leader 阶段 _find 捕获过帧）
     assert sm.last_image is not None
+
+
+def test_wait_return_polls_queue_badge_until_empty(monkeypatch):
+    # 配置了 queue_badge：填兵结束后进入 WAIT_RETURN，徽标在 → 不终态；
+    # 徽标消失（部队回城）→ 终态（2026-09-11 验收反馈的返城等待机制）
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    for _ in range(60):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN", f"未进入返城等待: {sm.history[-5:]}"
+    assert not sm.is_terminal()
+    _FakeTime.t += 60    # 越过 30s 检测节流
+    for _ in range(2):   # 徽标持续可见：保持等待，不终态
+        sm.step()
+        _FakeTime.t += 60
+    assert sm.current == "WAIT_RETURN"
+    assert not sm.is_terminal()
+    badge.recognize.return_value.matched = False   # 部队回城
+    _FakeTime.t += 60
+    sm.step()
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
+
+
+def test_wait_return_without_badge_keeps_old_behavior():
+    # 未配置 queue_badge（v1 模板缺失时）：member END 即终态，行为不变
+    sm = _make_sm(fill_targets=[])
+    assert "queue_badge" not in sm._leader._rec
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
+    assert "WAIT_RETURN" not in sm.history

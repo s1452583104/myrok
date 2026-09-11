@@ -1,6 +1,11 @@
 from __future__ import annotations
+import threading
 import time
+import weakref
 from .state_machine import StateMachine
+from ..infra.logger import get_logger
+
+logger = get_logger(__name__)
 
 _MAX_NO_RESULT = 3
 _MAX_LOCKED = 5
@@ -8,6 +13,12 @@ _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
 # 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
 # 0.4s 间隔实测 19 连点零丢失）。测试里置 0 免真实睡眠。
 _LEVEL_CLICK_PACE = 0.35
+# 搜索面板会记住上次等级：进程内按句柄缓存上次设置的等级，每轮只点差量
+# （2026-09-11 验收反馈：每轮 12 降 + N 升太慢）。弱引用键随句柄回收自动
+# 失效，避免 id 复用导致脏缓存；锁保护两个 worker 线程的并发读写。
+# 已知限制：若玩家在 GUI 运行期间手动改过面板等级，缓存会偏一轮。
+_LEVEL_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_LEVEL_CACHE_LOCK = threading.Lock()
 
 
 class LeaderStateMachine(StateMachine):
@@ -89,14 +100,30 @@ class LeaderStateMachine(StateMachine):
         # tab_fortress 模板采的是未选中（灰色）态：匹配到 ⇔ 当前不在城寨页，
         # 点它切换；已在城寨页（棕色选中态）不匹配，_click 自动跳过。
         self._click("tab_fortress")
-        # 搜索面板记住上次的等级（观察到 8）：先 minus 连点 12 次压到 1 级
-        # 下限，再 plus 到目标等级。每次点击后固定停顿防丢点击。
-        for _ in range(12):
-            self._click("level_minus")
+        # 等级差量调整：缓存缺失（GUI 启动后首轮）才连点降到底，之后每轮
+        # 只点与目标的差量；等级已是目标则零点击（2026-09-11 验收反馈）。
+        with _LEVEL_CACHE_LOCK:
+            cached = _LEVEL_CACHE.get(self._handle)
+        if cached == self._target_level:
+            logger.info("[车头] 面板等级已是 %s 级，跳过调整", self._target_level)
+            return
+        if cached is None:
+            logger.info("[车头] 面板等级未知，先降到底再升到 %s 级", self._target_level)
+            for _ in range(12):
+                self._click("level_minus")
+                time.sleep(_LEVEL_CLICK_PACE)
+            start = 1
+        else:
+            start = cached
+        delta = self._target_level - start
+        btn = "level_plus" if delta > 0 else "level_minus"
+        for _ in range(abs(delta)):
+            self._click(btn)
             time.sleep(_LEVEL_CLICK_PACE)
-        for _ in range(max(0, self._target_level - 1)):
-            self._click("level_plus")
-            time.sleep(_LEVEL_CLICK_PACE)
+        with _LEVEL_CACHE_LOCK:
+            _LEVEL_CACHE[self._handle] = self._target_level
+        logger.info("[车头] 面板等级 %s → %s 级（%s 次点击）",
+                    start, self._target_level, (12 if cached is None else 0) + abs(delta))
 
     def _confirm_search(self, ctx):
         self._click_retry("search_btn")
@@ -112,6 +139,9 @@ class LeaderStateMachine(StateMachine):
         ctx["last_search_toast"] = self._find("toast_no_fortress") is not None
         ctx["search_outcome"] = "no_result"
         ctx["no_result_count"] = ctx["no_result_count"] + 1
+        logger.warning("[车头] 搜索无结果（第 %s/%s 次，toast 可见=%s）",
+                       ctx["no_result_count"], _MAX_NO_RESULT,
+                       ctx["last_search_toast"])
 
     def _retry_search(self, ctx):
         # toast 弹出时搜索面板仍在背后——直接再搜一次
@@ -129,6 +159,8 @@ class LeaderStateMachine(StateMachine):
 
     def _recover_locked(self, ctx):
         # 点空地关掉详情弹窗，重新归一化视图后再搜
+        logger.warning("[车头] 城寨被锁定（第 %s/%s 次），关闭详情重搜",
+                       ctx.get("locked_count", 0), _MAX_LOCKED)
         self._handle.click(*_EMPTY_GROUND)
 
     def _give_up(self, ctx):
@@ -141,6 +173,9 @@ class LeaderStateMachine(StateMachine):
         ctx["failed"] = True
         ctx["fail_reason"] = ("locked_fortress" if ctx.get("locked_count", 0) >= _MAX_LOCKED
                               else "no_fortress_found")
+        logger.warning("[车头] 放弃本轮集结：%s（无结果 %s 次 / 锁定 %s 次），"
+                       "冷却后自动重试", ctx["fail_reason"],
+                       ctx.get("no_result_count", 0), ctx.get("locked_count", 0))
         self.last_rally_event = None
 
     def _open_troop_form(self, ctx):
@@ -168,6 +203,8 @@ class LeaderStateMachine(StateMachine):
             "fortress_level": self._target_level,
             "march_preset": self._march_preset,
         }
+        logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
+                    self._target_level, self._march_preset)
         if self._bus:
             self._bus.publish("rally_launched", self.last_rally_event)
 

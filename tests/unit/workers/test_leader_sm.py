@@ -38,8 +38,8 @@ def _mock_rec(matched=True):
     return rec
 
 
-RECOGNIZER_IDS = ("map_btn", "search_icon", "level_plus", "level_minus",
-                  "search_btn", "red_rally", "toast_no_fortress",
+RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
+                  "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
                   "troop_cavalry", "march_btn")
 
@@ -70,19 +70,54 @@ def test_happy_path_reaches_end_and_publishes():
     assert sm.last_rally_event["march_preset"] == 1
     # real flow must have clicked red_rally (the fixed bug: old code never did)
     # exact click count, all mocks center (50,50): search_icon 1 +
-    # level_minus 12 + level_plus 6 + search_btn 1 + red_rally 1 +
-    # blue_rally 1 + preset_1 1 + troop_cavalry 1 + march_btn 1 = 25
-    assert handle.clicks.count((50, 50)) == 25
+    # tab_fortress 1 + level_minus 12 + level_plus 6 + search_btn 1 +
+    # red_rally 1 + blue_rally 1 + preset_1 1 + troop_cavalry 1 +
+    # march_btn 1 = 26
+    assert handle.clicks.count((50, 50)) == 26
 
 
 def test_select_level_resets_with_minus_then_plus():
     sm, handle = _make_sm(target_level=3)
     sm.step()  # IDLE -> NORMALIZE (search_icon visible: no map_btn click)
     sm.step()  # NORMALIZE -> SEARCH_FORTRESS (1 click on search_icon)
-    sm.step()  # SEARCH_FORTRESS -> SELECT_LEVEL (minus*12 + plus*2 = 14 clicks)
+    sm.step()  # SEARCH_FORTRESS -> SELECT_LEVEL (tab + minus*12 + plus*2 = 15 clicks)
     sm.step()  # SELECT_LEVEL -> CONFIRM_SEARCH (1 click on search_btn)
-    # actions fire on the edge into the next state: 1 + 14 + 1 = 16
-    assert len(handle.clicks) == 16
+    # actions fire on the edge into the next state: 1 + 15 + 1 = 17
+    assert len(handle.clicks) == 17
+
+
+def test_select_level_reuses_cached_level():
+    # 等级缓存：同一句柄第二轮只点差量；等级已是目标则零点击
+    # （2026-09-11 验收反馈：每轮 12 降 + N 升太慢）
+    from rok_assistant.workers.leader_sm import _LEVEL_CACHE
+    sm, handle = _make_sm(target_level=7)
+    for _ in range(3):   # 走到 SELECT_LEVEL：首轮全量 12 降 + 6 升
+        sm.step()
+        if sm.current == "SELECT_LEVEL":
+            break
+    base = handle.clicks.count((50, 50))
+    assert base == 1 + 1 + 18   # search_icon + tab_fortress + 18 次等级点击
+
+    sm2 = LeaderStateMachine(handle, {k: _mock_rec() for k in RECOGNIZER_IDS},
+                             target_level=7, march_preset=1,
+                             march_troop_types=["cavalry"])
+    assert _LEVEL_CACHE.get(handle) == 7
+    for _ in range(3):
+        sm2.step()
+        if sm2.current == "SELECT_LEVEL":
+            break
+    # 第二轮：等级已是 7 → 只有 search_icon + tab_fortress 两次点击
+    assert handle.clicks.count((50, 50)) == base + 2
+
+    # 目标变化时只点差量：7 → 3 为 4 次 minus
+    sm3 = LeaderStateMachine(handle, {k: _mock_rec() for k in RECOGNIZER_IDS},
+                             target_level=3, march_preset=1,
+                             march_troop_types=["cavalry"])
+    for _ in range(3):
+        sm3.step()
+        if sm3.current == "SELECT_LEVEL":
+            break
+    assert handle.clicks.count((50, 50)) == base + 2 + 2 + 4
 
 
 def test_no_result_toast_retries_then_ends():

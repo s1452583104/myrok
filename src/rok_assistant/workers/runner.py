@@ -7,6 +7,49 @@ from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
 
+# 状态 → 中文提示（日志用）。未收录的状态如实打印原值，新增状态无需注册。
+_STATE_ZH = {
+    # Runner 自身生命周期（小写）
+    "idle": "已启动，状态机就绪",
+    "paused": "已暂停：模拟器窗口失联，等待恢复",
+    "cooldown": "本轮结束，冷却后自动开始下一轮",
+    "error": "出现异常，已截图记录，退避后自动重试",
+    # 通用 SM 状态
+    "IDLE": "待机",
+    "END": "本轮结束",
+    # 车头阶段（LEADER: 前缀）
+    "LEADER:IDLE": "车头·待机",
+    "LEADER:NORMALIZE": "车头·回到地图视图",
+    "LEADER:SEARCH_FORTRESS": "车头·打开搜索面板",
+    "LEADER:SELECT_LEVEL": "车头·设置城寨等级",
+    "LEADER:CONFIRM_SEARCH": "车头·点击搜索",
+    "LEADER:CHECK_RESULT": "车头·检查搜索结果",
+    "LEADER:CLICK_RED_RALLY": "车头·点击城寨红色集结按钮",
+    "LEADER:VERIFY_UNLOCKED": "车头·确认城寨未被锁定",
+    "LEADER:SELECT_RALLY_TIME": "车头·发起集结进攻",
+    "LEADER:FORM_TROOP": "车头·创建部队（预设槽+兵种）",
+    "LEADER:LAUNCH": "车头·点击行军，集结出发",
+    "LEADER:WAIT_MEMBERS": "车头·等待成员填兵",
+    # 成员阶段（MEMBER: 前缀）
+    "MEMBER:IDLE": "成员·待机",
+    "MEMBER:WAIT_LAUNCH_EVENT": "成员·等待车头的发车事件",
+    "MEMBER:SWITCH_TO_SELF": "成员·切换到自己视图",
+    "MEMBER:NORMALIZE": "成员·回到地图视图",
+    "MEMBER:OPEN_ALLIANCE": "成员·打开联盟面板",
+    "MEMBER:OPEN_WAR": "成员·打开联盟战争列表",
+    "MEMBER:SORT_BY_NEAREST": "成员·按距离排序集结列表",
+    "MEMBER:FILTER": "成员·筛选可加入的集结",
+    "MEMBER:CLICK_JOIN": "成员·点击加入集结",
+    "MEMBER:FORM_TROOP": "成员·创建部队填兵",
+    "MEMBER:LAUNCH": "成员·点击行军，填兵出发",
+    "MEMBER:SWITCH_BACK": "成员·返回自己城市",
+    # either 角色返城等待
+    "WAIT_RETURN": "等待集结部队返城",
+}
+
+def _zh(state: str) -> str:
+    return _STATE_ZH.get(state, state)
+
 
 class WorkerRunner:
     """每角色一个线程：循环 step 状态机、发布状态、异常截图、终态冷却重建。
@@ -88,6 +131,11 @@ class WorkerRunner:
                     continue
                 if self.sm.is_terminal():
                     self._reached_terminal = True
+                    reason = getattr(self.sm, "fail_reason", None)
+                    if reason:
+                        logger.warning("worker %s/%s[%s] 本轮失败结束：%s",
+                                       self.instance_id, self.char_id,
+                                       self.char_name, reason)
                     self._set_status("cooldown")
                     self._stop_event.wait(self._cooldown)
                     if self._stop_event.is_set():
@@ -110,7 +158,8 @@ class WorkerRunner:
         if state == self._status:
             return
         self._status = state
-        logger.info("worker %s/%s -> %s", self.instance_id, self.char_id, state)
+        logger.info("worker %s/%s[%s] -> %s", self.instance_id, self.char_id,
+                    self.char_name, _zh(state))
         if self._bus:
             self._bus.publish("status_update", {
                 "instance_id": self.instance_id, "char_id": self.char_id,
