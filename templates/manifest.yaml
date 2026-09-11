@@ -307,7 +307,7 @@ templates:
   - 1080
 - id: queue_panel
   file: queue_panel.png
-  threshold: 0.9
+  threshold: 0.8
   roi:
   - 1700
   - 15
