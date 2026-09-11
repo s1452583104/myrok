@@ -11,10 +11,10 @@ templates:
   file: alliance_btn.png
   threshold: 0.9
   roi:
-  - 1280
-  - 920
-  - 1520
-  - 1080
+  - 1790
+  - 810
+  - 1920
+  - 930
 - id: level_minus
   file: level_minus.png
   threshold: 0.9
@@ -95,30 +95,22 @@ templates:
   - 250
   - 1660
   - 350
-- id: war_btn
-  file: war_btn.png
-  threshold: 0.9
-  roi:
-  - 780
-  - 520
-  - 980
-  - 700
-- id: sort_dropdown
-  file: sort_dropdown.png
-  threshold: 0.9
-  roi:
-  - 200
-  - 120
-  - 740
-  - 200
 - id: join_btn
   file: join_btn.png
   threshold: 0.9
   roi:
-  - 1280
-  - 350
-  - 1400
-  - 760
+  - 1270
+  - 340
+  - 1420
+  - 780
+- id: swap_btn
+  file: swap_btn.png
+  threshold: 0.9
+  roi:
+  - 1270
+  - 340
+  - 1420
+  - 780
 - id: war_title
   file: war_title.png
   threshold: 0.9
@@ -127,22 +119,6 @@ templates:
   - 20
   - 1120
   - 110
-- id: sort_nearest
-  file: sort_nearest.png
-  threshold: 0.9
-  roi:
-  - 200
-  - 190
-  - 740
-  - 360
-- id: war_empty
-  file: war_empty.png
-  threshold: 0.9
-  roi:
-  - 400
-  - 480
-  - 1520
-  - 600
 - id: settings_btn
   file: settings_btn.png
   threshold: 0.9
@@ -313,3 +289,11 @@ templates:
   - 900
   - 250
   - 1080
+- id: queue_badge
+  file: queue_badge.png
+  threshold: 0.9
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 300

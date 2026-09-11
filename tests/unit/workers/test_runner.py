@@ -19,8 +19,8 @@ def _member_factory(recognizers=None):
     def build():
         handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
         recs = {k: recognizers or _mock_rec() for k in (
-            "map_btn", "search_icon", "alliance_btn", "war_btn", "sort_nearest",
-            "join_btn", "march_btn")}
+            "map_btn", "search_icon", "alliance_btn", "war_title",
+            "join_btn", "swap_btn")}
         return MemberStateMachine(handle, recs, [{"instance": "i1", "name": "B"}])
     return build
 
@@ -106,8 +106,7 @@ def test_runner_publishes_fail_reason_on_status_update():
     def build():
         handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
         recs = {k: _mock_rec() for k in ("map_btn", "search_icon", "alliance_btn",
-                                         "war_btn", "sort_nearest", "join_btn",
-                                         "march_btn")}
+                                         "war_title", "join_btn", "swap_btn")}
         return MemberStateMachine(handle, recs, [{"instance": "i1", "name": "B"}])
 
     bus = EventBus()

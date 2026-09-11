@@ -3,20 +3,39 @@ from unittest.mock import MagicMock
 from rok_assistant.workers.member_sm import MemberStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
 
-def _mock_rec():
+
+class _FakeTime:
+    """Deterministic clock（同 test_leader_sm）：_wait_for/_click_retry 的
+    轮询睡眠替换为瞬时推进，免测试烧真实秒数。"""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def _mock_rec(matched=True):
     rec = MagicMock()
-    rec.recognize.return_value.matched = True
+    rec.recognize.return_value.matched = matched
     rec.recognize.return_value.bbox = MagicMock(center=lambda: (50, 50))
     return rec
 
+
+RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
+                  "join_btn", "swap_btn")
+
+
 def _make_sm():
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
-    recs = {k: _mock_rec() for k in ("map_btn", "search_icon", "alliance_btn",
-                                     "war_btn", "sort_nearest", "join_btn",
-                                     "march_btn")}
-    # 录桩（守卫用户要求 2026-09-09「填兵不使用预设」）：preset_1/troop_cavalry
-    # 同样永远命中 —— 基类 _find 用 .get() 取识别器，缺键只会静默 no-op 而非
-    # KeyError，所以必须靠「recognize 从未被调用」来让回归大声失败。
+    recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    # 录桩（守卫用户要求 2026-09-09「填兵不使用预设」）：新链路点「+」即以
+    # 默认部队出兵，preset_*/troop_* 识别器根本不应存在。基类 _find 用
+    # .get() 取识别器，缺键只会静默 no-op 而非 KeyError，所以把假识别器
+    # 塞进去靠「recognize 从未被调用」让回归大声失败。
     rec_preset = _mock_rec()
     rec_troop = _mock_rec()
     recs["preset_1"] = rec_preset
@@ -25,49 +44,89 @@ def _make_sm():
                             fill_target_leaders=[{"instance": "i1", "name": "Boss"}])
     return sm, handle, rec_preset, rec_troop
 
-def test_member_receives_event_and_joins_without_preset():
+
+def test_member_receives_event_and_joins_without_preset(monkeypatch):
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, rec_preset, rec_troop = _make_sm()
+    # war_title 在旗帜被点击前不可见（真实时序）：点击后出现面板标题
+    wres = sm._rec["war_title"].recognize.return_value
+
+    def _wt(img):
+        wres.matched = len(handle.clicks) > 0
+        return wres
+
+    sm._rec["war_title"].recognize.side_effect = _wt
     sm.on_rally_launched({"rally_id": "r1", "fortress_level": 8, "march_preset": 1})
     for _ in range(40):
         sm.step()
         if sm.is_terminal():
             break
     assert sm.current == "END"
-    # 5 次点击：OPEN_ALLIANCE + OPEN_WAR + SORT + JOIN + LAUNCH。
-    # （IDLE->WAIT_LAUNCH_EVENT、SWITCH_TO_SELF、SWITCH_BACK 无点击；
-    #  NORMALIZE 命中 search_icon，不点 map_btn；FILTER 无点击；
-    #  FORM_TROOP 只等弹窗，无点击。）
-    assert len(handle.clicks) == 5
+    # 2 次点击：OPEN_WAR 点联盟旗帜 + CLICK_JOIN 点绿「+」。真实链路
+    # （2026-09-11 实机）：点「+」即以默认部队加入并发兵 —— 无表单、
+    # 无行军按钮，swap_btn 出现即成功。
+    assert len(handle.clicks) == 2
     # 预设槽位与兵种图标从未被识别（识别必先于点击，未被识别即绝无点击）
     assert rec_preset.recognize.call_count == 0
     assert rec_troop.recognize.call_count == 0
     # launch 事件已被消费并留存
     assert sm._pending_event is None
     assert sm.last_event["rally_id"] == "r1"
+    assert sm._ctx["joined"] is True
 
-def test_member_form_troop_does_not_click_preset_or_troops():
-    sm, handle, rec_preset, rec_troop = _make_sm()
-    sm.on_rally_launched({"rally_id": "r1"})
-    for _ in range(9):
-        sm.step()
-    assert sm.current == "FORM_TROOP"
-    clicks_before = len(handle.clicks)
-    sm.step()  # FORM_TROOP -> LAUNCH：只点 march_btn，不点预设/兵种
-    assert len(handle.clicks) == clicks_before + 1
-    assert rec_preset.recognize.call_count == 0
-    assert rec_troop.recognize.call_count == 0
 
-def test_filter_exhaustion_exits_to_end_with_failure_marker():
+def test_join_click_without_swap_confirmation_reopens_panel(monkeypatch):
+    # 点了「+」但 swap_btn 未出现（点击未生效）：必须重开列表重试而不是
+    # 谎报成功 —— 旧代码盲进（点击失败不回读）是实机幻走事故的根源
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, _, _ = _make_sm()
     sm.on_rally_launched({"rally_id": "r1"})
-    sm._ctx["war_attempts"] = 11  # 白盒预置：直接命中耗尽守卫（ctx 为内部状态）
+    sm._rec["swap_btn"].recognize.return_value.matched = False
+    reached_click = False
     for _ in range(40):
+        sm.step()
+        if sm.current == "CLICK_JOIN":
+            reached_click = True
+        if reached_click and sm.current == "OPEN_WAR":
+            break
+    assert reached_click
+    assert sm.current == "OPEN_WAR"   # 回流重开列表，而不是 END
+    assert sm._ctx["joined"] is False
+    assert sm._ctx.get("fail_reason") is None
+
+
+def test_normalize_exits_search_then_finds_flag(monkeypatch):
+    # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
+    # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError
+    # （环境异常走 runner 错误路径），而不是静默继续
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["alliance_btn"].recognize.return_value.matched = False
+    sm.on_rally_launched({"rally_id": "r1"})
+    try:
+        for _ in range(10):
+            sm.step()
+    except RuntimeError as e:
+        assert "联盟旗帜不可见" in str(e)
+    else:
+        raise AssertionError("应当抛 RuntimeError 而不是静默继续")
+    # 唯一一次点击是 search_back（map_btn 在 elif 分支未被触达）
+    assert handle.clicks == [(50, 50)]
+
+
+def test_poll_exhaustion_exits_to_end_with_failure_marker(monkeypatch):
+    # 列表开着但始终没有绿「+」：轮询耗尽后 give-up（no_rally_found），
+    # runner 冷却重建重试 —— 与旧 FILTER 耗尽语义一致
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    sm.on_rally_launched({"rally_id": "r1"})
+    sm._rec["join_btn"].recognize.return_value.matched = False
+    for _ in range(120):
         sm.step()
         if sm.is_terminal():
             break
     assert sm.current == "END"
-    # END 出口必须赢过 FILTER->OPEN_WAR 重试边（耗尽守卫与重试守卫同时为真，
-    # step 按注册顺序取第一个命中 —— 耗尽边注册在前）
-    assert sm.history[-2] == "FILTER"
     assert sm._ctx["failed"] is True
     assert sm._ctx["fail_reason"] == "no_rally_found"
+    assert sm.history.count("FIND_JOIN") == 12   # 1 次进入 + 11 次轮询自环

@@ -25,10 +25,11 @@ LEADER_IDS = (
     "search_btn", "toast_no_fortress", "red_rally", "rally_attack_popup",
     "blue_rally", "march_btn", "preset_1", "troop_cavalry",
 )
-# member 填兵不点预设/兵种（用户要求 2026-09-09）：无 preset_*/troop_* id
+# member 填兵不点预设/兵种（用户要求 2026-09-09）：无 preset_*/troop_* id；
+# 实机链路（2026-09-11）：旗帜 -> 战争列表 -> 点绿「+」即默认部队出兵
 MEMBER_IDS = (
-    "search_icon", "map_btn", "alliance_btn", "war_btn",
-    "sort_nearest", "join_btn", "march_btn",
+    "search_icon", "map_btn", "search_back", "alliance_btn",
+    "war_title", "join_btn", "swap_btn",
 )
 
 
