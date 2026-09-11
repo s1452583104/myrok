@@ -109,6 +109,10 @@ class LeaderStateMachine(StateMachine):
             # mumu0 77/140）：关闭让本轮按点击失败自然耗尽 —— 连续 3 轮
             # 失败后 runner 以疑似体力耗尽停止，而非死堵在弹窗上
             self._handle.click(1638, 120)
+        if self._find("form_title"):
+            # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
+            # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
+            self._handle.click(1671, 64)
         if self._find("search_back"):
             # 搜索面板残留（上轮进程被杀在搜索中、或成员阶段回流遗留）：
             # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图

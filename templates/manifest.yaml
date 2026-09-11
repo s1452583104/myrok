@@ -337,3 +337,11 @@ templates:
   - 90
   - 1300
   - 170
+- id: form_title
+  file: form_title.png
+  threshold: 0.9
+  roi:
+  - 800
+  - 20
+  - 1120
+  - 110

@@ -107,9 +107,11 @@ class EitherStateMachine:
         self._next_check = now + _WAIT_RETURN_POLL
         # 战争列表开着会盖住徽标区域（member VERIFY_JOINED 结束时重开了
         # 面板）：先关面板再读徽标 —— 2026-09-12 实机：行军后 2s 首查即
-        # 误判「已回城」（面板开着徽标不可见），部队其实刚出发
+        # 误判「已回城」（面板开着徽标不可见），部队其实刚出发。刚点完
+        # X 的那拍画面未及刷新，本周期不下结论，下个周期再读
         if self._leader._find("war_title"):
             self._leader._handle.click(1671, 64)
+            return
         r = self._leader._find("queue_badge")
         if r is not None and r.matched:
             logger.info("[等待返城] 派遣队列非空，部队仍在城外")

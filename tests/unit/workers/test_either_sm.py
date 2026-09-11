@@ -161,6 +161,11 @@ def test_wait_return_polls_queue_badge_until_empty(monkeypatch):
             break
     assert sm.current == "WAIT_RETURN", f"未进入返城等待: {sm.history[-5:]}"
     assert not sm.is_terminal()
+    # 战争面板 mock 换成独立的不匹配实例（共享 mock 恒匹配会让新的
+    # 「先关面板」分支每拍点 X 返回，徽标永远读不到）
+    wt = _mock_rec()
+    wt.recognize.return_value.matched = False
+    sm._leader._rec["war_title"] = wt
     _FakeTime.t += 60    # 越过 30s 检测节流
     for _ in range(2):   # 徽标持续可见：保持等待，不终态
         sm.step()
@@ -185,3 +190,30 @@ def test_wait_return_without_badge_keeps_old_behavior():
     assert sm.is_terminal()
     assert sm.current == "MEMBER:END"
     assert "WAIT_RETURN" not in sm.history
+
+
+def test_wait_return_closes_war_panel_before_reading_badge(monkeypatch):
+    # VERIFY_JOINED 结束时重开了战争列表，面板盖住徽标区域 —— 2026-09-12
+    # 实机：行军后 2s 首查误判「已回城」。等待循环必须先关面板；刚点完
+    # X 那拍画面未及刷新，不下结论，下个周期再读
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False   # 徽标不可见（被面板盖住）
+    sm._leader._rec["queue_badge"] = badge
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    _FakeTime.t += 60
+    sm.step()   # war_title 可见：点 X 并返回，不得就此判「已回城」
+    assert sm.current == "WAIT_RETURN"
+    assert not sm.is_terminal()
+    assert (1671, 64) in sm._leader._handle.clicks

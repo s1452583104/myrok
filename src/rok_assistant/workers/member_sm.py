@@ -138,6 +138,10 @@ class MemberStateMachine(StateMachine):
             # 3 轮失败后 runner 以疑似体力耗尽停止（目标停止条件），而非
             # 死堵在弹窗上 6 连异常停机
             self._handle.click(1638, 120)
+        if self._find("form_title"):
+            # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
+            # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
+            self._handle.click(1671, 64)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):
