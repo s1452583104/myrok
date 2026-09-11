@@ -41,7 +41,7 @@ def _mock_rec(matched=True):
 RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
-                  "troop_cavalry", "march_btn")
+                  "troop_cavalry", "march_btn", "war_title")
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -168,3 +168,18 @@ def test_failed_march_click_does_not_publish():
     # a failed march_btn click must never wake members
     assert events == []
     assert sm.last_rally_event is None
+
+
+def test_normalize_closes_leftover_war_panel(monkeypatch):
+    # 战争列表开着会盖住左下角按钮（成员阶段回流/上一轮残留）：
+    # 归一化必须先点面板右上角 X（1671,64）再继续 —— 2026-09-11 实机
+    # 首跑 mumu1 因此异常循环
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["search_icon"].recognize.return_value.matched = False
+    try:
+        for _ in range(5):
+            sm.step()
+    except RuntimeError:
+        pass   # 后续 search 仍会失败（search_icon 恒不可见），只看面板被关
+    assert (1671, 64) in handle.clicks

@@ -128,6 +128,7 @@ def test_normalize_exits_search_then_finds_flag(monkeypatch):
     sm, handle, _, _ = _make_sm()
     recs = sm._rec
     recs["alliance_btn"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False   # 无面板残留
     sm.on_rally_launched({"rally_id": "r1"})
     try:
         for _ in range(10):

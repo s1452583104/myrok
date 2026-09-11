@@ -109,9 +109,14 @@ class MemberStateMachine(StateMachine):
         pass
 
     def _normalize_view(self, ctx):
-        # 地图视图的标志是右下角联盟旗帜可见。搜索面板开着时底部栏变成
-        # 搜索目标栏、旗帜不可见（2026-09-11 实机），先退搜索；城市视图
-        # 则点 map_btn 回地图。
+        # 地图视图的标志是右下角联盟旗帜可见。战争列表开着（上一轮残留）
+        # 会盖住左下角按钮：先点右上角 X（固定几何 1671,64）关掉。搜索面板
+        # 开着时底部栏变成搜索目标栏、旗帜不可见（2026-09-11 实机），先退
+        # 搜索；城市视图则点 map_btn 回地图。
+        if self._find("alliance_btn"):
+            return
+        if self._find("war_title"):
+            self._handle.click(1671, 64)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):

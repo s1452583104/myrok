@@ -88,6 +88,12 @@ class LeaderStateMachine(StateMachine):
         # map_btn 不匹配（0.528），模板不会误触发——先查 search_icon 再按需点
         if self._find("search_icon"):
             return
+        # 战争列表开着会盖住左下角按钮（成员阶段回流/上一轮残留）：
+        # 点面板右上角 X（固定几何 1671,64）关掉再归一化
+        if self._find("war_title"):
+            self._handle.click(1671, 64)
+            if self._wait_for("search_icon", timeout=6.0):
+                return
         self._click("map_btn")
         self._wait_for("search_icon", timeout=6.0)
 
