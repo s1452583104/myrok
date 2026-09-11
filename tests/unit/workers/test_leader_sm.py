@@ -41,7 +41,8 @@ def _mock_rec(matched=True):
 RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
-                  "troop_cavalry", "march_btn", "war_title", "queue_panel")
+                  "troop_cavalry", "march_btn", "war_title", "queue_panel",
+                  "search_back")
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -199,3 +200,37 @@ def test_normalize_collapses_queue_sidebar(monkeypatch):
     except RuntimeError:
         pass   # 后续 search 仍会失败（search_icon 恒不可见），只看侧栏被收
     assert (1550, 320) in handle.clicks
+
+
+def test_normalize_exits_leftover_search_panel(monkeypatch):
+    # 搜索面板残留（上轮进程被杀在搜索中，2026-09-12 实机 mumu0）：
+    # 搜索模式专属底栏盖掉 map_btn，归一化必须先点 search_back 退搜索
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["search_icon"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    recs["map_btn"].recognize.return_value.matched = False   # 退搜索后已在地图视图
+    # search_back 点击后搜索面板关闭、地图视图 search_icon 可见（真实时序）
+    sres = recs["search_back"].recognize.return_value
+
+    def _sb(img):
+        sres.matched = not handle.clicks
+        return sres
+
+    recs["search_back"].recognize.side_effect = _sb
+    ires = recs["search_icon"].recognize.return_value
+
+    def _si(img):
+        ires.matched = len(handle.clicks) >= 1
+        return ires
+
+    recs["search_icon"].recognize.side_effect = _si
+    for _ in range(4):
+        sm.step()
+        if sm.current == "SEARCH_FORTRESS":
+            break
+    assert sm.current == "SEARCH_FORTRESS"
+    # search_back（归一化）+ search_icon（进入 SEARCH_FORTRESS 的动作）；
+    # map_btn 未被点（真实地图视图不匹配）
+    assert handle.clicks == [(50, 50), (50, 50)]

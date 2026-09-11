@@ -100,6 +100,10 @@ class LeaderStateMachine(StateMachine):
                 return
         if self._find("queue_panel"):
             self._handle.click(*_QUEUE_SIDEBAR_DISMISS)
+        if self._find("search_back"):
+            # 搜索面板残留（上轮进程被杀在搜索中、或成员阶段回流遗留）：
+            # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图
+            self._click("search_back")
         self._click("map_btn")
         self._wait_for("search_icon", timeout=6.0)
 
