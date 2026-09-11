@@ -5,6 +5,9 @@ from .state_machine import StateMachine
 _MAX_NO_RESULT = 3
 _MAX_LOCKED = 5
 _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
+# 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
+# 0.4s 间隔实测 19 连点零丢失）。测试里置 0 免真实睡眠。
+_LEVEL_CLICK_PACE = 0.35
 
 
 class LeaderStateMachine(StateMachine):
@@ -86,11 +89,13 @@ class LeaderStateMachine(StateMachine):
         # 点它切换；已在城寨页（棕色选中态）不匹配，_click 自动跳过。
         self._click("tab_fortress")
         # 搜索面板记住上次的等级（观察到 8）：先 minus 连点 12 次压到 1 级
-        # 下限，再 plus 到目标等级
+        # 下限，再 plus 到目标等级。每次点击后固定停顿防丢点击。
         for _ in range(12):
             self._click("level_minus")
+            time.sleep(_LEVEL_CLICK_PACE)
         for _ in range(max(0, self._target_level - 1)):
             self._click("level_plus")
+            time.sleep(_LEVEL_CLICK_PACE)
 
     def _confirm_search(self, ctx):
         self._click_retry("search_btn")

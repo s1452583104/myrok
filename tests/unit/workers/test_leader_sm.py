@@ -27,6 +27,8 @@ class _FakeTime:
 @pytest.fixture(autouse=True)
 def _fast_time(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    # 等级连点防丢的停顿在单测里置 0，免真实睡眠
+    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
 
 
 def _mock_rec(matched=True):
