@@ -179,9 +179,11 @@ class LeaderStateMachine(StateMachine):
         self._click_retry("red_rally")
 
     def _verify_unlocked(self, ctx):
-        # 锁定 = 点 red_rally 后 5 秒内集结攻击弹窗未出现（§3.3）；
-        # ⭐ 书签与锁定无关
-        ctx["not_locked"] = self._wait_for("rally_attack_popup", timeout=5.0)
+        # 锁定 = 点 red_rally 后集结攻击弹窗未出现（§3.3）。超时 5s -> 10s：
+        # 2026-09-12 实机 mumu0/mumu1 同秒被判锁定（第 1、2/5 次）—— 弹窗
+        # 服务器慢加载超 5s 被误判，每次误判白烧一轮全量重搜（~40s）还
+        # 烧锁定计数。误判代价远高于真锁定多等 5s。
+        ctx["not_locked"] = self._wait_for("rally_attack_popup", timeout=10.0)
         if not ctx["not_locked"]:
             ctx["locked_count"] = ctx.get("locked_count", 0) + 1
 
