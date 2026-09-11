@@ -116,9 +116,9 @@ def test_form_troop_missing_march_btn_reopens_panel(monkeypatch):
     assert reached_form
     assert sm.current == "OPEN_WAR"
     assert sm._ctx["form_open"] is False
-    # 只有「+」一次点击（mock 下 war_title 直接命中，旗帜点击被跳过），
+    # 「+」一次点击 + _join_missed 的清残留空地点击（960,300）；
     # 行军从未被点过
-    assert handle.clicks == [(1335, 161)]
+    assert handle.clicks == [(1335, 161), (960, 300)]
 
 
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
@@ -184,3 +184,33 @@ def test_poll_exhaustion_exits_to_end_with_failure_marker(monkeypatch):
     assert sm._ctx["failed"] is True
     assert sm._ctx["fail_reason"] == "no_rally_found"
     assert sm.history.count("FIND_JOIN") == 12   # 1 次进入 + 11 次轮询自环
+
+
+def test_failed_join_clears_stale_match_and_repolls(monkeypatch):
+    # 加入失败回流后必须清掉 join_found/target_click 再重新轮询：
+    # 不清会用陈旧坐标无限点击、计数器冻结、永不重算（2026-09-11 实机
+    # 事故：两台各空转 40+ 轮「点击加入集结」）。回归判据：目标行只在
+    # 首轮被真匹配时点过一次「+」；目标消失后经轮询耗尽正常终态
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    sm.on_rally_launched({"rally_id": "r1"})
+    # 首轮：名字匹配成功走到点「+」；行军按钮等不到（表单失败回流）
+    sm._rec["march_btn"].recognize.return_value.matched = False
+    reached_click = False
+    for _ in range(30):
+        sm.step()
+        if sm.current == "CLICK_JOIN":
+            reached_click = True
+        if reached_click and sm.current == "OPEN_WAR":
+            break
+    assert reached_click
+    # 回流后目标行消失：不得再点第二次「+」，必须走轮询并耗尽
+    sm._rec["fill_Boss"].recognize.return_value.matched = False
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm._ctx["failed"] is True
+    assert sm._ctx["fail_reason"] == "no_rally_found"
+    assert handle.clicks.count((1335, 161)) == 1   # 陈旧坐标没有被再次点击

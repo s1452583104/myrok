@@ -192,10 +192,23 @@ class MemberStateMachine(StateMachine):
             logger.info("成员·点击行军，填兵出发")
 
     def _verify_join(self, ctx):
+        # 行军点击后创建部队弹窗关闭、战争列表也已关（「+」点击会关面板）：
+        # 先重开列表再看目标行按钮是否变成橙「替换」——面板不开 swap_btn
+        # 永远不可见，会把成功误判为失败
+        if not self._find("war_title"):
+            self._click_retry("alliance_btn")
         ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
 
     def _join_missed(self, ctx):
-        # 「+」/行军点击未生效或表单没出来：重开列表再找
+        # 「+」/行军点击未生效或表单没出来：重开列表再找。必须清掉上一轮
+        # 的匹配结果——FIND_JOIN 的 CLICK_JOIN 边 guard 只看 join_found，
+        # 不清就会带陈旧 target_click 无限点击（2026-09-11 实机事故：
+        # 两台各空转 40+ 轮、计数器全部冻结、永不重算）；顺手点一下空地，
+        # 关掉可能残留的弹窗/地图选中，避免遮挡后续的联盟旗帜。
+        ctx["join_found"] = False
+        ctx["target_click"] = None
+        ctx["panel_open"] = False   # 面板可能已被「+」点击带走，回 _open_war 重查
+        self._handle.click(960, 300)
         logger.warning("成员·加入未生效，重开战争列表重试")
 
     def _exhausted(self, ctx):
