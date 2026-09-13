@@ -114,6 +114,19 @@ class EitherStateMachine:
             return
         r = self._leader._find("queue_badge")
         if r is not None and r.matched:
+            # 徽标只说明「有队列在城外」：采集队在外同样点亮徽标（2026-09-13
+            # 实机：mumu1 一队采集在外，空等 25 分钟超时）。右侧 */5 队列
+            # 头像右下角绿色锄头 = 正在采集（用户确认），采集队列不阻塞开
+            # 集结 —— 识别器配置且命中时视为已回城，直接进下一轮。
+            # 已知限制：模板匹配只取最优一处，采集+行军混合在外时可能
+            # 误判为全采集，v1 接受
+            g = self._leader._find("queue_gather_icon")
+            if g is not None and g.matched:
+                logger.info("[等待返城] 城外仅采集队列，不影响开集结，本轮完成")
+                self._phase = "done"
+                self.current = "MEMBER:END"
+                self.history.append(self.current)
+                return
             logger.info("[等待返城] 派遣队列非空，部队仍在城外")
             return
         logger.info("[等待返城] 派遣队列已空，集结部队已回城，本轮完成")

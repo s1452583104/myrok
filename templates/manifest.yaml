@@ -321,6 +321,14 @@ templates:
   - 150
   - 1920
   - 300
+- id: queue_gather_icon   # 右侧 */5 队列头像右下角的绿色锄头=采集中
+  file: queue_gather_icon.png   # 正 1.000（采集帧），负 <=0.344，阈值 0.8
+  threshold: 0.8
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 600
 - id: join_create_btn
   file: join_create.png
   threshold: 0.9

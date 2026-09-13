@@ -217,3 +217,64 @@ def test_wait_return_closes_war_panel_before_reading_badge(monkeypatch):
     assert sm.current == "WAIT_RETURN"
     assert not sm.is_terminal()
     assert (1671, 64) in sm._leader._handle.clicks
+
+
+def test_wait_return_gather_only_queue_does_not_block(monkeypatch):
+    # 徽标只说明「有队列在城外」：采集队在外同样点亮徽标（2026-09-13 实机
+    # mumu1 一队采集在外空等 25 分钟）。队列头像右下角绿色锄头=采集，
+    # 仅采集在外不阻塞开集结 —— 立即终态进下一轮
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    gather = _mock_rec()          # 共享 mock：默认 matched=True（仅采集在外）
+    sm._leader._rec["queue_gather_icon"] = gather
+    wt = _mock_rec()
+    wt.recognize.return_value.matched = False
+    sm._leader._rec["war_title"] = wt
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN"
+    _FakeTime.t += 60
+    sm.step()   # 徽标在但仅采集在外：本轮完成，不空等
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
+
+
+def test_wait_return_march_queue_still_waits(monkeypatch):
+    # 徽标在、绿色锄头不在（行军/战斗队列在外）：保持等待不终态
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    gather = _mock_rec()
+    gather.recognize.return_value.matched = False   # 行军队在外：无采集锄头
+    sm._leader._rec["queue_gather_icon"] = gather
+    wt = _mock_rec()
+    wt.recognize.return_value.matched = False
+    sm._leader._rec["war_title"] = wt
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN"
+    _FakeTime.t += 60
+    sm.step()
+    assert not sm.is_terminal()
+    assert sm.current == "WAIT_RETURN"
