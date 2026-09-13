@@ -28,7 +28,7 @@ def _mock_rec(matched=True):
 RECOGNIZER_IDS = ("search_back", "map_btn", "alliance_btn", "war_title",
                   "join_btn", "swap_btn", "march_btn", "fill_Boss",
                   "queue_panel", "join_create_btn", "rally_attack_popup",
-                  "ap_refill", "form_title")
+                  "ap_refill", "form_title", "replace_popup")
 
 
 def _make_sm():
@@ -47,6 +47,7 @@ def _make_sm():
     recs["rally_attack_popup"] = _mock_rec(matched=False)
     recs["ap_refill"] = _mock_rec(matched=False)
     recs["form_title"] = _mock_rec(matched=False)
+    recs["replace_popup"] = _mock_rec(matched=False)
     sm = MemberStateMachine(handle_source=handle, recognizers=recs,
                             fill_target_leaders=[{"instance": "i1", "name": "Boss"}])
     return sm, handle, rec_preset, rec_troop
@@ -249,3 +250,58 @@ def test_normalize_dismisses_leftover_rally_popup(monkeypatch):
     assert sm.current == "OPEN_WAR"
     # 弹窗空地关闭 + OPEN_WAR 点联盟旗帜
     assert handle.clicks == [(960, 540), (50, 50)]
+
+
+def test_already_joined_replace_popup_skips_to_verify(monkeypatch):
+    # 部队已在目标集结中：点「+」弹「部队替换」确认而非创建部队（2026-09-13
+    # 实机 mumu0）。不替换、不点行军，直接走 VERIFY_JOINED 回读橙「替换」
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    sm.on_rally_launched({"rally_id": "r1"})
+    # 点「+」后（CLICK_JOIN 之后）替换弹窗出现；VERIFY_JOINED 时 swap 可见
+    rres = sm._rec["replace_popup"].recognize.return_value
+
+    def _rp(img):
+        rres.matched = handle.clicks.count((1335, 161)) >= 1   # 点过「+」后
+        return rres
+
+    sm._rec["replace_popup"].recognize.side_effect = _rp
+    for _ in range(40):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.current == "END"
+    assert sm._ctx.get("already_joined") is True
+    assert sm._ctx["joined"] is True
+    # 行军从未被点过：替换会白回城还多烧行动力
+    march_rec = sm._rec["march_btn"]
+    assert march_rec.recognize.call_count == 0
+    # 替换弹窗被 X 关闭（1500,170）
+    assert (1500, 170) in handle.clicks
+
+
+def test_normalize_dismisses_leftover_replace_popup(monkeypatch):
+    # 部队替换弹窗残留（进程被杀在弹窗上，2026-09-13 实机 mumu0）：
+    # 归一化须点弹窗右上角 X（1500,170）再继续
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["alliance_btn"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    recs["replace_popup"].recognize.return_value.matched = True
+    # 弹窗被点掉后地图视图旗帜可见（真实时序）
+    ares = recs["alliance_btn"].recognize.return_value
+
+    def _ab(img):
+        ares.matched = len(handle.clicks) >= 1
+        return ares
+
+    recs["alliance_btn"].recognize.side_effect = _ab
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(5):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert sm.current == "OPEN_WAR"
+    assert handle.clicks == [(1500, 170), (50, 50)]

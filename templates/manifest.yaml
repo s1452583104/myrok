@@ -322,13 +322,29 @@ templates:
   - 1920
   - 300
 - id: queue_gather_icon   # 右侧 */5 队列头像右下角的绿色锄头=采集中
-  file: queue_gather_icon.png   # 正 1.000（采集帧），负 <=0.344，阈值 0.8
+  file: queue_gather_icon.png   # 正 1.000（采集帧），负 <=0.366，阈值 0.8
   threshold: 0.8
   roi:
   - 1700
   - 150
   - 1920
-  - 600
+  - 850
+- id: queue_march_icon    # 绿色脚印=行军中（战斗队列，阻塞搜索-集结）
+  file: queue_march_icon.png    # 正 1.000，负 <=0.666，阈值 0.85
+  threshold: 0.85
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
+- id: queue_flag_icon     # 蓝色旗帜=驻扎/集结等待（战斗队列，阻塞搜索-集结）
+  file: queue_flag_icon.png     # 正 1.000/0.996，负 <=0.473，阈值 0.85
+  threshold: 0.85
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
 - id: join_create_btn
   file: join_create.png
   threshold: 0.9
@@ -353,3 +369,11 @@ templates:
   - 20
   - 1120
   - 110
+- id: replace_popup   # 「部队替换」确认弹窗标题（部队已在集结中又点「+」）
+  file: replace_popup.png   # 正 1.000，负 <=0.277，阈值 0.9
+  threshold: 0.9
+  roi:
+  - 700
+  - 100
+  - 1250
+  - 260

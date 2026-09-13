@@ -113,6 +113,10 @@ class LeaderStateMachine(StateMachine):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
             # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
             self._handle.click(1671, 64)
+        if self._find("replace_popup"):
+            # 部队替换确认弹窗残留（成员链路点「+」时部队已在集结中，
+            # 2026-09-13 实机 mumu0）：不替换，点弹窗右上角 X 关闭
+            self._handle.click(1500, 170)
         if self._find("search_back"):
             # 搜索面板残留（上轮进程被杀在搜索中、或成员阶段回流遗留）：
             # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图

@@ -89,9 +89,12 @@ class MemberStateMachine(StateMachine):
         self.add_transition("FIND_JOIN", "FIND_JOIN", self._poll_join,
                             guard=lambda ctx: not ctx.get("join_found"))
         # guard 先于 action 求值：每步的副作用都放在入口 action 里完成，
-        # 结果写进 ctx 供下一条边的 guard 使用。点击「+」后仍要经过
-        # 「创建部队」「行军」两步（2026-09-11 用户实机确认）
+        # 结果写进 ctx 供下一条边 guard 使用。点击「+」后仍要经过
+        # 「创建部队」「行军」两步（2026-09-11 用户实机确认）。
+        # 已加入快速通道必须注册在 FORM_TROOP→LAUNCH 之前（注册序匹配）
         self.add_transition("CLICK_JOIN", "FORM_TROOP", self._form_troop)
+        self.add_transition("FORM_TROOP", "VERIFY_JOINED", lambda ctx: None,
+                            guard=lambda ctx: ctx.get("already_joined"))
         self.add_transition("FORM_TROOP", "LAUNCH", lambda ctx: None,
                             guard=lambda ctx: ctx.get("form_open"))
         self.add_transition("FORM_TROOP", "OPEN_WAR", self._join_missed,
@@ -142,6 +145,10 @@ class MemberStateMachine(StateMachine):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
             # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
             self._handle.click(1671, 64)
+        if self._find("replace_popup"):
+            # 部队替换确认弹窗残留（部队已在集结中又点「+」，2026-09-13
+            # 实机 mumu0）：不替换（被替换部队白回城），点弹窗右上角 X
+            self._handle.click(1500, 170)
         if self._find("alliance_btn"):
             return
         if self._find("search_back"):
@@ -194,6 +201,14 @@ class MemberStateMachine(StateMachine):
             logger.info("成员·点击加入集结")
 
     def _form_troop(self, ctx):
+        # 部队已在目标集结中：点「+」弹的是「部队替换」确认而非创建部队
+        # （2026-09-13 实机 mumu0）。不替换 —— 被替换部队会白回城还多烧
+        # 一次行动力，直接视为已加入，走 VERIFY_JOINED 回读橙「替换」确认
+        if self._find("replace_popup"):
+            self._handle.click(1500, 170)
+            ctx["already_joined"] = True
+            logger.info("成员·部队已在目标集结中，跳过重复加入")
+            return
         # 「+」点击后（面板关闭、地图跳转）出现的是派遣队列侧栏展开态 +
         # 「创建部队」引导气泡（2026-09-12 实机连拍实锤）：真正的创建部队
         # 表单要点气泡里的蓝色「创建部队」按钮才出现，之后才能点行军。

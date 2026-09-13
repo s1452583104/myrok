@@ -221,8 +221,9 @@ def test_wait_return_closes_war_panel_before_reading_badge(monkeypatch):
 
 def test_wait_return_gather_only_queue_does_not_block(monkeypatch):
     # 徽标只说明「有队列在城外」：采集队在外同样点亮徽标（2026-09-13 实机
-    # mumu1 一队采集在外空等 25 分钟）。队列头像右下角绿色锄头=采集，
-    # 仅采集在外不阻塞开集结 —— 立即终态进下一轮
+    # mumu1 一队采集在外空等 25 分钟）。队列头像右下角图标区分：绿色锄头=
+    # 采集、绿色脚印=行军、蓝色旗帜=驻扎/集结等待。无战斗队列图标在外
+    # （仅采集）不阻塞开集结 —— 立即终态进下一轮
     class _FakeTime:
         t = 1000.0
 
@@ -234,8 +235,10 @@ def test_wait_return_gather_only_queue_does_not_block(monkeypatch):
     sm = _make_sm(fill_targets=[])
     badge = _mock_rec()
     sm._leader._rec["queue_badge"] = badge
-    gather = _mock_rec()          # 共享 mock：默认 matched=True（仅采集在外）
-    sm._leader._rec["queue_gather_icon"] = gather
+    for icon in ("queue_march_icon", "queue_flag_icon"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False   # 仅采集：无战斗队列图标
+        sm._leader._rec[icon] = rec
     wt = _mock_rec()
     wt.recognize.return_value.matched = False
     sm._leader._rec["war_title"] = wt
@@ -251,7 +254,7 @@ def test_wait_return_gather_only_queue_does_not_block(monkeypatch):
 
 
 def test_wait_return_march_queue_still_waits(monkeypatch):
-    # 徽标在、绿色锄头不在（行军/战斗队列在外）：保持等待不终态
+    # 徽标在、绿色脚印（行军中）在外：保持等待不终态
     class _FakeTime:
         t = 1000.0
 
@@ -263,9 +266,12 @@ def test_wait_return_march_queue_still_waits(monkeypatch):
     sm = _make_sm(fill_targets=[])
     badge = _mock_rec()
     sm._leader._rec["queue_badge"] = badge
-    gather = _mock_rec()
-    gather.recognize.return_value.matched = False   # 行军队在外：无采集锄头
-    sm._leader._rec["queue_gather_icon"] = gather
+    march = _mock_rec()   # 行军队在外：绿色脚印图标可见
+    march.recognize.return_value.matched = False
+    sm._leader._rec["queue_march_icon"] = march
+    flag = _mock_rec()
+    flag.recognize.return_value.matched = False
+    sm._leader._rec["queue_flag_icon"] = flag
     wt = _mock_rec()
     wt.recognize.return_value.matched = False
     sm._leader._rec["war_title"] = wt
@@ -274,7 +280,66 @@ def test_wait_return_march_queue_still_waits(monkeypatch):
         if sm.current == "WAIT_RETURN":
             break
     assert sm.current == "WAIT_RETURN"
+    march.recognize.return_value.matched = True   # 本轮集结部队行军中
     _FakeTime.t += 60
     sm.step()
     assert not sm.is_terminal()
     assert sm.current == "WAIT_RETURN"
+    march.recognize.return_value.matched = False   # 部队回城
+    _FakeTime.t += 60
+    sm.step()
+    assert sm.is_terminal()
+    assert sm.current == "MEMBER:END"
+
+
+def test_gate_blocks_search_while_march_queue_out(monkeypatch):
+    # 2026-09-13 用户要求：上一轮集结部队未回城就搜下一轮，会搜到上轮
+    # 已锁定的城寨且车头回不了城 —— 行军/驻扎队列在外时轮次入口
+    # （IDLE/NORMALIZE）拦截，不进搜索；回城后放行
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    march = _mock_rec()   # 上一轮集结部队还在城外
+    sm._leader._rec["queue_march_icon"] = march
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"   # 门槛拦下：轮次根本没启动
+    assert not any("SEARCH" in h for h in sm.history)
+    march.recognize.return_value.matched = False   # 部队回城
+    for _ in range(30):
+        sm.step()
+        if sm.current == "LEADER:SEARCH_FORTRESS":
+            break
+    assert sm.current == "LEADER:SEARCH_FORTRESS"
+
+
+def test_gate_allows_search_when_only_gather_out(monkeypatch):
+    # 仅采集队列在外：不阻塞搜索-集结（用户确认 1-3 队采集在外不影响）
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    for icon in ("queue_march_icon", "queue_flag_icon"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False
+        sm._leader._rec[icon] = rec
+    for _ in range(30):
+        sm.step()
+        if sm.current == "LEADER:SEARCH_FORTRESS":
+            break
+    assert sm.current == "LEADER:SEARCH_FORTRESS"

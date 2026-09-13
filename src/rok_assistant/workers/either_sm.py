@@ -54,12 +54,25 @@ class EitherStateMachine:
         self._failed = False
         self._wait_deadline = 0.0
         self._next_check = 0.0
+        self._gate_next_log = 0.0
 
     def step(self, context: dict | None = None) -> None:
         if context is not None:
             self._ctx = context
         ctx = self._ctx
         if self._phase == "leader":
+            # 搜索-集结前置门槛（2026-09-13 用户要求）：上一轮集结部队
+            # 未回城就搜下一轮，会搜到上轮已锁定的城寨、且车头回不了城。
+            # 有行军/驻扎队列在外时原地等待，只在轮次入口（IDLE/NORMALIZE）
+            # 拦截，日志 30s 节流
+            if self._leader.current in ("IDLE", "NORMALIZE") \
+                    and self._march_queue_out():
+                now = time.time()
+                if now >= self._gate_next_log:
+                    self._gate_next_log = now + 30.0
+                    logger.info("[集结门槛] 有行军/驻扎队列在城外，等待回城"
+                                "后再搜索")
+                return
             self._leader.step(ctx)
             self.current = f"LEADER:{self._leader.current}"
             if self._leader.is_terminal():
@@ -93,6 +106,22 @@ class EitherStateMachine:
                     self._phase = "done"   # current 保持 MEMBER:END
         self.history.append(self.current)
 
+    def _march_queue_out(self) -> bool:
+        # 右侧 */5 徽标只说明「有队列在城外」，采集队在外同样点亮
+        # （2026-09-13 实机：mumu1 一队采集在外空等 25 分钟）。队列头像
+        # 右下角图标区分（用户确认）：绿色锄头=采集（不阻塞开集结），
+        # 绿色脚印=行军中、蓝色旗帜=驻扎/集结等待（战斗队列，阻塞）。
+        # 徽标不可见=无队列在外。徽标在但图标不可辨时放行 —— 模板只覆盖
+        # 已见过的三种图标，未知图标漏检 v1 接受
+        r = self._leader._find("queue_badge")
+        if r is None or not r.matched:
+            return False
+        for icon in ("queue_march_icon", "queue_flag_icon"):
+            g = self._leader._find(icon)
+            if g is not None and g.matched:
+                return True
+        return False
+
     def _step_wait_return(self) -> None:
         now = time.time()
         if now >= self._wait_deadline:
@@ -114,20 +143,16 @@ class EitherStateMachine:
             return
         r = self._leader._find("queue_badge")
         if r is not None and r.matched:
-            # 徽标只说明「有队列在城外」：采集队在外同样点亮徽标（2026-09-13
-            # 实机：mumu1 一队采集在外，空等 25 分钟超时）。右侧 */5 队列
-            # 头像右下角绿色锄头 = 正在采集（用户确认），采集队列不阻塞开
-            # 集结 —— 识别器配置且命中时视为已回城，直接进下一轮。
-            # 已知限制：模板匹配只取最优一处，采集+行军混合在外时可能
-            # 误判为全采集，v1 接受
-            g = self._leader._find("queue_gather_icon")
-            if g is not None and g.matched:
-                logger.info("[等待返城] 城外仅采集队列，不影响开集结，本轮完成")
-                self._phase = "done"
-                self.current = "MEMBER:END"
-                self.history.append(self.current)
+            # 徽标在：看队列头像右下角图标（见 _march_queue_out 注释）——
+            # 仅采集在外不阻塞开集结，直接进下一轮；行军/驻扎队列在外
+            # 继续等
+            if self._march_queue_out():
+                logger.info("[等待返城] 行军/驻扎队列仍在城外")
                 return
-            logger.info("[等待返城] 派遣队列非空，部队仍在城外")
+            logger.info("[等待返城] 城外仅采集队列，不影响开集结，本轮完成")
+            self._phase = "done"
+            self.current = "MEMBER:END"
+            self.history.append(self.current)
             return
         logger.info("[等待返城] 派遣队列已空，集结部队已回城，本轮完成")
         self._phase = "done"
