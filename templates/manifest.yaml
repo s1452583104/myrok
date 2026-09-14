@@ -313,9 +313,9 @@ templates:
   - 15
   - 1920
   - 70
-- id: queue_badge
-  file: queue_badge.png
-  threshold: 0.9
+- id: queue_badge         # 右侧「派遣队列 */5」蓝色扩展按钮（2026-09-14 紧裁剪重采）
+  file: queue_badge.png   # 正 1.000/0.907，负 <=0.710（战争详情面板），阈值 0.85
+  threshold: 0.85
   roi:
   - 1700
   - 150
@@ -337,8 +337,9 @@ templates:
   - 150
   - 1920
   - 850
-- id: queue_flag_icon     # 蓝色旗帜=驻扎/集结等待（战斗队列，阻塞搜索-集结）
-  file: queue_flag_icon.png     # 正 1.000/0.996，负 <=0.473，阈值 0.85
+- id: queue_flag_icon     # 蓝色旗帜=行军去集结/驻扎/集结等待（战斗队列，阻塞搜索-集结）
+  file: queue_flag_icon.png     # 2026-09-14 紧裁剪重采（旧裁剪含背景，正样本掉到 0.724 漏检）：
+                                # 正 1.000（含行军去集结帧），负 <=0.493，阈值 0.85
   threshold: 0.85
   roi:
   - 1700

@@ -10,6 +10,11 @@ logger = get_logger(__name__)
 # 开完集结+填兵后应等自己的集结部队回城再开下一轮，最大限度保持集结效率）。
 _WAIT_RETURN_POLL = 30.0      # 徽标检测间隔（秒）；检测本身是纯截图，无侵入
 _WAIT_RETURN_MAX = 1500.0     # 最长等待 25 分钟，超时强制进入下一轮
+# 门槛「未知队列图标」宽限期：徽标在但三种图标都不可辨时 fail-closed 拦截
+# 搜索；若该状态持续超过宽限期（疑似采集/斥候等未知良性队列），放行并告警
+# —— 2026-09-14 实机：旧模板背景像素敏感（正样本掉到 0.72/0.88）导致
+# 误判「仅采集/已回城」提前开下一轮集结，改为未知不轻易放行
+_QUEUE_UNKNOWN_GRACE = 300.0
 
 
 class EitherStateMachine:
@@ -55,6 +60,7 @@ class EitherStateMachine:
         self._wait_deadline = 0.0
         self._next_check = 0.0
         self._gate_next_log = 0.0
+        self._unknown_since: float | None = None
 
     def step(self, context: dict | None = None) -> None:
         if context is not None:
@@ -64,15 +70,25 @@ class EitherStateMachine:
             # 搜索-集结前置门槛（2026-09-13 用户要求）：上一轮集结部队
             # 未回城就搜下一轮，会搜到上轮已锁定的城寨、且车头回不了城。
             # 有行军/驻扎队列在外时原地等待，只在轮次入口（IDLE/NORMALIZE）
-            # 拦截，日志 30s 节流
-            if self._leader.current in ("IDLE", "NORMALIZE") \
-                    and self._march_queue_out():
-                now = time.time()
-                if now >= self._gate_next_log:
-                    self._gate_next_log = now + 30.0
-                    logger.info("[集结门槛] 有行军/驻扎队列在城外，等待回城"
-                                "后再搜索")
-                return
+            # 拦截，日志 30s 节流。未知队列图标同样拦截（fail-closed，
+            # 2026-09-14 实机），持续超宽限期才放行，防未知良性队列卡死调度
+            if self._leader.current in ("IDLE", "NORMALIZE"):
+                verdict = self._queue_verdict()
+                if verdict != "unknown":
+                    self._unknown_since = None
+                if verdict == "battle":
+                    self._gate_log("有行军/驻扎队列在城外，等待回城后再搜索")
+                    return
+                if verdict == "unknown":
+                    now = time.time()
+                    if self._unknown_since is None:
+                        self._unknown_since = now
+                    if now - self._unknown_since < _QUEUE_UNKNOWN_GRACE:
+                        self._gate_log("队列图标不可辨（按在外处理），暂缓"
+                                       "搜索")
+                        return
+                    logger.warning("[集结门槛] 未知队列图标已持续 %ss，放行"
+                                   "搜索", _QUEUE_UNKNOWN_GRACE)
             self._leader.step(ctx)
             self.current = f"LEADER:{self._leader.current}"
             if self._leader.is_terminal():
@@ -106,21 +122,34 @@ class EitherStateMachine:
                     self._phase = "done"   # current 保持 MEMBER:END
         self.history.append(self.current)
 
-    def _march_queue_out(self) -> bool:
-        # 右侧 */5 徽标只说明「有队列在城外」，采集队在外同样点亮
-        # （2026-09-13 实机：mumu1 一队采集在外空等 25 分钟）。队列头像
-        # 右下角图标区分（用户确认）：绿色锄头=采集（不阻塞开集结），
-        # 绿色脚印=行军中、蓝色旗帜=驻扎/集结等待（战斗队列，阻塞）。
-        # 徽标不可见=无队列在外。徽标在但图标不可辨时放行 —— 模板只覆盖
-        # 已见过的三种图标，未知图标漏检 v1 接受
+    def _queue_verdict(self) -> str:
+        """右侧 */5 派遣队列判读（2026-09-14 实机重校准）：
+
+        - 'none'    徽标不可见=无队列在外
+        - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待（阻塞）
+        - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
+        - 'unknown' 徽标在但三种图标都不可辨 —— fail-closed 按在外处理。
+          2026-09-14 实机教训：旧模板裁剪含周边背景像素，换场景后正样本
+          掉到 0.72/0.88（阈值 0.85/0.9 之下），误判「仅采集/已回城」
+          提前开下一轮集结。未知图标宁可等待，不放行
+        """
         r = self._leader._find("queue_badge")
         if r is None or not r.matched:
-            return False
+            return "none"
         for icon in ("queue_march_icon", "queue_flag_icon"):
             g = self._leader._find(icon)
             if g is not None and g.matched:
-                return True
-        return False
+                return "battle"
+        g = self._leader._find("queue_gather_icon")
+        if g is not None and g.matched:
+            return "gather"
+        return "unknown"
+
+    def _gate_log(self, message: str) -> None:
+        now = time.time()
+        if now >= self._gate_next_log:
+            self._gate_next_log = now + 30.0
+            logger.info("[集结门槛] %s", message)
 
     def _step_wait_return(self) -> None:
         now = time.time()
@@ -141,18 +170,21 @@ class EitherStateMachine:
         if self._leader._find("war_title"):
             self._leader._handle.click(1671, 64)
             return
-        r = self._leader._find("queue_badge")
-        if r is not None and r.matched:
-            # 徽标在：看队列头像右下角图标（见 _march_queue_out 注释）——
-            # 仅采集在外不阻塞开集结，直接进下一轮；行军/驻扎队列在外
-            # 继续等
-            if self._march_queue_out():
-                logger.info("[等待返城] 行军/驻扎队列仍在城外")
-                return
+        verdict = self._queue_verdict()
+        if verdict == "battle":
+            logger.info("[等待返城] 行军/驻扎队列仍在城外")
+            return
+        if verdict == "gather":
             logger.info("[等待返城] 城外仅采集队列，不影响开集结，本轮完成")
             self._phase = "done"
             self.current = "MEMBER:END"
             self.history.append(self.current)
+            return
+        if verdict == "unknown":
+            # 徽标在但图标不可辨：继续等（有 25 分钟上限兜底），不轻易
+            # 判「已回城」—— 2026-09-14 实机两次误判均源于此路径放行
+            logger.info("[等待返城] 队列徽标在但图标不可辨，谨慎起见继续"
+                        "等待")
             return
         logger.info("[等待返城] 派遣队列已空，集结部队已回城，本轮完成")
         self._phase = "done"
