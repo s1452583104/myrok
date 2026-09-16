@@ -43,6 +43,7 @@
 | **预设主将未回城误开集结（09-16 用户报告）**：主将在返程/战斗态（黄色返回、红色交叉刀剑图标未覆盖）时 unknown 宽限 5 分钟一到就放行，默认武将代开车打不过寨子 | `_queue_verdict` 战斗元组扩展 `queue_return_icon`/`queue_battle_icon`（模板采样中，`_qsamples/` 后台采集）；unknown 宽限 5→15 分钟；battle 判定无宽限（越过宽限仍拦截，回归测试覆盖） | f9acef6 |
 | **误开集结复发（09-16 用户报告二）**：主将战斗/返程态无模板时，混合队列里采集锄头匹配成功 → verdict='gather' 掩盖未识别战斗态照常放行（用户已手动取消集结） | `_qsamples/` 实机采样补齐四模板并全量校准（真识别链零误报）：`queue_battle_icon` 红交叉刀剑 0.5（正 7 帧 0.534-1.0/负 ≤0.466）、`queue_return_icon` 橙返程箭头 0.55（正 5 帧 0.619-1.0/负 ≤0.509）、`queue_recall_icon` 红盘上箭头=取消集结召回 0.65（正 1.0/0.719/负 ≤0.506）入 battle 元组；红盘系模板互有串扰但同判 battle 无害，漏检方向 unknown=fail-closed 安全 | 本轮提交 |
 | 部队已在集结中点「+」弹「部队替换」卡死（mumu0） | 不替换（白回城+多烧行动力），关弹窗走 VERIFY_JOINED 回读橙「替换」；两 SM normalize 加残留分支 | f891eef |
+| **面板遮挡误判「无队列」（09-16 重启后实机）**：战争列表面板开着时右侧队列栏整体隐藏，queue_badge 判 False → 门槛放行搜索（mumu0/mumu1 双中招，mumu1 六连异常收工） | `_queue_verdict` 用「联盟旗帜可见=在地图视图」判读：地图上徽标消失才是真无队列；不在地图先关 war_title/warning_panel、点 map_btn 回地图，本拍 unknown fail-closed；`_find` 未匹配/未配置均返 None，用 `_rec.get` 区分 | 6834cc1 |
 
 ### 阈值参考（manifest.yaml，正/负分数实测）
 `queue_gather_icon` 1.000/≤0.366 (0.8) · `queue_march_icon` 1.000/≤0.666 (0.85) · `queue_flag_icon` 1.000,0.996/≤0.473 (0.85) · `replace_popup` 1.000/≤0.277 (0.9) · `join_create_btn`/`ap_refill`/`form_title` 均 1.000 正、≤0.42 负 (0.9)
