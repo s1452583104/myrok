@@ -415,7 +415,7 @@ def test_gate_unknown_queue_icon_proceeds_after_grace(monkeypatch):
     for _ in range(10):
         sm.step()
     assert sm.current == "LEADER:IDLE"
-    _FakeTime.t += 301.0   # 超过宽限期
+    _FakeTime.t += 901.0   # 超过宽限期
     for _ in range(30):
         sm.step()
         if sm.current == "LEADER:SEARCH_FORTRESS":
@@ -459,5 +459,97 @@ def test_wait_return_unknown_queue_icon_keeps_waiting(monkeypatch):
     badge.recognize.return_value.matched = True   # 填兵出发：徽标点亮
     _FakeTime.t += 60
     sm.step()   # 徽标在但图标不可辨：继续等待，不提前终态
+    assert not sm.is_terminal()
+    assert sm.current == "WAIT_RETURN"
+
+
+def test_gate_blocks_on_return_queue_icon(monkeypatch):
+    # 2026-09-16 用户报告：预设槽 1 主将未回城（右侧队列黄色返回态图标）
+    # 时照常发起集结，游戏让默认武将代开车，打不过寨子白烧行动力。
+    # 黄色返回/红色战斗图标与行军/驻扎同属战斗队列 —— 必须按 battle
+    # 拦截（无宽限放行），而不是 unknown（宽限一到就放行，正是本次事故）
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    ret = _mock_rec()   # 黄色返回图标可见
+    sm._leader._rec["queue_return_icon"] = ret
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"   # 门槛拦下：轮次根本没启动
+    assert not any("SEARCH" in h for h in sm.history)
+    _FakeTime.t += 901.0   # 越过 unknown 宽限期：battle 判定不受宽限影响
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert not any("SEARCH" in h for h in sm.history)
+
+
+def test_gate_blocks_on_battle_queue_icon(monkeypatch):
+    # 红色交叉刀剑（战斗中）图标：同上按战斗队列拦截（无宽限放行）
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    bat = _mock_rec()   # 红色战斗图标可见
+    sm._leader._rec["queue_battle_icon"] = bat
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    _FakeTime.t += 901.0
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert not any("SEARCH" in h for h in sm.history)
+
+
+def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
+    # 黄色返回态出现在 WAIT_RETURN：部队正在返程，继续等待不提前终态
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+        @classmethod
+        def sleep(cls, s):
+            cls.t += s
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False
+    sm._leader._rec["queue_badge"] = badge
+    for icon in ("queue_march_icon", "queue_flag_icon", "queue_gather_icon"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False
+        sm._leader._rec[icon] = rec
+    wt = _mock_rec()
+    wt.recognize.return_value.matched = False
+    sm._leader._rec["war_title"] = wt
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN"
+    badge.recognize.return_value.matched = True
+    sm._leader._rec["queue_return_icon"] = _mock_rec()   # 返程图标可见
+    _FakeTime.t += 60
+    sm.step()
     assert not sm.is_terminal()
     assert sm.current == "WAIT_RETURN"

@@ -10,11 +10,13 @@ logger = get_logger(__name__)
 # 开完集结+填兵后应等自己的集结部队回城再开下一轮，最大限度保持集结效率）。
 _WAIT_RETURN_POLL = 30.0      # 徽标检测间隔（秒）；检测本身是纯截图，无侵入
 _WAIT_RETURN_MAX = 1500.0     # 最长等待 25 分钟，超时强制进入下一轮
-# 门槛「未知队列图标」宽限期：徽标在但三种图标都不可辨时 fail-closed 拦截
-# 搜索；若该状态持续超过宽限期（疑似采集/斥候等未知良性队列），放行并告警
+# 门槛「未知队列图标」宽限期：徽标在但已知图标都不可辨时 fail-closed 拦截
+# 搜索；若该状态持续超过宽限期（疑似未知良性队列），放行并告警
 # —— 2026-09-14 实机：旧模板背景像素敏感（正样本掉到 0.72/0.88）导致
-# 误判「仅采集/已回城」提前开下一轮集结，改为未知不轻易放行
-_QUEUE_UNKNOWN_GRACE = 300.0
+# 误判「仅采集/已回城」提前开下一轮集结，改为未知不轻易放行。
+# 2026-09-16：5 分钟宽限曾把「主将未回城」误放行 → 默认武将代开车打不过
+# 寨子，放宽到 15 分钟（一个行军+战斗+返程周期通常 ≤12 分钟）
+_QUEUE_UNKNOWN_GRACE = 900.0
 
 
 class EitherStateMachine:
@@ -123,20 +125,23 @@ class EitherStateMachine:
         self.history.append(self.current)
 
     def _queue_verdict(self) -> str:
-        """右侧 */5 派遣队列判读（2026-09-14 实机重校准）：
+        """右侧 */5 派遣队列判读（2026-09-16 实机重校准）：
 
         - 'none'    徽标不可见=无队列在外
-        - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待（阻塞）
+        - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
+                    黄色箭头=返程中 / 红色交叉刀剑=战斗中（阻塞，无宽限）。
+                    2026-09-16 用户报告：预设主将未回城（返程/战斗态）时
+                    开集结，游戏让默认武将代开车打不过寨子
         - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
-        - 'unknown' 徽标在但三种图标都不可辨 —— fail-closed 按在外处理。
-          2026-09-14 实机教训：旧模板裁剪含周边背景像素，换场景后正样本
-          掉到 0.72/0.88（阈值 0.85/0.9 之下），误判「仅采集/已回城」
-          提前开下一轮集结。未知图标宁可等待，不放行
+        - 'unknown' 徽标在但已知图标都不可辨 —— fail-closed 按在外处理，
+          持续超宽限期才放行告警。2026-09-14 实机教训：模板裁剪含背景
+          像素换场景掉分，误判「仅采集/已回城」提前开集结。未知宁可等
         """
         r = self._leader._find("queue_badge")
         if r is None or not r.matched:
             return "none"
-        for icon in ("queue_march_icon", "queue_flag_icon"):
+        for icon in ("queue_march_icon", "queue_flag_icon",
+                     "queue_return_icon", "queue_battle_icon"):
             g = self._leader._find(icon)
             if g is not None and g.matched:
                 return "battle"
