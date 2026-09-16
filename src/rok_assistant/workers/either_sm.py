@@ -127,7 +127,7 @@ class EitherStateMachine:
     def _queue_verdict(self) -> str:
         """右侧 */5 派遣队列判读（2026-09-16 实机重校准）：
 
-        - 'none'    徽标不可见=无队列在外
+        - 'none'    地图视图上徽标不可见=无队列在外
         - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
                     黄色箭头=返程中 / 红色交叉刀剑=战斗中 /
                     红盘上箭头=召回·取消集结撤回中（阻塞，无宽限）。
@@ -136,20 +136,38 @@ class EitherStateMachine:
                     事故：返程/战斗图标无模板，采集锄头匹配把混合队列
                     误判成「仅采集」放行 —— 四态+召回全部补齐模板
         - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
-        - 'unknown' 徽标在但已知图标都不可辨 —— fail-closed 按在外处理，
-          持续超宽限期才放行告警。2026-09-14 实机教训：模板裁剪含背景
-          像素换场景掉分，误判「仅采集/已回城」提前开集结。未知宁可等
+        - 'unknown' 徽标在但已知图标都不可辨，或不在地图视图无法判读
+          —— fail-closed 按在外处理，持续超宽限期才放行告警。
+          2026-09-14 实机教训：模板裁剪含背景像素换场景掉分，误判
+          「仅采集/已回城」提前开集结。2026-09-16：战争列表面板开着时
+          队列栏整体隐藏，「徽标不可见」被误读成「无队列」放行搜索。
+          未知宁可等。注：_find 不匹配与未配置都返回 None，须用
+          _rec.get 区分（未配置=门槛不生效，保持旧行为）
         """
-        r = self._leader._find("queue_badge")
-        if r is None or not r.matched:
-            return "none"
+        if self._leader._rec.get("queue_badge") is None:
+            return "none"   # 未配置徽标识别器：门槛不生效（与旧版一致）
+        if self._leader._find("queue_badge") is None:
+            # 徽标不可见 ≠ 一定无队列在外：战争列表等面板开着时右侧队列栏
+            # 整体隐藏（2026-09-16 实机：重启后战争面板残留，mumu0/mumu1
+            # 双双被误判「无队列」放行搜索，而填兵部队还在他人集结里）。
+            # 判据用「联盟旗帜可见=在地图视图」：地图上徽标才可信。
+            # 不在地图视图时先关已知残留面板（与 normalize 同位）、点
+            # map_btn 回地图，本拍按 unknown fail-closed 拦截，下一拍在
+            # 地图视图上重新判读
+            a = self._leader._rec.get("alliance_btn")
+            if a is not None and self._leader._find("alliance_btn") is not None:
+                return "none"   # 地图视图且无徽标：队列确实为空
+            for panel in ("war_title", "warning_panel"):
+                if self._leader._find(panel) is not None:
+                    self._leader._handle.click(1671, 64)
+                    break
+            self._leader._click("map_btn")   # 城市视图则回地图；地图上不匹配即跳过
+            return "unknown"
         for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
                      "queue_battle_icon", "queue_recall_icon"):
-            g = self._leader._find(icon)
-            if g is not None and g.matched:
+            if self._leader._find(icon) is not None:
                 return "battle"
-        g = self._leader._find("queue_gather_icon")
-        if g is not None and g.matched:
+        if self._leader._find("queue_gather_icon") is not None:
             return "gather"
         return "unknown"
 
