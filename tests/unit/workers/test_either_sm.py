@@ -517,6 +517,32 @@ def test_gate_blocks_on_battle_queue_icon(monkeypatch):
     assert not any("SEARCH" in h for h in sm.history)
 
 
+def test_gate_blocks_on_recall_queue_icon(monkeypatch):
+    # 红盘白色上箭头（召回/取消集结撤回中）图标：战斗队列第五态，
+    # 同样按 battle 拦截（无宽限放行）—— 2026-09-16 实机补采模板
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    rec_ = _mock_rec()   # 召回图标可见
+    sm._leader._rec["queue_recall_icon"] = rec_
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    _FakeTime.t += 901.0
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert not any("SEARCH" in h for h in sm.history)
+
+
 def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
     # 黄色返回态出现在 WAIT_RETURN：部队正在返程，继续等待不提前终态
     class _FakeTime:

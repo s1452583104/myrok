@@ -348,6 +348,37 @@ templates:
   - 150
   - 1920
   - 850
+- id: queue_battle_icon   # 红色交叉刀剑=战斗中（阻塞，无宽限）
+  file: queue_battle_icon.png   # 2026-09-16 实机采样（_qsamples/201336_m1 等 7 帧：
+                                # 1.0/0.959/0.914/0.691/0.629/0.599/0.534，含攻击
+                                # 红光/多头像背景），非红盘负 <=0.466，阈值 0.5；
+                                # 漏检方向 unknown=fail-closed 安全
+  threshold: 0.5
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
+- id: queue_return_icon   # 黄/橙圆盘白色箭头=返程中（阻塞，无宽限）
+  file: queue_return_icon.png   # 2026-09-16 实机采样（201357_m1 等 5 帧：
+                                # 1.0/1.0/0.887/0.877/0.619 跨头像），非橙盘负
+                                # <=0.509，阈值 0.55
+  threshold: 0.55
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
+- id: queue_recall_icon   # 红圆盘白色上箭头=召回/取消集结撤回中（阻塞，无宽限）
+  file: queue_recall_icon.png   # 2026-09-16 实机采样（用户取消集结后 201940_m1/
+                                # 202001_m1 两帧 1.0/0.719），负 <=0.506，阈值 0.65；
+                                # 与 battle 模板同为红盘系互有串扰，同判 battle 无害
+  threshold: 0.65
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
 - id: join_create_btn
   file: join_create.png
   threshold: 0.9
