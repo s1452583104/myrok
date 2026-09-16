@@ -322,15 +322,17 @@ templates:
   - 1920
   - 300
 - id: queue_gather_icon   # 右侧 */5 队列头像右下角的绿色锄头=采集中
-  file: queue_gather_icon.png   # 正 1.000（采集帧），负 <=0.366，阈值 0.8
-  threshold: 0.8
+  file: queue_gather_icon.png   # 2026-09-16 纯圆重裁（图标圆心透出统帅头像，模板含
+                                # 背景则跨头像掉分：mumu0 1.0 / mumu1 0.709）：
+                                # 正 1.00/0.99/0.84（跨头像），负 <=0.49，阈值 0.75
+  threshold: 0.75
   roi:
   - 1700
   - 150
   - 1920
   - 850
 - id: queue_march_icon    # 绿色脚印=行军中（战斗队列，阻塞搜索-集结）
-  file: queue_march_icon.png    # 正 1.000，负 <=0.666，阈值 0.85
+  file: queue_march_icon.png    # 2026-09-16 纯圆重裁（去头像背景角落），负 <=0.47，阈值 0.85
   threshold: 0.85
   roi:
   - 1700
@@ -338,9 +340,9 @@ templates:
   - 1920
   - 850
 - id: queue_flag_icon     # 蓝色旗帜=行军去集结/驻扎/集结等待（战斗队列，阻塞搜索-集结）
-  file: queue_flag_icon.png     # 2026-09-14 紧裁剪重采（旧裁剪含背景，正样本掉到 0.724 漏检）：
-                                # 正 1.000（含行军去集结帧），负 <=0.493，阈值 0.85
-  threshold: 0.85
+  file: queue_flag_icon.png     # 2026-09-16 纯圆重采（09-14 版裁剪偏移实际是背景图，
+                                # 旗帜漏检 0.459）：正 1.000，负 <=0.49，阈值 0.8
+  threshold: 0.8
   roi:
   - 1700
   - 150
