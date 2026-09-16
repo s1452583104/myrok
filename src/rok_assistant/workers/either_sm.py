@@ -157,11 +157,20 @@ class EitherStateMachine:
             a = self._leader._rec.get("alliance_btn")
             if a is not None and self._leader._find("alliance_btn") is not None:
                 return "none"   # 地图视图且无徽标：队列确实为空
+            closed = False
             for panel in ("war_title", "warning_panel"):
                 if self._leader._find(panel) is not None:
                     self._leader._handle.click(1671, 64)
+                    closed = True
                     break
-            self._leader._click("map_btn")   # 城市视图则回地图；地图上不匹配即跳过
+            if not closed and self._leader._find("search_back") is not None:
+                # 搜索面板开着（残留/恢复回流）：队列栏被搜索模式底栏整体
+                # 隐藏（2026-09-16 实机 21:08 mumu1），退出搜索再判读
+                self._leader._click("search_back")
+                closed = True
+            if not closed:
+                # 城市视图：点 map_btn 回地图（地图上模板不匹配自动跳过）
+                self._leader._click("map_btn")
             return "unknown"
         for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
                      "queue_battle_icon", "queue_recall_icon"):

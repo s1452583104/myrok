@@ -332,6 +332,37 @@ def test_gate_blocks_search_while_march_queue_out(monkeypatch):
     assert sm.current == "LEADER:SEARCH_FORTRESS"
 
 
+def test_gate_closes_search_panel_covering_sidebar(monkeypatch):
+    # 2026-09-16 实机（21:08 mumu1）：搜索面板开着时右侧队列栏同样整体
+    # 隐藏（搜索模式专属底栏），门槛判 unknown 拦截却没关面板，白等
+    # 15 分钟宽限。搜索面板残留也应主动退出（点 search_back）再判读
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False   # 面板盖住队列栏
+    sm._leader._rec["queue_badge"] = badge
+    ab = _mock_rec()
+    ab.recognize.return_value.matched = False      # 搜索底栏替换了底部栏
+    sm._leader._rec["alliance_btn"] = ab
+    wt = _mock_rec()
+    wt.recognize.return_value.matched = False
+    sm._leader._rec["war_title"] = wt
+    sb = _mock_rec()   # 搜索面板开着（search_back 可见）
+    sm._leader._rec["search_back"] = sb
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert not any("SEARCH" in h for h in sm.history)
+    assert sm._leader._handle.clicks   # 门槛点过 search_back（bbox 中心）
+
+
 def test_gate_allows_search_when_only_gather_out(monkeypatch):
     # 仅采集队列在外：不阻塞搜索-集结（用户确认 1-3 队采集在外不影响）
     class _FakeTime:
