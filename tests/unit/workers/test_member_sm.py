@@ -48,6 +48,8 @@ def _make_sm():
     recs["ap_refill"] = _mock_rec(matched=False)
     recs["form_title"] = _mock_rec(matched=False)
     recs["replace_popup"] = _mock_rec(matched=False)
+    recs["menu_expanded"] = _mock_rec(matched=False)   # 底部快捷菜单展开态
+    recs["warning_panel"] = _mock_rec(matched=False)   # 「预警」警报面板
     sm = MemberStateMachine(handle_source=handle, recognizers=recs,
                             fill_target_leaders=[{"instance": "i1", "name": "Boss"}])
     return sm, handle, rec_preset, rec_troop
@@ -305,3 +307,73 @@ def test_normalize_dismisses_leftover_replace_popup(monkeypatch):
             break
     assert sm.current == "OPEN_WAR"
     assert handle.clicks == [(1500, 170), (50, 50)]
+
+
+def test_normalize_collapses_expanded_bottom_menu(monkeypatch):
+    # 底部快捷菜单展开态（战役/道具/联盟/统帅/邮件，2026-09-15 实机
+    # mumu0 00:20 六连异常收工）：展开时联盟旗帜按钮被整体隐藏，归一化
+    # 须先点右下角 ☰（1845,1010，实测再点一次即收起）再找旗帜
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["alliance_btn"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    mres = recs["menu_expanded"].recognize.return_value
+
+    def _me(img):
+        mres.matched = (1845, 1010) not in handle.clicks   # 点 ☰ 后收起
+        return mres
+
+    recs["menu_expanded"].recognize.side_effect = _me
+    # 菜单收起后地图视图旗帜可见（真实时序）
+    ares = recs["alliance_btn"].recognize.return_value
+
+    def _ab(img):
+        ares.matched = (1845, 1010) in handle.clicks
+        return ares
+
+    recs["alliance_btn"].recognize.side_effect = _ab
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(6):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert sm.current == "OPEN_WAR"
+    # 收起菜单点 ☰（收起后本就在地图视图）+ OPEN_WAR 点联盟旗帜
+    assert handle.clicks == [(1845, 1010), (50, 50)]
+
+
+def test_normalize_closes_warning_panel(monkeypatch):
+    # 「预警」面板（增援/来攻警报，游戏会在警报触发时自动弹出，2026-09-15
+    # 实机 mumu1 00:09 六连异常收工）：全屏模态盖住一切，归一化须点右上角
+    # X（1671,64，与战争列表同位）再继续
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["alliance_btn"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    wres = recs["warning_panel"].recognize.return_value
+
+    def _wp(img):
+        wres.matched = (1671, 64) not in handle.clicks   # 点 X 后关闭
+        return wres
+
+    recs["warning_panel"].recognize.side_effect = _wp
+    # 面板被关掉后地图视图旗帜可见（真实时序：面板本就弹在地图视图上）
+    ares = recs["alliance_btn"].recognize.return_value
+
+    def _ab(img):
+        ares.matched = (1671, 64) in handle.clicks
+        return ares
+
+    recs["alliance_btn"].recognize.side_effect = _ab
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(6):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert sm.current == "OPEN_WAR"
+    # 关面板点 X + OPEN_WAR 点联盟旗帜（地图视图，map_btn 不点）
+    assert handle.clicks == [(1671, 64), (50, 50)]

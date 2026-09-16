@@ -48,6 +48,10 @@ RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
 def _make_sm(target_level=7, wait=0.0):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    # 环境弹层默认不在场（专项测试再置 True）；其余弹层沿用上方默认
+    # matched=True（rally_attack_popup 等在既有测试里被当作「已出现」依赖）
+    recs["menu_expanded"] = _mock_rec(matched=False)   # 底部快捷菜单展开态
+    recs["warning_panel"] = _mock_rec(matched=False)   # 「预警」警报面板
     sm = LeaderStateMachine(handle, recs, target_level=target_level,
                             march_preset=1, march_troop_types=["cavalry"],
                             event_bus=None, wait_members_seconds=wait)
@@ -238,6 +242,51 @@ def test_normalize_exits_leftover_search_panel(monkeypatch):
     # search_back（归一化）+ search_icon（进入 SEARCH_FORTRESS 的动作）；
     # map_btn 未被点（真实地图视图不匹配）
     assert handle.clicks == [(50, 50), (50, 50)]
+
+
+def test_normalize_collapses_expanded_bottom_menu(monkeypatch):
+    # 底部快捷菜单展开态（战役/道具/联盟/统帅/邮件，2026-09-15 实机
+    # mumu0 00:20 成员阶段六连异常收工）：展开时联盟旗帜按钮被整体隐藏，
+    # 归一化须先点右下角 ☰（1845,1010，实测再点一次即收起）
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["search_icon"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    recs["rally_attack_popup"].recognize.return_value.matched = False
+    recs["ap_refill"].recognize.return_value.matched = False
+    recs["form_title"].recognize.return_value.matched = False
+    recs["replace_popup"].recognize.return_value.matched = False
+    recs["menu_expanded"].recognize.return_value.matched = True
+    recs["warning_panel"].recognize.return_value.matched = False
+    try:
+        for _ in range(5):
+            sm.step()
+    except RuntimeError:
+        pass   # 后续 search 仍会失败（search_icon 恒不可见），只看菜单被收
+    assert (1845, 1010) in handle.clicks
+
+
+def test_normalize_closes_warning_panel(monkeypatch):
+    # 「预警」面板（增援/来攻警报，游戏会在警报触发时自动弹出，2026-09-15
+    # 实机 mumu1 00:09 六连异常收工）：全屏模态盖住一切，归一化须点右上角
+    # X（1671,64，与战争列表同位）再继续
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["search_icon"].recognize.return_value.matched = False
+    recs["war_title"].recognize.return_value.matched = False
+    recs["queue_panel"].recognize.return_value.matched = False
+    recs["rally_attack_popup"].recognize.return_value.matched = False
+    recs["ap_refill"].recognize.return_value.matched = False
+    recs["form_title"].recognize.return_value.matched = False
+    recs["replace_popup"].recognize.return_value.matched = False
+    recs["warning_panel"].recognize.return_value.matched = True
+    try:
+        for _ in range(5):
+            sm.step()
+    except RuntimeError:
+        pass   # 后续 search 仍会失败（search_icon 恒不可见），只看面板被关
+    assert (1671, 64) in handle.clicks
 
 
 def test_no_result_invalidates_level_cache_and_resyncs_on_retry():

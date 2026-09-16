@@ -117,6 +117,16 @@ class LeaderStateMachine(StateMachine):
             # 部队替换确认弹窗残留（成员链路点「+」时部队已在集结中，
             # 2026-09-13 实机 mumu0）：不替换，点弹窗右上角 X 关闭
             self._handle.click(1500, 170)
+        if self._find("menu_expanded"):
+            # 底部快捷菜单展开态（战役/道具/联盟/统帅/邮件，2026-09-15 实机
+            # mumu0 00:20 六连异常收工）：展开时联盟旗帜按钮被整体隐藏。
+            # 再点一次右下角 ☰ 即收起（2026-09-16 实机验证）
+            self._handle.click(1845, 1010)
+        if self._find("warning_panel"):
+            # 「预警」面板（增援/来攻警报触发时游戏自动弹出，2026-09-15
+            # 实机 mumu1 00:09 六连异常收工）：全屏模态盖住一切，点右上角
+            # X（与战争列表同位）关闭再继续归一化
+            self._handle.click(1671, 64)
         if self._find("search_back"):
             # 搜索面板残留（上轮进程被杀在搜索中、或成员阶段回流遗留）：
             # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图
