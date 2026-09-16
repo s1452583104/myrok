@@ -171,8 +171,11 @@ class EitherStateMachine:
                 self._leader._click("search_back")
                 closed = True
             if not closed:
-                # 城市视图：点 map_btn 回地图（地图上模板不匹配自动跳过）
-                self._leader._click("map_btn")
+                # 城市视图：左下角地图图标出城按钮（实机 (72,1034)，2026-09-16
+                # 两号齐卡城市视图实锤）直接点击出城回地图。注意 map_btn
+                # 模板是地图视图的「进入城市」城堡按钮 (92,985)，在
+                # 城市视图不匹配、且语义相反，不能用它出城
+                self._leader._handle.click(72, 1034)
             return "unknown"
         for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
                      "queue_battle_icon", "queue_fight_icon", "queue_recall_icon"):

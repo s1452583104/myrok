@@ -363,6 +363,33 @@ def test_gate_closes_search_panel_covering_sidebar(monkeypatch):
     assert sm._leader._handle.clicks   # 门槛点过 search_back（bbox 中心）
 
 
+def test_gate_clicks_city_exit_when_not_on_map(monkeypatch):
+    # 2026-09-16 实机（21:16 重启后两号齐卡城市视图）：城市视图下队列栏
+    # 不显示、alliance_btn/map_btn 均不匹配（map_btn 模板是地图视图的
+    # 「进入城市」城堡按钮），门槛无动作可做白等 15 分钟宽限。城市视图
+    # 的出城按钮（地图图标，实机 (72,1034)）须由门槛直接点击
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False
+    sm._leader._rec["queue_badge"] = badge
+    for tid in ("alliance_btn", "war_title", "warning_panel", "search_back"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False
+        sm._leader._rec[tid] = rec
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert (72, 1034) in sm._leader._handle.clicks   # 门槛点了出城按钮
+
+
 def test_gate_allows_search_when_only_gather_out(monkeypatch):
     # 仅采集队列在外：不阻塞搜索-集结（用户确认 1-3 队采集在外不影响）
     class _FakeTime:
