@@ -379,6 +379,19 @@ templates:
   - 150
   - 1920
   - 850
+- id: queue_fight_icon   # 红盘双剑平行（不交叉）=战斗中动画变体（阻塞，无宽限）
+  file: queue_fight_icon.png   # 2026-09-16 用户提供截图（imgs/img_2/img_3）定位
+                               # 实机原生帧（scan/found_level/failure_*204353 等
+                               # 4 帧 1.0/0.914/0.904/0.644，刀剑动画逐帧变形），
+                               # HSV 纯圆裁剪；全量负扫真负 <=0.441，阈值 0.6；
+                               # 0.52-0.55 串扰带均为返程橙盘/交叉刀剑（同判
+                               # battle 无害，各自已有模板命中）
+  threshold: 0.6
+  roi:
+  - 1700
+  - 150
+  - 1920
+  - 850
 - id: join_create_btn
   file: join_create.png
   threshold: 0.9

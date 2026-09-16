@@ -130,11 +130,13 @@ class EitherStateMachine:
         - 'none'    地图视图上徽标不可见=无队列在外
         - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
                     黄色箭头=返程中 / 红色交叉刀剑=战斗中 /
+                    红盘双剑平行=战斗中动画变体 /
                     红盘上箭头=召回·取消集结撤回中（阻塞，无宽限）。
                     2026-09-16 用户报告：预设主将未回城（返程/战斗态）时
                     开集结，游戏让默认武将代开车打不过寨子。同日第二次
                     事故：返程/战斗图标无模板，采集锄头匹配把混合队列
-                    误判成「仅采集」放行 —— 四态+召回全部补齐模板
+                    误判成「仅采集」放行 —— 四态+召回+战斗动画变体
+                    全部补齐模板
         - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
         - 'unknown' 徽标在但已知图标都不可辨，或不在地图视图无法判读
           —— fail-closed 按在外处理，持续超宽限期才放行告警。
@@ -173,7 +175,7 @@ class EitherStateMachine:
                 self._leader._click("map_btn")
             return "unknown"
         for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
-                     "queue_battle_icon", "queue_recall_icon"):
+                     "queue_battle_icon", "queue_fight_icon", "queue_recall_icon"):
             if self._leader._find(icon) is not None:
                 return "battle"
         if self._leader._find("queue_gather_icon") is not None:
