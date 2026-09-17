@@ -131,6 +131,33 @@ def test_form_troop_missing_march_btn_reopens_panel(monkeypatch):
     assert handle.clicks == [(1335, 161), (50, 50), (960, 300)]
 
 
+def test_normalize_closes_war_panel_residual_and_confirms_map(monkeypatch):
+    # 2026-09-18 实机（run6 03:46 mumu0）：成员轮空放弃后战争面板残留，
+    # 点 X 后面板有关闭过渡，紧接的检查在淡出中全落空 → 归一化超时抛
+    # 「联盟旗帜不可见」连续计败。关面板后须等放大镜现形（地图视图
+    # 确认）才算归一化成功，而不是继续往下走死路
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["search_icon"] = _mock_rec(matched=False)
+    recs["alliance_btn"].recognize.return_value.matched = False  # 无集结：旗帜不在
+    recs["war_title"].recognize.return_value.matched = True   # 面板残留
+    si = recs["search_icon"].recognize.return_value
+
+    def _si(img):
+        si.matched = bool(handle.clicks)   # 点过 X（面板已关）后才现形
+        return si
+
+    recs["search_icon"].recognize.side_effect = _si
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(6):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert handle.clicks[0] == (1671, 64)   # 关了战争面板
+    assert sm.current == "OPEN_WAR"          # 归一化成功进入下一步，未抛异常
+
+
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
     # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
     # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError

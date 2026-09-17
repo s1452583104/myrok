@@ -126,7 +126,13 @@ class MemberStateMachine(StateMachine):
         if self._find("alliance_btn"):
             return
         if self._find("war_title"):
+            # 战争面板盖住底部栏与左缘旗帜（成员轮空放弃后面板常残留，
+            # 2026-09-18 实机 run6 03:46：点完 X 不等过渡动画，后续检查
+            # 全在淡出里落空 → 归一化超时抛异常连续计败）。先关面板，
+            # 放大镜现形（地图视图确认）即归一化成功
             self._handle.click(1671, 64)
+            if self._wait_for("search_icon", timeout=6.0):
+                return
         if self._find("alliance_btn"):
             return
         if self._find("queue_panel"):
