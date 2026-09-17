@@ -179,9 +179,13 @@ def test_stop_unsubscribes_routes_and_restart_resubscribes_once(tmp_path):
         bus.publish("rally_launched", {"rally_id": "r1"})
         for runner in FakeRunner.instances:
             assert runner.sm.events == []   # 退订后事件不再送达任何 SM
-        # 重新 start 恰好重订阅一次（漏退订会变成 2 个处理器）
+        # 重新 start 恰好重订阅一次（漏退订会多出路由处理器）；
+        # RallyEventTracker 在 __init__ 只订阅一次，重启不重复
         coord.start()
-        assert len(bus._handlers["rally_launched"]) == 1
+        routes = [h for h in bus._handlers["rally_launched"]
+                  if getattr(h, "__name__", "") == "route"]
+        assert len(routes) == 1
+        assert len(bus._handlers["rally_launched"]) == 2   # 路由 + 登记簿
         coord.stop()
 
 

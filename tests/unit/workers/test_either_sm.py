@@ -11,6 +11,9 @@ from rok_assistant.core.handle_source import MockHandleSource
 def _no_level_pace(monkeypatch):
     # leader 等级连点停顿（防丢点击）在单测里置 0，免真实睡眠
     monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
+    # 车头错峰抖动置 0：单测不烧真实睡眠；抖动专项测试自行覆盖
+    monkeypatch.setattr("rok_assistant.workers.either_sm.random.uniform",
+                        lambda a, b: 0.0)
 
 
 def _mock_rec():
@@ -40,6 +43,56 @@ def _make_sm(fill_targets=None, bus=None):
     # 不影响共享 rec 的其他识别器
     recs["red_rally"] = _mock_rec()
     return sm
+
+
+def _badge_lights_on_launch(sm, state=None):
+    """queue_badge 语义化 mock：轮次入口不可见（无队列在外 → 门槛放行），
+    行军点击后（发射已完成，clicks ≥ 10）点亮（派遣队列被本轮集结占用）
+    —— leader 的发射验证依赖徽标出现才承认发射成功；state["forced"]
+    非 None 时以它为准（WAIT_RETURN 阶段由测试显式控制出/回城）。"""
+    handle = sm._leader._handle
+    badge = _mock_rec()
+    sm._leader._rec["queue_badge"] = badge
+    res = badge.recognize.return_value
+
+    def _b(_img):
+        if state is not None and state["forced"] is not None:
+            res.matched = state["forced"]
+        else:
+            res.matched = len(handle.clicks) >= 10
+        return res
+
+    badge.recognize.side_effect = _b
+
+
+class _SeqTracker:
+    """集结事件登记簿桩：last_foreign_launch/skip 按预定序列逐次返回。
+    门槛在 IDLE/NORMALIZE 各查一次、降级判定再查一次，序列可精确编排
+    「门槛时无对方集结、发射被拒时对方集结已到」的真实竞态时序。"""
+
+    def __init__(self, launches=(), skips=()):
+        self._launches = list(launches)
+        self._skips = list(skips)
+
+    def last_foreign_launch(self, char_id, max_age):
+        return self._launches.pop(0) if self._launches else None
+
+    def last_foreign_skip(self, char_id, max_age):
+        return self._skips.pop(0) if self._skips else None
+
+
+class _HoldTracker:
+    """恒定返回固定值的登记簿桩（稳定态查询用）。"""
+
+    def __init__(self, foreign=None, skip=None):
+        self.foreign = foreign
+        self.skip = skip
+
+    def last_foreign_launch(self, char_id, max_age):
+        return self.foreign
+
+    def last_foreign_skip(self, char_id, max_age):
+        return self.skip
 
 
 def test_delegates_to_leader_then_member():
@@ -120,9 +173,10 @@ def test_leader_give_up_becomes_terminal_with_fail_reason(monkeypatch):
     assert not any(h.startswith("MEMBER:") for h in sm.history)
 
 
-def test_member_give_up_becomes_terminal_with_fail_reason():
-    # member FILTER 耗尽（与 test_member_sm 相同的白盒预置）：either SM
-    # 同样呈现为终态，runner 重建后重试 —— 与纯 member 语义一致
+def test_member_exhaust_downgrades_when_own_rally_in_flight():
+    # member FILTER 耗尽但自己的集结已发起且部队在途（leader 正常发射）：
+    # 对方无集结可填是轮空而非失败（fail_streak 会误触连续失败停机
+    # —— 2026-09-18 run11 实锤），弹出 fail_reason 按完成处理
     sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
     sm._ctx["war_attempts"] = 11
     for _ in range(200):
@@ -131,7 +185,9 @@ def test_member_give_up_becomes_terminal_with_fail_reason():
             break
     assert sm.is_terminal()
     assert sm.current == "MEMBER:END"
-    assert sm.fail_reason == "no_rally_found"
+    assert sm._leader.last_rally_event is not None
+    assert sm.fail_reason is None
+    assert sm._ctx.get("failed") is None
 
 
 def test_last_image_delegates_to_active_phase():
@@ -153,15 +209,14 @@ def test_wait_return_polls_queue_badge_until_empty(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
-    badge = _mock_rec()
-    badge.recognize.return_value.matched = False   # 轮次入口部队未出发：门槛放行
-    sm._leader._rec["queue_badge"] = badge
+    state = {"forced": None}
+    _badge_lights_on_launch(sm, state)   # 轮次入口不可见，发射后点亮
     for _ in range(200):
         sm.step()
         if sm.current == "WAIT_RETURN":
             break
     assert sm.current == "WAIT_RETURN", f"未进入返城等待: {sm.history[-5:]}"
-    badge.recognize.return_value.matched = True   # 填兵出发：徽标点亮
+    state["forced"] = True   # 填兵出发：徽标点亮
     assert not sm.is_terminal()
     # 战争面板 mock 换成独立的不匹配实例（共享 mock 恒匹配会让新的
     # 「先关面板」分支每拍点 X 返回，徽标永远读不到）
@@ -174,7 +229,7 @@ def test_wait_return_polls_queue_badge_until_empty(monkeypatch):
         _FakeTime.t += 60
     assert sm.current == "WAIT_RETURN"
     assert not sm.is_terminal()
-    badge.recognize.return_value.matched = False   # 部队回城
+    state["forced"] = False   # 部队回城
     _FakeTime.t += 60
     sm.step()
     assert sm.is_terminal()
@@ -207,9 +262,7 @@ def test_wait_return_closes_war_panel_before_reading_badge(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
-    badge = _mock_rec()
-    badge.recognize.return_value.matched = False   # 徽标不可见（被面板盖住）
-    sm._leader._rec["queue_badge"] = badge
+    _badge_lights_on_launch(sm)   # 入口不可见（无队列在外），发射后点亮
     for _ in range(200):
         sm.step()
         if sm.current == "WAIT_RETURN":
@@ -269,9 +322,8 @@ def test_wait_return_march_queue_still_waits(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
-    badge = _mock_rec()
-    badge.recognize.return_value.matched = False   # 轮次入口部队未出发：门槛放行
-    sm._leader._rec["queue_badge"] = badge
+    state = {"forced": None}
+    _badge_lights_on_launch(sm, state)   # 轮次入口不可见，发射后点亮
     march = _mock_rec()   # 行军队在外：绿色脚印图标可见
     march.recognize.return_value.matched = False
     sm._leader._rec["queue_march_icon"] = march
@@ -283,7 +335,7 @@ def test_wait_return_march_queue_still_waits(monkeypatch):
         if sm.current == "WAIT_RETURN":
             break
     assert sm.current == "WAIT_RETURN"
-    badge.recognize.return_value.matched = True   # 填兵出发：徽标点亮
+    state["forced"] = True   # 填兵出发：徽标点亮
     # war_title 与 test_wait_return_polls 同理：进入 WAIT_RETURN 后再换成
     # 不匹配实例 —— 提前换会让 member _open_war 每拍真实 _wait_for(6s)，
     # 测试烧掉几十秒真实睡眠（2026-09-14 发现的既有测试 bug）
@@ -295,7 +347,7 @@ def test_wait_return_march_queue_still_waits(monkeypatch):
     sm.step()
     assert not sm.is_terminal()
     assert sm.current == "WAIT_RETURN"
-    badge.recognize.return_value.matched = False   # 部队回城：徽标消失
+    state["forced"] = False   # 部队回城：徽标消失
     _FakeTime.t += 60
     sm.step()
     assert sm.is_terminal()
@@ -601,9 +653,8 @@ def test_wait_return_unknown_queue_icon_keeps_waiting(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
-    badge = _mock_rec()
-    badge.recognize.return_value.matched = False   # 轮次入口部队未出发：门槛放行
-    sm._leader._rec["queue_badge"] = badge
+    state = {"forced": None}
+    _badge_lights_on_launch(sm, state)   # 轮次入口不可见，发射后点亮
     for icon in ("queue_march_icon", "queue_flag_icon", "queue_gather_icon"):
         rec = _mock_rec()
         rec.recognize.return_value.matched = False
@@ -616,7 +667,7 @@ def test_wait_return_unknown_queue_icon_keeps_waiting(monkeypatch):
         if sm.current == "WAIT_RETURN":
             break
     assert sm.current == "WAIT_RETURN"
-    badge.recognize.return_value.matched = True   # 填兵出发：徽标点亮
+    state["forced"] = True   # 填兵出发：徽标点亮
     _FakeTime.t += 60
     sm.step()   # 徽标在但图标不可辨：继续等待，不提前终态
     assert not sm.is_terminal()
@@ -718,9 +769,8 @@ def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
-    badge = _mock_rec()
-    badge.recognize.return_value.matched = False
-    sm._leader._rec["queue_badge"] = badge
+    state = {"forced": None}
+    _badge_lights_on_launch(sm, state)   # 轮次入口不可见，发射后点亮
     for icon in ("queue_march_icon", "queue_flag_icon", "queue_gather_icon"):
         rec = _mock_rec()
         rec.recognize.return_value.matched = False
@@ -733,9 +783,96 @@ def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
         if sm.current == "WAIT_RETURN":
             break
     assert sm.current == "WAIT_RETURN"
-    badge.recognize.return_value.matched = True
+    state["forced"] = True   # 填兵出发：徽标点亮
     sm._leader._rec["queue_return_icon"] = _mock_rec()   # 返程图标可见
     _FakeTime.t += 60
     sm.step()
     assert not sm.is_terminal()
     assert sm.current == "WAIT_RETURN"
+
+
+def test_foreign_rally_gate_skips_own_launch():
+    # 2026-09-18 run11 实锤：窗内对方已发起集结时，同一城寨再开集结会被
+    # 游戏**静默拒绝**（表单关闭、无 toast、无队列徽标）。让车门槛：
+    # 本轮跳过开集结，直接转成员流程填对方的集结，并发布 rally_skipped
+    # （对方据其提前收尾成员阶段）
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    skips = []
+    bus.subscribe("rally_skipped", lambda p: skips.append(p))
+    sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}], bus=bus)
+    foreign = {"char_id": "other", "rally_id": "rally_1"}
+    sm._tracker = _HoldTracker(foreign=foreign)
+    for _ in range(200):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    # 本轮根本没进搜索-发射：门槛直接转填兵
+    assert not any("SEARCH" in h for h in sm.history)
+    assert not any(h == "LEADER:LAUNCH" for h in sm.history)
+    assert skips == [{"char_id": sm._char_id}]
+    assert sm._member.last_event is foreign
+
+
+def test_rally_rejected_downgrades_when_foreign_rally_fresh(monkeypatch):
+    # 自己的发射被静默拒绝且窗内对方确有集结（门槛查询时对方的还没到，
+    # 降级判定时已到 —— run11 的真实竞态时序）：竞态输家轮空，不计失败
+    # （fail_streak 会误触连续失败停机），冷却重建后由让车门槛转填兵
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+        @classmethod
+        def sleep(cls, s):
+            cls.t += s
+
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False   # 行军点击后徽标永不出现=被拒
+    sm._leader._rec["queue_badge"] = badge
+    foreign = {"char_id": "other", "rally_id": "rally_1"}
+    sm._tracker = _SeqTracker(launches=[None, None, foreign])
+    for _ in range(60):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm.current == "LEADER:END"
+    assert sm._leader.last_rally_event is None
+    assert sm.fail_reason is None            # 降级：失败标记已弹出
+    assert sm._ctx.get("failed") is None
+    assert not any(h.startswith("MEMBER:") for h in sm.history)
+
+
+def test_member_short_circuits_on_foreign_skip(monkeypatch):
+    # 对方发布过 rally_skipped（它转填了我方集结）：自己无集结可填，成员
+    # 流程不再白烧 6 分钟轮询，直接提前转入返城等待（自己的集结部队在途）
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+        @classmethod
+        def sleep(cls, s):
+            cls.t += s
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime)
+    sm = _make_sm(fill_targets=[{"instance": "i1", "name": "Boss"}])
+    _badge_lights_on_launch(sm)   # 入口不可见，发射后点亮 → 可进返城等待
+    sm._tracker = _HoldTracker(skip={"char_id": "other"})
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN"
+    # 成员流程被跳过：没进过填兵轮询（对方无集结可填）
+    assert not any("FIND_JOIN" in h for h in sm.history)
+    assert sm.fail_reason is None

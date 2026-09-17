@@ -1,4 +1,6 @@
 from __future__ import annotations
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +20,55 @@ logger = get_logger(__name__)
 _STOP_TIMEOUT = 2.0   # GUI 主线程串行 join，超时要短，避免界面长时间冻结
 
 
+class RallyEventTracker:
+    """进程级集结事件登记簿（2026-09-18 run11 实锤修复件）：
+
+    LeaderStateMachine / EitherStateMachine 每轮重建（runner 冷却后
+    sm_factory 造新实例），事件状态不能挂在 SM 上。登记簿挂在共享
+    EventBus 上、跨重建存活，按 char_id 记录最近一次 rally_launched /
+    rally_skipped，供 either 车头三处决策查询：
+
+    - 让车门槛：窗内对方已发起集结 → 本轮不开，直接转填兵
+      （同一城寨同时只能一个联盟集结，后发者被游戏静默拒绝）
+    - rally_rejected 降级：自己被拒且窗内对方确有集结 → 竞态输家
+      轮空不计失败
+    - 成员提前收尾：对方跳过开集结（转填我方）→ 无集结可填，不白烧
+      6 分钟轮询
+
+    两号 worker 线程并发读写，锁保护。时间戳在此统一打（发布方不带）。
+    """
+
+    def __init__(self, event_bus: EventBus):
+        self._lock = threading.Lock()
+        self._launches: dict[str, dict] = {}   # char_id -> 最近 launch payload
+        self._skips: dict[str, dict] = {}      # char_id -> 最近 skip payload
+        event_bus.subscribe("rally_launched", self._on_event)
+        event_bus.subscribe("rally_skipped", self._on_event)
+
+    def _on_event(self, payload: dict) -> None:
+        entry = dict(payload)
+        entry["ts"] = time.time()
+        with self._lock:
+            if "rally_id" in entry:
+                self._launches[entry.get("char_id", "?")] = entry
+            else:
+                self._skips[entry.get("char_id", "?")] = entry
+
+    def last_foreign_launch(self, char_id: str, max_age: float) -> dict | None:
+        return self._foreign(self._launches, char_id, max_age)
+
+    def last_foreign_skip(self, char_id: str, max_age: float) -> dict | None:
+        return self._foreign(self._skips, char_id, max_age)
+
+    def _foreign(self, table: dict, char_id: str, max_age: float) -> dict | None:
+        with self._lock:
+            now = time.time()
+            for cid, payload in table.items():
+                if cid != char_id and now - payload.get("ts", 0.0) <= max_age:
+                    return dict(payload)
+        return None
+
+
 class RuntimeCoordinator:
     """从 RootConfig 组装运行时：每实例 1 个 HandleSource（防检测包装），
     每实例第 1 个角色 1 个 WorkerRunner。member 角色订阅 rally_launched 路由。
@@ -35,6 +86,8 @@ class RuntimeCoordinator:
         self.runners: dict[str, WorkerRunner] = {}
         # runner_key -> rally_launched 路由处理器（stop 时统一退订）
         self._routes: dict[str, Callable] = {}
+        # 集结事件登记簿：跨 SM 重建存活，either 车头让车/拒绝降级决策用
+        self._rally_tracker = RallyEventTracker(self._bus)
         self._running = False
 
     def start(self) -> None:
@@ -77,7 +130,8 @@ class RuntimeCoordinator:
         key = f"{inst.id}:{char.id}"
         runner = WorkerRunner(
             instance_id=inst.id, char_id=char.id, char_name=char.name,
-            sm_factory=lambda: create_state_machine(char, handle, recognizers, self._bus),
+            sm_factory=lambda: create_state_machine(char, handle, recognizers,
+                                                    self._bus, self._rally_tracker),
             handle_source=handle, event_bus=self._bus,
             max_rounds=self._config.app.max_rounds,
             max_consecutive_failures=self._config.app.max_consecutive_failures)

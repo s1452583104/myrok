@@ -6,12 +6,17 @@ from .either_sm import EitherStateMachine
 
 
 def create_state_machine(character: CharacterConfig, handle_source, recognizers: dict,
-                         event_bus=None):
-    """Build the state machine matching a character's configured role."""
+                         event_bus=None, rally_tracker=None):
+    """Build the state machine matching a character's configured role.
+
+    rally_tracker：进程级集结事件登记簿（runtime 注入），either 车头
+    让车/拒绝降级决策用；leader/member 角色不用。publisher_id 用
+    character.id，让登记簿区分「自己/对方」的集结事件。"""
     if character.role == RoleEnum.LEADER:
         return LeaderStateMachine(handle_source, recognizers, character.target_level,
                                   character.march_preset,
-                                  character.march_troop_types, event_bus)
+                                  character.march_troop_types, event_bus,
+                                  publisher_id=character.id)
     if character.role == RoleEnum.MEMBER:
         # 填兵不使用预设/兵种选择（用户要求 2026-09-09），
         # 故不传 march_preset/march_troop_types
@@ -20,5 +25,6 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
     if character.role == RoleEnum.EITHER:
         return EitherStateMachine(handle_source, recognizers, character.target_level,
                                   character.march_preset, character.march_troop_types,
-                                  character.fill_target_leaders, event_bus)
+                                  character.fill_target_leaders, event_bus,
+                                  char_id=character.id, rally_tracker=rally_tracker)
     raise ValueError(f"Unknown role: {character.role}")

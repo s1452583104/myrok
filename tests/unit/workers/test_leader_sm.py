@@ -42,7 +42,8 @@ RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "level_minus", "search_btn", "red_rally", "toast_no_fortress",
                   "rally_attack_popup", "blue_rally", "preset_1",
                   "troop_cavalry", "march_btn", "war_title", "queue_panel",
-                  "search_back", "ap_refill", "form_title", "replace_popup")
+                  "search_back", "ap_refill", "form_title", "replace_popup",
+                  "queue_badge")   # 派遣队列徽标：发射验证用（默认在场）
 
 
 def _make_sm(target_level=7, wait=0.0):
@@ -308,6 +309,52 @@ def test_no_result_invalidates_level_cache_and_resyncs_on_retry():
     sm._retry_search(ctx)
     # tab_fortress 1 + 降底 12 + 升到 3 级 2 + search_btn 1 = 16 次点击
     assert len(handle.clicks) == 16
+
+
+def test_launch_publishes_char_id_for_tracker():
+    # publisher_id（factory 传 character.id）随事件带出：either_sm 的进程级
+    # 集结事件登记簿靠它区分「自己/对方」的集结
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("rally_launched", lambda p: events.append(p))
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    recs["menu_expanded"] = _mock_rec(matched=False)
+    recs["warning_panel"] = _mock_rec(matched=False)
+    recs["ap_refill"] = _mock_rec(matched=False)
+    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+                            march_troop_types=["cavalry"], event_bus=bus,
+                            wait_members_seconds=0.0, publisher_id="char_jy")
+    for _ in range(30):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert events[0]["char_id"] == "char_jy"
+
+
+def test_silent_rejection_gives_up_without_waking_members():
+    # 2026-09-18 run11 实锤：同联盟两号锁步向同一城寨开集结，后发者被
+    # 游戏**静默拒绝**（表单关闭、无 toast、无队列徽标）。行军点击后
+    # 徽标一直不出现 → 走 LAUNCH→END 放弃边，绝不发布 rally_launched
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("rally_launched", lambda p: events.append(p))
+    sm, handle = _make_sm()
+    sm._bus = bus
+    recs = sm._rec
+    recs["queue_badge"].recognize.return_value.matched = False  # 徽标永不出场
+    steps = 0
+    while not sm.is_terminal() and steps < 40:
+        sm.step()
+        steps += 1
+    assert sm.current == "END"
+    assert sm._ctx.get("fail_reason") == "rally_rejected"
+    assert sm.last_rally_event is None
+    assert events == []
+    # 放弃边直达 END，绝不进入等待成员阶段虚假吊着
+    assert "WAIT_MEMBERS" not in sm.history
 
 
 def test_launch_refills_ap_and_reclicks_march():

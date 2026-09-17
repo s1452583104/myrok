@@ -1,4 +1,5 @@
 from __future__ import annotations
+import random
 import time
 from .leader_sm import LeaderStateMachine
 from .member_sm import MemberStateMachine
@@ -10,6 +11,25 @@ logger = get_logger(__name__)
 # 开完集结+填兵后应等自己的集结部队回城再开下一轮，最大限度保持集结效率）。
 _WAIT_RETURN_POLL = 30.0      # 徽标检测间隔（秒）；检测本身是纯截图，无侵入
 _WAIT_RETURN_MAX = 1500.0     # 最长等待 25 分钟，超时强制进入下一轮
+# 对方集结事件的有效窗：集结准备窗 5 分钟 + 行军/战斗余量。窗内不开自己的
+# 集结（同一城寨同时只能一个联盟集结，后发者被游戏静默拒绝 —— 2026-09-18
+# run11 实锤：两号行军点击仅差 4s，后发的表单关闭、无 toast、无队列），
+# 直接转填对方的集结
+_FOREIGN_RALLY_WINDOW = 480.0
+# 车头错峰抖动上限：两号步调锁步是静默拒绝的根因，开搜前随机等待让
+# 「谁先发起」逐轮轮换，两个号都能练到车头与填兵
+_LEAD_JITTER_MAX = 45.0
+
+
+class _NullTracker:
+    """未注入集结事件登记簿时的空实现：让车/跳过特性整体关闭，行为与
+    旧版一致（单账号运行、纯 leader/member 角色均不受影响）。"""
+
+    def last_foreign_launch(self, char_id: str, max_age: float):
+        return None
+
+    def last_foreign_skip(self, char_id: str, max_age: float):
+        return None
 # 门槛「未知队列图标」宽限期：徽标在但已知图标都不可辨时 fail-closed 拦截
 # 搜索；若该状态持续超过宽限期（疑似未知良性队列），放行并告警
 # —— 2026-09-14 实机：旧模板背景像素敏感（正样本掉到 0.72/0.88）导致
@@ -45,12 +65,20 @@ class EitherStateMachine:
 
     def __init__(self, handle_source, recognizers: dict, target_level: int,
                  march_preset: int, march_troop_types: list,
-                 fill_target_leaders, event_bus=None):
+                 fill_target_leaders, event_bus=None, char_id: str = "?",
+                 rally_tracker=None):
+        self._bus = event_bus
+        self._char_id = char_id
+        # 进程级集结事件登记簿（runtime 注入，跨 SM 重建存活）：查「对方
+        # 的集结/让车事件」决定本轮开不开集结；未注入时空实现=特性关闭
+        self._tracker = rally_tracker if rally_tracker is not None else _NullTracker()
+        self._jitter_done = False
         # either 角色不等自己的集结（用户要求）：开完立即转成员流程填
         # 他人集结，故 wait_members_seconds=0.0（默认 330s 留给纯车头）
         self._leader = LeaderStateMachine(handle_source, recognizers, target_level,
                                           march_preset, march_troop_types, event_bus,
-                                          wait_members_seconds=0.0)
+                                          wait_members_seconds=0.0,
+                                          publisher_id=self._char_id)
         # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数
         self._member = MemberStateMachine(handle_source, recognizers,
                                           fill_target_leaders)
@@ -91,12 +119,51 @@ class EitherStateMachine:
                         return
                     logger.warning("[集结门槛] 未知队列图标已持续 %ss，放行"
                                    "搜索", _QUEUE_UNKNOWN_GRACE)
+                # 让车门槛（2026-09-18 run11 实锤）：窗内对方已发起集结时，
+                # 同一城寨再开集结会被游戏静默拒绝（表单关闭、无 toast、无
+                # 队列徽标）。窗内不开自己的集结，直接转成员流程填对方的。
+                # 必须先于错峰抖动判定：skip 要立刻生效，不能先睡 45s
+                foreign = self._tracker.last_foreign_launch(
+                    self._char_id, _FOREIGN_RALLY_WINDOW)
+                if foreign is not None:
+                    logger.info("[集结门槛] 对方(%s)的集结已在准备窗内，本轮"
+                                "跳过开集结，直接转填兵",
+                                foreign.get("char_id", "?"))
+                    if self._bus is not None:
+                        self._bus.publish("rally_skipped",
+                                          {"char_id": self._char_id})
+                    self._phase = "member"
+                    self._member.on_rally_launched(foreign)
+                    self.current = f"MEMBER:{self._member.current}"
+                    self.history.append(self.current)
+                    return
+                # 车头错峰抖动（一次性）：两号步调锁步是静默拒绝的根因，
+                # 开搜前随机等待让「谁先发起」逐轮轮换，两个号都能练到
+                # 车头与填兵
+                if not self._jitter_done:
+                    self._jitter_done = True
+                    delay = random.uniform(0.0, _LEAD_JITTER_MAX)
+                    if delay >= 1.0:
+                        logger.info("[车头] 错峰等待 %.0fs 后开始搜索", delay)
+                        time.sleep(delay)
             self._leader.step(ctx)
             self.current = f"LEADER:{self._leader.current}"
             if self._leader.is_terminal():
                 if self._leader.last_rally_event:
                     self._phase = "member"
                     self._member.on_rally_launched(self._leader.last_rally_event)
+                elif ctx.get("fail_reason") == "rally_rejected" \
+                        and self._tracker.last_foreign_launch(
+                            self._char_id, _FOREIGN_RALLY_WINDOW) is not None:
+                    # 自己被静默拒绝且窗内对方确有集结：竞态输家经历，
+                    # 不计失败（fail_streak 会误触连续失败停机），冷却
+                    # 重建后由让车门槛直接转填兵
+                    logger.info("[车头] 集结被拒（对方已先在该城寨发起），"
+                                "本轮按轮空完成处理")
+                    ctx.pop("failed", None)
+                    ctx.pop("fail_reason", None)
+                    self._phase = "done"
+                    self.current = "LEADER:END"
                 else:
                     # leader 放弃（no_fortress_found / locked_fortress）：
                     # 呈现为终态，交由 runner 冷却重建重试
@@ -105,24 +172,48 @@ class EitherStateMachine:
             self._step_wait_return()
             return   # history/current 已在 _step_wait_return 维护
         else:
+            # 提前收尾（2026-09-18 run11 实锤）：自己跳过了开集结（填对方
+            # 的），对方也发不出可填的集结（rally_skipped=它转填了我方的）
+            # 或其集结被静默拒绝时，成员流程找不到集结只会白烧 6 分钟轮询。
+            # 对方有跳过记录且成员尚未走到终态 → 立即转入返城等待
+            if not self._member.is_terminal() \
+                    and self._tracker.last_foreign_skip(
+                        self._char_id, _FOREIGN_RALLY_WINDOW) is not None:
+                logger.info("[成员] 对方已转填我方集结（无集结可填），成员"
+                            "阶段提前收尾")
+                ctx.pop("failed", None)
+                ctx.pop("fail_reason", None)
+                self._enter_wait_return()
+                self.history.append(self.current)
+                return
             self._member.step(ctx)
             self.current = f"MEMBER:{self._member.current}"
             if self._member.is_terminal():
-                if self._leader.last_rally_event \
-                        and "queue_badge" in self._leader._rec:
-                    # 填兵结束（无论成败）：自己的集结部队还在城外，等它
-                    # 回城再开下一轮。queue_badge 未配置时保持原行为
-                    # （member END 立即终态）。
-                    self._phase = "wait_return"
-                    self.current = "WAIT_RETURN"
-                    self._wait_deadline = time.time() + _WAIT_RETURN_MAX
-                    self._next_check = 0.0
-                    logger.info("[等待返城] 填兵结束，开始轮询派遣队列（间隔 %ss，"
-                                "上限 %s 分钟）", _WAIT_RETURN_POLL,
-                                _WAIT_RETURN_MAX / 60)
-                else:
-                    self._phase = "done"   # current 保持 MEMBER:END
+                if ctx.get("fail_reason") == "no_rally_found" \
+                        and self._leader.last_rally_event is not None:
+                    # 自己的集结已发起且部队在途，对方无集结可填（对方转填
+                    # 我方集结 / 对方开集结被拒）：轮空不计失败（fail_streak
+                    # 会误触连续失败停机），等自己的部队回城即可
+                    logger.info("[成员] 指定车头无集结可填，但自己的集结已在"
+                                "途：按轮空完成处理")
+                    ctx.pop("failed", None)
+                    ctx.pop("fail_reason", None)
+                self._enter_wait_return()
         self.history.append(self.current)
+
+    def _enter_wait_return(self) -> None:
+        """填兵阶段收口：本轮开过集结且配置了徽标识别器时进入返城等待
+        （纯截图轮询），否则保持旧行为（member END 即终态）。"""
+        if self._leader.last_rally_event and "queue_badge" in self._leader._rec:
+            self._phase = "wait_return"
+            self.current = "WAIT_RETURN"
+            self._wait_deadline = time.time() + _WAIT_RETURN_MAX
+            self._next_check = 0.0
+            logger.info("[等待返城] 填兵结束，开始轮询派遣队列（间隔 %ss，"
+                        "上限 %s 分钟）", _WAIT_RETURN_POLL,
+                        _WAIT_RETURN_MAX / 60)
+        else:
+            self._phase = "done"   # current 保持 MEMBER:END
 
     def _queue_verdict(self) -> str:
         """右侧 */5 派遣队列判读（2026-09-16 实机重校准）：

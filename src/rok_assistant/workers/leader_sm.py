@@ -43,7 +43,8 @@ class LeaderStateMachine(StateMachine):
 
     def __init__(self, handle_source, recognizers: dict, target_level: int,
                  march_preset: int, march_troop_types: list, event_bus=None,
-                 wait_members_seconds: float = 330.0):
+                 wait_members_seconds: float = 330.0,
+                 publisher_id: str | None = None):
         self._handle = handle_source
         self._rec = recognizers
         self._target_level = target_level
@@ -51,6 +52,9 @@ class LeaderStateMachine(StateMachine):
         self._march_troop_types = march_troop_types
         self._bus = event_bus
         self._wait_members_seconds = wait_members_seconds
+        # 发布 rally_launched 时带上账号标识：either_sm 的进程级集结事件
+        # 登记簿靠它区分「自己/对方」的集结（跨 SM 重建存活）
+        self._publisher_id = publisher_id
         self.last_rally_event = None
         super().__init__(initial="IDLE")
 
@@ -80,6 +84,10 @@ class LeaderStateMachine(StateMachine):
                             guard=lambda ctx: not ctx.get("not_locked"))
         self.add_transition("SELECT_RALLY_TIME", "FORM_TROOP", self._form_troop)
         self.add_transition("FORM_TROOP", "LAUNCH", self._launch)
+        # 集结被游戏静默拒绝的放弃边必须先于等待成员边注册：StateMachine
+        # 按注册顺序取第一条匹配转移（2026-09-18 run11 run 实锤）
+        self.add_transition("LAUNCH", "END", lambda ctx: None,
+                            guard=lambda ctx: ctx.get("fail_reason") == "rally_rejected")
         self.add_transition("LAUNCH", "WAIT_MEMBERS", self._wait_members)
         self.add_transition("WAIT_MEMBERS", "END", lambda ctx: None,
                             guard=lambda ctx: ctx.get("departed"))
@@ -267,6 +275,20 @@ class LeaderStateMachine(StateMachine):
                 raise RuntimeError("行动力补充弹窗关不掉，集结未发起")
             if not self._click_retry("march_btn", attempts=3):
                 raise RuntimeError("行动力补充后 march_btn 点击失败，集结未发起")
+        # 发射验证（2026-09-18 run11 实锤）：同联盟两号步调锁步（行军点击仅
+        # 差 4s）向同一座最近城寨发起集结，后发起的被游戏**静默拒绝**——
+        # 表单关闭、无 toast、无队列徽标、任何战争列表都无集结行。旧实现
+        # 照旧发布 rally_launched，对方账号（车头）的成员阶段轮空 6 分钟并
+        # 连续计败。行军点击后必须等派遣队列徽标出现才承认发射成功；等
+        # 不到即被拒，走 LAUNCH→END 放弃边，绝不虚假唤醒成员
+        if self._rec.get("queue_badge") is not None \
+                and not self._wait_for("queue_badge", timeout=10.0):
+            logger.warning("[车头] 行军点击后队列徽标未出现：集结被游戏静默拒绝"
+                           "（同目标已有集结），本轮放弃")
+            ctx["failed"] = True
+            ctx["fail_reason"] = "rally_rejected"
+            self.last_rally_event = None
+            return
         self.last_rally_event = {
             "rally_id": f"rally_{int(time.time())}",
             "fortress_level": self._target_level,
@@ -275,7 +297,10 @@ class LeaderStateMachine(StateMachine):
         logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
                     self._target_level, self._march_preset)
         if self._bus:
-            self._bus.publish("rally_launched", self.last_rally_event)
+            payload = dict(self.last_rally_event)
+            if self._publisher_id:
+                payload["char_id"] = self._publisher_id
+            self._bus.publish("rally_launched", payload)
 
     def _wait_members(self, ctx):
         # 被动等待：成员填兵或 5 分钟倒计时结束游戏自动发车（默认 330s，
