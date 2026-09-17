@@ -170,9 +170,19 @@ class EitherStateMachine:
                         and self._leader._find(proof) is not None:
                     return "none"   # 地图视图且无徽标：队列确实为空
             closed = False
-            for panel in ("war_title", "warning_panel"):
+            # 已知残留面板 → 关闭动作（与 leader normalize 同位坐标）：
+            # 全屏模态（创建部队 form_title 2026-09-18 实机 run4 残留挡
+            # 门槛）盖住一切时，normalize 根本没机会跑，门槛必须自己关
+            for panel, action in (
+                    ("war_title", ("click", 1671, 64)),
+                    ("warning_panel", ("click", 1671, 64)),
+                    ("form_title", ("click", 1671, 64)),
+                    ("replace_popup", ("click", 1500, 170)),
+                    ("rally_attack_popup", ("click", 960, 540)),
+                    ("ap_refill", ("click", 1638, 120)),
+                    ("menu_expanded", ("click", 1845, 1010))):
                 if self._leader._find(panel) is not None:
-                    self._leader._handle.click(1671, 64)
+                    self._leader._handle.click(action[1], action[2])
                     closed = True
                     break
             if not closed and self._leader._find("search_back") is not None:

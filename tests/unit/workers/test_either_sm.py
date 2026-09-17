@@ -357,6 +357,9 @@ def test_gate_closes_search_panel_covering_sidebar(monkeypatch):
     wt = _mock_rec()
     wt.recognize.return_value.matched = False
     sm._leader._rec["war_title"] = wt
+    rap = _mock_rec()
+    rap.recognize.return_value.matched = False      # 无集结弹窗残留（城市假象剔除）
+    sm._leader._rec["rally_attack_popup"] = rap
     sb = _mock_rec()   # 搜索面板开着（search_back 可见）
     sm._leader._rec["search_back"] = sb
     for _ in range(10):
@@ -384,7 +387,7 @@ def test_gate_clicks_city_exit_when_not_on_map(monkeypatch):
     badge.recognize.return_value.matched = False
     sm._leader._rec["queue_badge"] = badge
     for tid in ("alliance_btn", "search_icon", "war_title", "warning_panel",
-                "search_back"):
+                "search_back", "rally_attack_popup"):
         rec = _mock_rec()
         rec.recognize.return_value.matched = False
         sm._leader._rec[tid] = rec
@@ -424,6 +427,36 @@ def test_gate_allows_search_when_only_search_icon_proves_map(monkeypatch):
         sm.step()
     assert any("SEARCH_FORTRESS" in h for h in sm.history)
     assert (72, 1034) not in sm._leader._handle.clicks   # 不在地图视图，无需出城
+
+
+def test_gate_closes_form_title_residual(monkeypatch):
+    # 2026-09-18 实机（run4 02:04 mumu0）：上轮进程被杀在 FORM_TROOP，
+    # 创建部队全屏模态残留盖住一切，门槛的关面板清单没有 form_title，
+    # normalize 没机会跑 → 白等宽限期。门槛须自己关掉全屏模态
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False   # 模态盖住队列栏
+    sm._leader._rec["queue_badge"] = badge
+    for tid in ("alliance_btn", "search_icon", "war_title", "warning_panel",
+                "search_back"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False
+        sm._leader._rec[tid] = rec
+    ft = _mock_rec()   # 创建部队模态残留
+    sm._leader._rec["form_title"] = ft
+    for _ in range(10):
+        sm.step()
+    assert sm.current == "LEADER:IDLE"
+    assert not any("SEARCH" in h for h in sm.history)
+    assert (1671, 64) in sm._leader._handle.clicks   # 门槛主动关了模态
 
 
 def test_gate_allows_search_when_only_gather_out(monkeypatch):
