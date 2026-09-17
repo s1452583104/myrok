@@ -1,6 +1,6 @@
-# 实施进度与待办（截至 2026-09-13 晚）
+# 实施进度与待办（截至 2026-09-17）
 
-> 配套文档：`docs/ACCEPTANCE.md`（验收手册）、`docs/superpowers/specs/2026-07-15-rok-assistant-design.md`（设计）
+> 配套文档：`docs/ACCEPTANCE.md`（验收手册）、`docs/session-2026-09-16-误开车根因修复.md`（二次误开车根因分析）、`docs/superpowers/specs/2026-07-15-rok-assistant-design.md`（设计）
 > 本文档记录目标闭环验收的实现状态，接续上次更新。
 
 ## 目标（/goal，2026-09-11 设定）
@@ -12,7 +12,7 @@
 - 配置：mumu0「阑珊寨子号」(either, 7级) ⇄ mumu1「Jy丶阑珊」(either, 8级) 互相填兵，骑兵、预设槽 1
 - 运行方式：无头驱动 `_run_goal.py`（`nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &`），banner `max_rounds=10 max_consecutive_failures=3`
 
-## 已实现（全部提交在 main，最新 f891eef，212 测试绿）
+## 已实现（全部提交在 main，最新 3b646a9，226 测试绿）
 
 ### 核心闭环链路（实机验证过）
 | 环节 | 实现 | 实机证据 |
@@ -41,17 +41,20 @@
 | **双 worker 六连异常收工（09-15 00:09-00:22）**：mumu0 被底部快捷菜单展开态遮蔽（展开时联盟旗帜被整体隐藏）、mumu1 被「预警」警报面板（自动弹出）全屏盖住 | `menu_expanded`/`warning_panel` 两模板 + 两 SM normalize 恢复分支（点 ☰ 1845,1010 收起菜单 / 点 X 1671,64 关面板）；2026-09-16 实机验证菜单收起有效 | 5fdb010 |
 | **队列图标模板质量（09-16 发现）**：09-14 版 queue_flag_icon 实际裁剪偏移主体是背景（自匹配 1.000 掩盖问题），实机旗帜漏检 0.459；图标圆心透出统帅头像，含背景模板跨头像掉分（gather 1.0→0.709） | 三图标 HSV 定位纯圆重裁：gather 正 1.00/0.99/0.84 跨头像、flag 1.000、march 纯圆，负全 ≤0.49；阈值 gather 0.75/flag 0.8/march 0.85，正负边际 ~0.05→~0.3 | 185156b |
 | **预设主将未回城误开集结（09-16 用户报告）**：主将在返程/战斗态（黄色返回、红色交叉刀剑图标未覆盖）时 unknown 宽限 5 分钟一到就放行，默认武将代开车打不过寨子 | `_queue_verdict` 战斗元组扩展 `queue_return_icon`/`queue_battle_icon`（模板采样中，`_qsamples/` 后台采集）；unknown 宽限 5→15 分钟；battle 判定无宽限（越过宽限仍拦截，回归测试覆盖） | f9acef6 |
-| **误开集结复发（09-16 用户报告二）**：主将战斗/返程态无模板时，混合队列里采集锄头匹配成功 → verdict='gather' 掩盖未识别战斗态照常放行（用户已手动取消集结） | `_qsamples/` 实机采样补齐四模板并全量校准（真识别链零误报）：`queue_battle_icon` 红交叉刀剑 0.5（正 7 帧 0.534-1.0/负 ≤0.466）、`queue_return_icon` 橙返程箭头 0.55（正 5 帧 0.619-1.0/负 ≤0.509）、`queue_recall_icon` 红盘上箭头=取消集结召回 0.65（正 1.0/0.719/负 ≤0.506）入 battle 元组；红盘系模板互有串扰但同判 battle 无害，漏检方向 unknown=fail-closed 安全 | 本轮提交 |
+| **误开集结复发（09-16 用户报告二）**：主将战斗/返程态无模板时，混合队列里采集锄头匹配成功 → verdict='gather' 掩盖未识别战斗态照常放行（用户已手动取消集结） | `_qsamples/` 实机采样补齐四模板并全量校准（真识别链零误报）：`queue_battle_icon` 红交叉刀剑 0.5（正 7 帧 0.534-1.0/负 ≤0.466）、`queue_return_icon` 橙返程箭头 0.55（正 5 帧 0.619-1.0/负 ≤0.509）、`queue_recall_icon` 红盘上箭头=取消集结召回 0.65（正 1.0/0.719/负 ≤0.506）入 battle 元组；红盘系模板互有串扰但同判 battle 无害，漏检方向 unknown=fail-closed 安全 | 105ae30 |
 | 部队已在集结中点「+」弹「部队替换」卡死（mumu0） | 不替换（白回城+多烧行动力），关弹窗走 VERIFY_JOINED 回读橙「替换」；两 SM normalize 加残留分支 | f891eef |
-| **面板遮挡误判「无队列」（09-16 重启后实机）**：战争列表面板开着时右侧队列栏整体隐藏，queue_badge 判 False → 门槛放行搜索（mumu0/mumu1 双中招，mumu1 六连异常收工） | `_queue_verdict` 用「联盟旗帜可见=在地图视图」判读：地图上徽标消失才是真无队列；不在地图先关 war_title/warning_panel、点 map_btn 回地图，本拍 unknown fail-closed；`_find` 未匹配/未配置均返 None，用 `_rec.get` 区分 | 6834cc1 |
+| **面板遮挡误判「无队列」（09-16 重启后实机）**：战争列表面板开着时右侧队列栏整体隐藏，queue_badge 判 False → 门槛放行搜索（mumu0/mumu1 双中招，mumu1 六连异常收工） | `_queue_verdict` 用「联盟旗帜可见=在地图视图」判读：地图上徽标消失才是真无队列；不在地图先关 war_title/warning_panel（X 1671,64），本拍 unknown fail-closed；`_find` 未匹配/未配置均返 None，用 `_rec.get` 区分 | 6834cc1 |
+| **战斗中动画变体（09-16 用户截图 imgs/）**：刀剑图标是逐帧动画，双剑平行（不交叉）变体与交叉刀剑模板相似度仅 0.62-0.90，存在漏检带 | myrok-56 并行会话补 `queue_fight_icon`（多尺度反查原生帧 + HSV 纯圆裁剪，正 0.644-1.0/真负 ≤0.441，阈值 0.6；0.52-0.55 串扰带均为同判 battle 的红盘系），入 battle 元组 | 7a57c8d |
+| **搜索面板残留白等宽限（09-16 实机 21:08 mumu1）**：搜索模式专属底栏同样整体隐藏队列栏，门槛判 unknown 拦截却没关面板，白等 15 分钟 | unknown 分支补 `search_back` 退出（bbox 居中点击） | e2ee7fb |
+| **城市视图死锁（09-16 两号齐卡实锤）**：队列栏不显示、alliance_btn/map_btn 均不匹配——map_btn 模板实为地图视图的「进入城市」城堡 (92,985)，城市视图出城按钮是地图图标 (72,1034)，语义相反且无模板 → 门槛无动作可做 | unknown 分支无面板可关时直接点出城按钮 (72,1034) 回地图重新判读；实机验证死锁解除 | dde4bc5 |
 
-### 阈值参考（manifest.yaml，正/负分数实测）
-`queue_gather_icon` 1.000/≤0.366 (0.8) · `queue_march_icon` 1.000/≤0.666 (0.85) · `queue_flag_icon` 1.000,0.996/≤0.473 (0.85) · `replace_popup` 1.000/≤0.277 (0.9) · `join_create_btn`/`ap_refill`/`form_title` 均 1.000 正、≤0.42 负 (0.9)
+### 阈值参考（manifest.yaml，正/负分数实测，均为 2026-09-16 纯圆重采后）
+`queue_gather_icon` 1.00/0.99/0.84 跨头像、负 ≤0.49 (0.75) · `queue_march_icon` 1.000/负 ≤0.47 (0.85) · `queue_flag_icon` 1.000/负 ≤0.49 (0.8) · `queue_battle_icon` 正 7 帧 0.534-1.0、非红盘负 ≤0.466 (0.5) · `queue_return_icon` 正 5 帧 0.619-1.0、非橙盘负 ≤0.509 (0.55) · `queue_recall_icon` 正 1.0/0.719、负 ≤0.506 (0.65) · `queue_fight_icon` 正 0.644-1.0（逐帧动画变体间仅 0.62-0.90）、真负 ≤0.441 (0.6) · `queue_badge` 正 1.000/0.907、负 ≤0.710 (0.85) · `replace_popup` 1.000/≤0.277 (0.9) · `join_create_btn`/`ap_refill`/`form_title` 均 1.000 正、≤0.42 负 (0.9)。红盘系（battle/return/recall/fight）互有串扰但同判 battle 无害
 
 ## 已知问题（v1 接受）
 
 1. **战斗队列图标单匹配限制**：采集+行军混合在外时，单点模板匹配可能漏检行军图标误放行（注释已记录，v2 可做多目标计数）
-2. **队列图标变体未全覆盖**（09-14 发现）：集结准备等待态、战斗中态的角标与已采模板不符 → verdict=unknown，fail-closed 下行为正确（继续等）但日志显示「图标不可辨」；可按 unknown 窗口截帧补采模板（v2）
+2. **未知新图标变体仍可能现**：09-14/16 已把五态+召回+战斗动画变体（共 7 种图标）补齐模板（09-16 二次误开车根因即「返程/战斗态无模板被采集锄头掩盖」），但游戏图标可能还有未见的动画帧/新状态 → verdict=unknown，fail-closed 下行为安全（入口拦截等 15 分钟宽限）；`_qsamples/` 采样器持续在跑，可按 unknown 窗口截帧补采模板
 3. **驱动重启 mid-march 会双集结**：重启后轮次计数清零、SM 重建（09-14 起新门槛会在入口拦截城外部队，风险已大幅降低）
 4. **adb 断连**：模拟器重启后报「模拟器窗口失联」paused——需 `adb connect 127.0.0.1:16384` / `:16416`，重连后自动恢复（无需重启驱动）。注意：断连重连后游戏可能瞬时不响应点击（09-14 22:18 mumu1 六连 normalize 异常停机），必要时重启驱动
 5. 体力耗尽无自动用道具功能（未要求；mumu0 曾 77/140，走 3 轮失败停机）
@@ -60,15 +63,15 @@
 ## 接下来需要做的
 
 ### 验收剩余项
-- [ ] **完整闭环观察**：干净地跑一轮「开集结→互填→等回城→下一轮」多圈连续循环（目标 10 轮），确认无停机干预
+- [ ] **完整闭环观察**：干净地跑一轮「开集结→互填→等回城→下一轮」多圈连续循环（目标 10 轮），确认无停机干预——cron 监控观察中，09-16/17 六态模板+门槛三连修后实机验证正确拦截/放行
 - [ ] C（§3.5 关模拟器→paused→重开恢复；注意 adb connect）
 - [ ] D（§3.4 集结 5 分钟无人填超时→自动下一轮）
 - [ ] E（§3.3 锁定城寨→跳过重搜）——09-13 23:42 mumu1 连续 4 次锁定后路径已部分验证
 - [ ] 体力耗尽路径实机确认（mumu0 用完行动力跑一次）
 
 ### 收尾清理（验收通过后）
-- [ ] 删根目录临时文件：`_*.png`（_b*/_f*/_live_*/_m*/_q*/_s*/_war_*/_z*/_icon*/_rp*/_cb*/_chat_*/_city_*/_q1_badge 等全部 `_` 前缀 png）、`_driver.log`
-- [ ] 删临时脚本：`_run_goal.py`（或转正为 tools/）、`_capture_driver.py`、`_watch_join.py`、`_recapture_templates.py`、`_name_templates.py`
+- [ ] 删根目录临时文件：`_*.png`（_b*/_f*/_live_*/_m*/_q*/_s*/_war_*/_z*/_icon*/_rp*/_cb*/_chat_*/_city_*/_q1_badge 等全部 `_` 前缀 png）、`_driver.log`、`_qsamples/`（队列状态采样帧，模板补采完可归档删）
+- [ ] 删临时脚本：`_run_goal.py`（或转正为 tools/）、`_capture_driver.py`、`_watch_join.py`、`_recapture_templates.py`、`_name_templates.py`、`_collect_queues.py`（qsamples 采样器）
 - [ ] 删 `/tmp/kill_driver.ps1`（杀驱动用的 PowerShell 脚本；bash 内联 `$_` 会被转义破坏，必须走 .ps1 文件）
 - [ ] `recordings/failure_*.png` 酌情清理
 - [ ] 更新 `docs/ACCEPTANCE.md`（仍停留在 185 测试/「验收未开始」状态）
