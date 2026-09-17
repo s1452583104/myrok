@@ -246,8 +246,8 @@ def test_verify_join_refills_ap_when_popup_blocks_march(monkeypatch):
         if sm.current == "OPEN_WAR":
             break
     assert (1448, 379) in handle.clicks   # 每日免费 500「领取」
-    assert (1447, 745) in handle.clicks   # 初级行动力恢复 100「使用」
-    assert (1638, 120) in handle.clicks   # mock 里弹窗关不掉 → X 兜底
+    assert (1447, 570) in handle.clicks   # 第二行「使用」（紧急50/初级100）
+    assert (1638, 120) in handle.clicks   # mock 里弹窗关不掉 → X 循环+兜底
     assert sm._ctx["joined"] is False      # 本拍按加入未生效回流重试
 
 

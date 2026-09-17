@@ -251,6 +251,12 @@ class LeaderStateMachine(StateMachine):
     def _launch(self, ctx):
         # 必须确认 march_btn 点击成功后再发布 rally_launched——点击失败
         # 不得触发成员填兵
+        if self._find("ap_refill") is not None:
+            # 上次行军点击因行动力不足弹的补充弹窗残留（2026-09-18 run10
+            # 实机：残留弹窗盖住 march_btn，先找行军只会一路异常，永远
+            # 走不到下面的补体力分支）：补体力并关弹窗再点行军
+            if not self._refill_ap():
+                raise RuntimeError("行动力补充弹窗关不掉，集结未发起")
         if not self._click_retry("march_btn", attempts=3):
             raise RuntimeError("march_btn 点击失败，集结未发起")
         if self._wait_for("ap_refill", timeout=3.0):
@@ -258,7 +264,7 @@ class LeaderStateMachine(StateMachine):
             # 根本没发出去，补体力后必须补点行军，否则集结未发起却发布了
             # 事件，成员白等一轮
             if not self._refill_ap():
-                self._handle.click(1638, 120)
+                raise RuntimeError("行动力补充弹窗关不掉，集结未发起")
             if not self._click_retry("march_btn", attempts=3):
                 raise RuntimeError("行动力补充后 march_btn 点击失败，集结未发起")
         self.last_rally_event = {

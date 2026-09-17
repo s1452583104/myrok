@@ -322,9 +322,13 @@ def test_launch_refills_ap_and_reclicks_march():
     sm._bus = bus
     recs = sm._rec
     res = recs["ap_refill"].recognize.return_value
+    calls = {"n": 0}
 
     def _ap(img):
-        res.matched = len(handle.clicks) >= 1   # 行军点击后弹窗才出现
+        # 行军点击后弹窗出现，补体力两次 _find 内保持在场，点完「使用」
+        # 后消失 —— 真实弹窗由 X 循环关掉
+        calls["n"] += 1
+        res.matched = 1 <= calls["n"] <= 3
         return res
 
     recs["ap_refill"].recognize.side_effect = _ap
@@ -333,5 +337,26 @@ def test_launch_refills_ap_and_reclicks_march():
         sm.step()
         steps += 1
     assert (1448, 379) in handle.clicks   # 每日免费 500「领取」
-    assert (1447, 745) in handle.clicks   # 初级行动力恢复 100「使用」
+    assert (1447, 570) in handle.clicks   # 第二行「使用」（紧急50/初级100）
     assert events != []                    # 补点行军后事件正常发布
+
+
+def test_launch_closes_leftover_ap_dialog_before_march():
+    # 2026-09-18 run10 实机：行动力补充弹窗残留盖住 march_btn，_launch
+    # 先找行军只会一路异常，永远走不到补体力分支。入口必须先清弹窗
+    sm, handle = _make_sm()
+    recs = sm._rec
+    res = recs["ap_refill"].recognize.return_value
+    res.matched = True   # 入口即有弹窗残留；X 点击后消失
+
+    def _ap(img):
+        res.matched = (1638, 120) not in handle.clicks   # X 点击后消失
+        return res
+
+    recs["ap_refill"].recognize.side_effect = _ap
+    steps = 0
+    while not sm.is_terminal() and steps < 60:
+        sm.step()
+        steps += 1
+    assert (1638, 120) in handle.clicks   # 弹窗被 X 关闭
+    assert sm.last_rally_event is not None   # 关掉后行军照常发起

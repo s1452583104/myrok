@@ -113,21 +113,35 @@ class StateMachine:
             return False
         return self._click_result(r)
 
-    # 行动力补充弹窗按钮（1920x1080 实机测量，2026-09-18 run9 截图）：
-    _AP_CLAIM_DAILY = (1448, 379)    # 每日免费 500「领取」（每日 1 次，有则白拿）
-    _AP_USE_100 = (1447, 745)        # 「初级行动力恢复」100 点「使用」
+    # 行动力补充弹窗按钮（1920x1080 实机测量，2026-09-18 run9/run10 截图）：
+    _AP_CLAIM_DAILY = (1448, 379)   # 每日免费 500「领取」（每日 1 次，有则白拿）
+    _AP_USE_ROW2 = (1447, 570)      # 第二行「使用」：未领每日时=紧急50、
+    #                                  领过后（该行上移）=初级100，都便宜够用
+    _AP_DIALOG_X = (1638, 120)      # 弹窗右上角 X
 
     def _refill_ap(self) -> bool:
         """行动力不足弹窗（行军点击时 AP < 消耗，2026-09-18 实机 run9
-        86/140 实锤：加入集结的行军同样耗行动力，140 自然上限跑不满
-        10 轮目标，连续失败停机历次根因即此）。先领每日免费 500，弹窗
-        还在（没领到/不够）再吃一个初级恢复 100（库存 7,712）。返回
-        弹窗是否已关闭；False 交给调用方按关弹窗旧路径兜底。"""
+        实锤：加入集结的行军同样耗行动力，140/150 自然上限跑不满 10 轮
+        目标，历次「连续 3 轮失败」停机根因即此）。先领每日免费 500，再
+        点第二行「使用」补一点，最后关弹窗 —— 实机 run10 教训：用完道具
+        弹窗不会自动关（体力已够也开着），X 关一次可能被 toast 动画吞掉，
+        必须循环确认。返回弹窗是否已关闭。"""
         if self._find("ap_refill") is None:
             return False
         self._handle.click(*self._AP_CLAIM_DAILY)
         time.sleep(1.5)
         if self._find("ap_refill") is not None:
-            self._handle.click(*self._AP_USE_100)
+            self._handle.click(*self._AP_USE_ROW2)
             time.sleep(1.5)
+        return self._close_ap_dialog()
+
+    def _close_ap_dialog(self) -> bool:
+        """关行动力补充弹窗：X 点击可能被领取/使用的 toast 动画吞掉
+        （2026-09-18 run10 实机：单次 X 后弹窗残留，mumu0 卡死 LAUNCH
+        六连异常），点一次确认一次，最多 4 次。"""
+        for _ in range(4):
+            if self._find("ap_refill") is None:
+                return True
+            self._handle.click(*self._AP_DIALOG_X)
+            time.sleep(1.2)
         return self._find("ap_refill") is None
