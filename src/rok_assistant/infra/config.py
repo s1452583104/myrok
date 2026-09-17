@@ -64,6 +64,12 @@ class AppConfig(BaseModel):
     adb_path: str = "adb"         # 全局；adb.exe 完整路径
     log_dir: Path = Path("./logs")
     template_dir: Path = Path("./templates")
+    # YOLO 权重路径（可选）。配置后每个模板 id 装配 Chain(模板匹配→YOLO 兜底)：
+    # 校准过的模板先行，YOLO 只在模板未命中时接住动画帧/背景偏移。
+    # 未配置=纯模板匹配（与旧版行为一致）
+    yolo_model: Path | None = None
+    # fill_<名字> 模板未命中时的 OCR 兜底（RapidOCR，账号无关名字识别）
+    ocr_name_fallback: bool = True
     # 每个角色最多完成多少轮（开集结+填兵+返城算一轮）后自动停止
     max_rounds: int = Field(default=10, ge=1)
     # 连续多少轮以失败终态（no_fortress_found/locked_fortress/no_rally_found）

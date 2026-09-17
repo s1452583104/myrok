@@ -45,7 +45,9 @@ class RuntimeCoordinator:
         self._running = True
         try:
             recognizers = TemplateRegistry.load(
-                self._template_dir / "manifest.yaml").build_recognizers()
+                self._template_dir / "manifest.yaml").build_recognizers(
+                yolo_model=self._config.app.yolo_model,
+                ocr_fallback=self._config.app.ocr_name_fallback)
             for inst in self._config.instances:
                 handle = create_handle_source(
                     mumu_index=inst.mumu_index,

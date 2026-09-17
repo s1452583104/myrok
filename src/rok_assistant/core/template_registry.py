@@ -29,27 +29,81 @@ class TemplateRegistry:
     def get(self, k: str) -> TemplateSpec:
         return self._t[k]
 
-    def build_recognizers(self) -> dict[str, "TemplateMatch"]:
-        """Build {template_id: TemplateMatch} for all loaded templates.
+    def build_recognizers(self, yolo_model: Path | None = None,
+                          ocr_fallback: bool = True, ocr_engine=None,
+                          yolo_shared=None) -> dict:
+        """Build {template_id: recognizer} for all loaded templates.
 
-        v1 runtime only builds template_match recognizers; YoloDetect
-        wiring is future work, so yolo specs are rejected with ValueError.
+        2026-09-17 三识别栈融合：
+        - type=template_match：TemplateMatch（校准阈值，生产主路径）。
+          配置 yolo_model 时同一 id 装配 Chain([TemplateMatch, 兜底])——
+          模板先行，YOLO 只在模板未命中时兜底（接住动画帧/背景偏移）；
+          fill_ 名字类的兜底是 OCR（用户要求：角色名字走 OCR，账号无关）。
+        - type=yolo_detect：未配置 yolo_model 时与旧版一致抛 ValueError
+          （回归测试锚定）；配置后构建 YoloClassAdapter。
         """
         # local imports: deliberate, keeps module import light (cv2/recognizers
         # are only needed when recognizers are actually built)
         import cv2
         from .recognizers.template_match import TemplateMatch
-        from .recognizer import BBox
+        from .recognizer import BBox, RecognizerChain
+
+        shared_yolo = yolo_shared
+        if shared_yolo is None and yolo_model is not None:
+            from .recognizers.yolo_detect import SharedYoloDetector
+            shared_yolo = SharedYoloDetector(yolo_model)
+        # 类名集合（装配时取一次；顺带强制加载模型，尽早暴露权重问题）
+        yolo_class_names = set(shared_yolo.names.values()) \
+            if shared_yolo is not None else set()
+
         out = {}
         for tid, spec in self._t.items():
-            if spec.type != "template_match":
+            roi = None if spec.roi.is_full \
+                else BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2)
+            if spec.type == "template_match":
+                img = cv2.imread(str(spec.file))
+                if img is None:
+                    raise FileNotFoundError(f"cannot load template image: {spec.file}")
+                primary = TemplateMatch(img, threshold=spec.threshold, roi=roi,
+                                        name=tid)
+                fallback = None
+                if shared_yolo is not None:
+                    if tid.startswith("fill_"):
+                        fallback = self._ocr_fallback_for(
+                            tid, roi, ocr_fallback, ocr_engine)
+                    elif tid in yolo_class_names:
+                        from .recognizers.yolo_detect import YoloClassAdapter
+                        fallback = YoloClassAdapter(
+                            shared_yolo, class_name=tid, roi=roi,
+                            threshold=spec.threshold, name=f"{tid}@yolo")
+                    # 类不在模型里（如 queue_recall_icon 被 YOLO 排除训练）：
+                    # 模板为主，不挂兜底 —— 挂了运行时 resolve 会 KeyError
+                out[tid] = RecognizerChain([primary, fallback], threshold=0.0) \
+                    if fallback is not None else primary
+            elif spec.type == "yolo_detect":
+                if shared_yolo is None:
+                    raise ValueError(
+                        f"unsupported template type for {tid}: {spec.type}")
+                from .recognizers.yolo_detect import YoloClassAdapter
+                out[tid] = YoloClassAdapter(
+                    shared_yolo,
+                    class_id=spec.classes[0] if spec.classes else None,
+                    roi=roi, threshold=spec.threshold, name=tid)
+            else:
                 raise ValueError(f"unsupported template type for {tid}: {spec.type}")
-            img = cv2.imread(str(spec.file))
-            if img is None:
-                raise FileNotFoundError(f"cannot load template image: {spec.file}")
-            roi = None if spec.roi.is_full else BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2)
-            out[tid] = TemplateMatch(img, threshold=spec.threshold, roi=roi, name=tid)
         return out
+
+    @staticmethod
+    def _ocr_fallback_for(tid, roi, ocr_fallback, ocr_engine):
+        """fill_<名字> 的 OCR 兜底：名字取自 id，账号/配置改动不再失效。"""
+        from .recognizers.ocr_text import OCRText, RapidOcrEngine
+        if not ocr_fallback:
+            return None
+        name = tid[len("fill_"):]
+        return OCRText(expected_text=name, roi=roi,
+                       engine=ocr_engine if ocr_engine is not None
+                       else RapidOcrEngine(),
+                       name=f"{tid}@ocr")
 
     @staticmethod
     def load(manifest_path: Path) -> "TemplateRegistry":

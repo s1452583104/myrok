@@ -7,6 +7,9 @@ dependencies = [
     "PyQt6>=6.5",
     "opencv-python>=4.8",
     "paddleocr>=2.7",
+    # 生产 OCR 引擎（py3.14 下 paddlepaddle 无 wheel，改用 PP-OCR 的 ONNX 封装，
+    # 模型随 wheel 离线分发）；paddleocr 仅为旧测试路径保留
+    "rapidocr-onnxruntime>=1.3",
     "ultralytics>=8.0",
     "pyyaml>=6.0",
     "pydantic>=2.5",
