@@ -159,9 +159,16 @@ class EitherStateMachine:
             # 不在地图视图时先关已知残留面板（与 normalize 同位）、点
             # map_btn 回地图，本拍按 unknown fail-closed 拦截，下一拍在
             # 地图视图上重新判读
-            a = self._leader._rec.get("alliance_btn")
-            if a is not None and self._leader._find("alliance_btn") is not None:
-                return "none"   # 地图视图且无徽标：队列确实为空
+            # 地图视图判据：alliance_btn（联盟旗帜）或 search_icon（左下
+            # 放大镜）任一可见即可 —— 2026-09-18 实机：简化模式下联盟快捷
+            # 键整体不显示（alliance_btn 模板在干净地图上仅 0.248），但
+            # search_icon 只在地图视图出现，且战争列表/预警等全屏面板打开
+            # 时同样被盖住（normalize 需先关面板才见 search_icon），不会
+            # 重演 2026-09-16 面板残留误判「无队列」
+            for proof in ("alliance_btn", "search_icon"):
+                if self._leader._rec.get(proof) is not None \
+                        and self._leader._find(proof) is not None:
+                    return "none"   # 地图视图且无徽标：队列确实为空
             closed = False
             for panel in ("war_title", "warning_panel"):
                 if self._leader._find(panel) is not None:

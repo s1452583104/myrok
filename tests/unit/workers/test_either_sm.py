@@ -351,6 +351,9 @@ def test_gate_closes_search_panel_covering_sidebar(monkeypatch):
     ab = _mock_rec()
     ab.recognize.return_value.matched = False      # 搜索底栏替换了底部栏
     sm._leader._rec["alliance_btn"] = ab
+    si = _mock_rec()
+    si.recognize.return_value.matched = False      # 搜索面板下放大镜同样不可见
+    sm._leader._rec["search_icon"] = si
     wt = _mock_rec()
     wt.recognize.return_value.matched = False
     sm._leader._rec["war_title"] = wt
@@ -380,7 +383,8 @@ def test_gate_clicks_city_exit_when_not_on_map(monkeypatch):
     badge = _mock_rec()
     badge.recognize.return_value.matched = False
     sm._leader._rec["queue_badge"] = badge
-    for tid in ("alliance_btn", "war_title", "warning_panel", "search_back"):
+    for tid in ("alliance_btn", "search_icon", "war_title", "warning_panel",
+                "search_back"):
         rec = _mock_rec()
         rec.recognize.return_value.matched = False
         sm._leader._rec[tid] = rec
@@ -388,6 +392,38 @@ def test_gate_clicks_city_exit_when_not_on_map(monkeypatch):
         sm.step()
     assert sm.current == "LEADER:IDLE"
     assert (72, 1034) in sm._leader._handle.clicks   # 门槛点了出城按钮
+
+
+def test_gate_allows_search_when_only_search_icon_proves_map(monkeypatch):
+    # 2026-09-18 实机（01:46 mumu1 卡 WAIT_RETURN 25 分钟）：简化模式下
+    # 联盟快捷键整体不显示（alliance_btn 干净地图上仅 0.248），部队明明
+    # 已回城却因「不在地图视图」fail-closed 白等。search_icon 只在地图
+    # 视图出现、全屏面板打开时同样被盖住，是等效的地图视图判据：
+    # 徽标不可见 + 放大镜可见 = 队列确实为空，应放行搜索
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    sm = _make_sm(fill_targets=[])
+    badge = _mock_rec()
+    badge.recognize.return_value.matched = False   # 无队列徽标
+    sm._leader._rec["queue_badge"] = badge
+    ab = _mock_rec()
+    ab.recognize.return_value.matched = False      # 简化模式下联盟键不显示
+    sm._leader._rec["alliance_btn"] = ab
+    for tid in ("war_title", "warning_panel", "search_back"):
+        rec = _mock_rec()
+        rec.recognize.return_value.matched = False
+        sm._leader._rec[tid] = rec
+    # search_icon 保持默认 matched=True（地图视图放大镜可见）
+    for _ in range(10):
+        sm.step()
+    assert any("SEARCH_FORTRESS" in h for h in sm.history)
+    assert (72, 1034) not in sm._leader._handle.clicks   # 不在地图视图，无需出城
 
 
 def test_gate_allows_search_when_only_gather_out(monkeypatch):
@@ -468,6 +504,9 @@ def test_gate_panel_covering_badge_blocks(monkeypatch):
     ab = _mock_rec()
     ab.recognize.return_value.matched = False      # 面板也盖住联盟旗帜（不在地图视图）
     sm._leader._rec["alliance_btn"] = ab
+    si = _mock_rec()
+    si.recognize.return_value.matched = False      # 面板同样盖住放大镜（地图视图判据失效）
+    sm._leader._rec["search_icon"] = si
     war = _mock_rec()   # 战争列表面板开着
     sm._leader._rec["war_title"] = war
     for _ in range(10):
