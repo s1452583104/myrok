@@ -112,3 +112,22 @@ class StateMachine:
         if r is None:
             return False
         return self._click_result(r)
+
+    # 行动力补充弹窗按钮（1920x1080 实机测量，2026-09-18 run9 截图）：
+    _AP_CLAIM_DAILY = (1448, 379)    # 每日免费 500「领取」（每日 1 次，有则白拿）
+    _AP_USE_100 = (1447, 745)        # 「初级行动力恢复」100 点「使用」
+
+    def _refill_ap(self) -> bool:
+        """行动力不足弹窗（行军点击时 AP < 消耗，2026-09-18 实机 run9
+        86/140 实锤：加入集结的行军同样耗行动力，140 自然上限跑不满
+        10 轮目标，连续失败停机历次根因即此）。先领每日免费 500，弹窗
+        还在（没领到/不够）再吃一个初级恢复 100（库存 7,712）。返回
+        弹窗是否已关闭；False 交给调用方按关弹窗旧路径兜底。"""
+        if self._find("ap_refill") is None:
+            return False
+        self._handle.click(*self._AP_CLAIM_DAILY)
+        time.sleep(1.5)
+        if self._find("ap_refill") is not None:
+            self._handle.click(*self._AP_USE_100)
+            time.sleep(1.5)
+        return self._find("ap_refill") is None

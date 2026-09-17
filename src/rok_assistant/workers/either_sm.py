@@ -179,12 +179,17 @@ class EitherStateMachine:
                     ("form_title", ("click", 1671, 64)),
                     ("replace_popup", ("click", 1500, 170)),
                     ("rally_attack_popup", ("click", 960, 540)),
-                    ("ap_refill", ("click", 1638, 120)),
                     ("menu_expanded", ("click", 1845, 1010))):
                 if self._leader._find(panel) is not None:
                     self._leader._handle.click(action[1], action[2])
                     closed = True
                     break
+            if not closed and self._leader._find("ap_refill") is not None:
+                # 行动力不足弹窗：补体力（每日免费 500 + 初级恢复 100）而非
+                # 关弹窗 —— 关掉下次行军还是弹，白烧轮次（2026-09-18 run9）
+                closed = self._leader._refill_ap()
+                if not closed:
+                    self._leader._handle.click(1638, 120)
             if not closed and self._leader._find("search_back") is not None:
                 # 搜索面板开着（残留/恢复回流）：队列栏被搜索模式底栏整体
                 # 隐藏（2026-09-16 实机 21:08 mumu1），退出搜索再判读

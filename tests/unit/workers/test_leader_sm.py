@@ -52,6 +52,7 @@ def _make_sm(target_level=7, wait=0.0):
     # matched=True（rally_attack_popup 等在既有测试里被当作「已出现」依赖）
     recs["menu_expanded"] = _mock_rec(matched=False)   # 底部快捷菜单展开态
     recs["warning_panel"] = _mock_rec(matched=False)   # 「预警」警报面板
+    recs["ap_refill"] = _mock_rec(matched=False)       # 行动力补充弹窗
     sm = LeaderStateMachine(handle, recs, target_level=target_level,
                             march_preset=1, march_troop_types=["cavalry"],
                             event_bus=None, wait_members_seconds=wait)
@@ -307,3 +308,30 @@ def test_no_result_invalidates_level_cache_and_resyncs_on_retry():
     sm._retry_search(ctx)
     # tab_fortress 1 + 降底 12 + 升到 3 级 2 + search_btn 1 = 16 次点击
     assert len(handle.clicks) == 16
+
+
+def test_launch_refills_ap_and_reclicks_march():
+    # 2026-09-18 实机 run9：行军点击时行动力不足弹「行动力补充」（86/140），
+    # 集结根本没发起却照旧发布事件 → 成员白等一轮。须补体力（每日免费
+    # 500 领取 + 初级恢复 100）后补点行军，确认发出才发布事件
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("rally_launched", lambda p: events.append(p))
+    sm, handle = _make_sm()
+    sm._bus = bus
+    recs = sm._rec
+    res = recs["ap_refill"].recognize.return_value
+
+    def _ap(img):
+        res.matched = len(handle.clicks) >= 1   # 行军点击后弹窗才出现
+        return res
+
+    recs["ap_refill"].recognize.side_effect = _ap
+    steps = 0
+    while not sm.is_terminal() and steps < 60:
+        sm.step()
+        steps += 1
+    assert (1448, 379) in handle.clicks   # 每日免费 500「领取」
+    assert (1447, 745) in handle.clicks   # 初级行动力恢复 100「使用」
+    assert events != []                    # 补点行军后事件正常发布

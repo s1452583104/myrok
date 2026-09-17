@@ -105,10 +105,12 @@ class LeaderStateMachine(StateMachine):
             # mumu1）：模态弹窗压住 HUD，点空地关闭后再继续归一化
             self._handle.click(*_EMPTY_GROUND)
         if self._find("ap_refill"):
-            # 行动力不足弹窗（行军点击时行动力 <140 弹出，2026-09-12 实机
-            # mumu0 77/140）：关闭让本轮按点击失败自然耗尽 —— 连续 3 轮
-            # 失败后 runner 以疑似体力耗尽停止，而非死堵在弹窗上
-            self._handle.click(1638, 120)
+            # 行动力不足弹窗（行军点击时行动力 < 消耗弹出，2026-09-12 实机
+            # mumu0 77/140）：补体力（每日免费 500 + 初级恢复 100）而非关
+            # 弹窗 —— 2026-09-18 run9 实锤加入行军同样耗行动力，140 自然
+            # 上限跑不满 10 轮目标，历次「连续 3 轮失败」停机根因即此
+            if not self._refill_ap():
+                self._handle.click(1638, 120)
         if self._find("form_title"):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
             # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
@@ -251,6 +253,14 @@ class LeaderStateMachine(StateMachine):
         # 不得触发成员填兵
         if not self._click_retry("march_btn", attempts=3):
             raise RuntimeError("march_btn 点击失败，集结未发起")
+        if self._wait_for("ap_refill", timeout=3.0):
+            # 行动力不足弹窗（行动力 < 消耗，2026-09-18 实机 run9）：行军
+            # 根本没发出去，补体力后必须补点行军，否则集结未发起却发布了
+            # 事件，成员白等一轮
+            if not self._refill_ap():
+                self._handle.click(1638, 120)
+            if not self._click_retry("march_btn", attempts=3):
+                raise RuntimeError("行动力补充后 march_btn 点击失败，集结未发起")
         self.last_rally_event = {
             "rally_id": f"rally_{int(time.time())}",
             "fortress_level": self._target_level,

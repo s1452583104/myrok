@@ -228,6 +228,29 @@ def test_poll_join_reopens_panel_closed_mid_poll(monkeypatch):
     assert sm._ctx["join_found"] is True
 
 
+def test_verify_join_refills_ap_when_popup_blocks_march(monkeypatch):
+    # 2026-09-18 实机 run9：加入行军点击时行动力不足（86/140），游戏弹
+    # 「行动力补充」挡住一切，加入永远不生效 → 历次「连续 3 轮失败（疑似
+    # 体力耗尽）」停机根因。须补体力（每日免费 500 领取 + 初级恢复 100）
+    # 而非关弹窗 —— 关掉只会让加入继续失败，10 轮目标必须吃道具
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["ap_refill"].recognize.return_value.matched = True   # 弹窗在场
+    recs["war_title"].recognize.return_value.matched = False
+    recs["swap_btn"].recognize.return_value.matched = False   # 行军没生效
+    sm._ctx["marched"] = True
+    sm.current = "VERIFY_JOINED"
+    for _ in range(3):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert (1448, 379) in handle.clicks   # 每日免费 500「领取」
+    assert (1447, 745) in handle.clicks   # 初级行动力恢复 100「使用」
+    assert (1638, 120) in handle.clicks   # mock 里弹窗关不掉 → X 兜底
+    assert sm._ctx["joined"] is False      # 本拍按加入未生效回流重试
+
+
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
     # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
     # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError

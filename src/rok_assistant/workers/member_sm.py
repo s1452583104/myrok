@@ -142,11 +142,11 @@ class MemberStateMachine(StateMachine):
             # 压住 HUD，点空地关闭后再继续归一化
             self._handle.click(960, 540)
         if self._find("ap_refill"):
-            # 行动力不足弹窗（行军点击时行动力 <140 弹出，2026-09-12 实机
-            # mumu0 77/140）：关闭让流程按「加入未生效」自然回流 —— 连续
-            # 3 轮失败后 runner 以疑似体力耗尽停止（目标停止条件），而非
-            # 死堵在弹窗上 6 连异常停机
-            self._handle.click(1638, 120)
+            # 行动力不足弹窗（加入行军点击时行动力 < 消耗弹出，2026-09-18
+            # 实机 run9 86/140 实锤）：补体力（每日免费 500 + 初级恢复 100）
+            # 而非关弹窗 —— 关掉只会让加入继续失败，10 轮目标必须吃道具
+            if not self._refill_ap():
+                self._handle.click(1638, 120)
         if self._find("form_title"):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
             # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化。
@@ -270,6 +270,11 @@ class MemberStateMachine(StateMachine):
         # 行军点击后创建部队弹窗关闭、战争列表也已关（「+」点击会关面板）：
         # 先重开列表再看目标行按钮是否变成橙「替换」——面板不开 swap_btn
         # 永远不可见，会把成功误判为失败
+        if self._find("ap_refill"):
+            # 行军点击弹出「行动力补充」（2026-09-18 实机 run9 86/140）：
+            # 行军根本没发出去，补体力后本轮按加入未生效回流重试
+            if not self._refill_ap():
+                self._handle.click(1638, 120)
         if not self._find("war_title"):
             self._click_retry("alliance_btn")
         ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
