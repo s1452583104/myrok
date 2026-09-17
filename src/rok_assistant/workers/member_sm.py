@@ -166,7 +166,11 @@ class MemberStateMachine(StateMachine):
             self._click("search_back")
         elif self._find("map_btn"):
             self._click("map_btn")
-        if not self._wait_for("alliance_btn", timeout=8.0):
+        if not (self._wait_for("alliance_btn", timeout=8.0)
+                or self._wait_for("search_icon", timeout=2.0)):
+            # 2026-09-18 实机：简化模式下联盟快捷键整体不显示，城市视图
+            # 归一化在此处误抛异常连续计败。放大镜与旗帜同为地图视图专属
+            # UI，任一可见即归一化成功
             raise RuntimeError("联盟旗帜不可见：既不在地图视图，退搜索也没找到")
 
     def _open_war(self, ctx):
