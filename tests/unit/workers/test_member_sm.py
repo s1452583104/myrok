@@ -158,6 +158,43 @@ def test_normalize_closes_war_panel_residual_and_confirms_map(monkeypatch):
     assert sm.current == "OPEN_WAR"          # 归一化成功进入下一步，未抛异常
 
 
+def test_normalize_closes_form_title_residual_and_confirms_map(monkeypatch):
+    # 2026-09-18 实机（run7 04:24 mumu0，失败截图 form_title=1.000）：
+    # 创建部队表单残留时点一次 X 就往下走，淡出未完/首点未生效，后续
+    # 检查全在模态底下落空 → 归一化抛「联盟旗帜不可见」连续计败。
+    # 须关一次确认一次：表单还开着才补点 X，放大镜现形（地图视图确认）
+    # 即归一化成功
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    recs["search_icon"] = _mock_rec(matched=False)
+    recs["alliance_btn"].recognize.return_value.matched = False  # 无集结：旗帜不在
+    recs["war_title"].recognize.return_value.matched = False     # 仅表单残留
+    recs["queue_panel"].recognize.return_value.matched = False   # 无侧栏展开
+    ft = recs["form_title"].recognize.return_value
+    ft.matched = True   # 表单残留；第一次点 X 只触发淡出、第二次才真关
+    si = recs["search_icon"].recognize.return_value
+
+    def _ft(img):
+        ft.matched = len(handle.clicks) < 2
+        return ft
+
+    def _si(img):
+        si.matched = len(handle.clicks) >= 2   # 表单真关了放大镜才现形
+        return si
+
+    recs["form_title"].recognize.side_effect = _ft
+    recs["search_icon"].recognize.side_effect = _si
+    sm.on_rally_launched({"rally_id": "r1"})
+    for _ in range(6):
+        sm.step()
+        if sm.current == "OPEN_WAR":
+            break
+    assert handle.clicks[0] == (1671, 64)   # 首次关表单
+    assert handle.clicks[1] == (1671, 64)   # 表单还开着 → 补点
+    assert sm.current == "OPEN_WAR"          # 归一化成功进入下一步，未抛异常
+
+
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
     # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
     # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError

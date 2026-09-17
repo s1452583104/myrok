@@ -149,8 +149,17 @@ class MemberStateMachine(StateMachine):
             self._handle.click(1638, 120)
         if self._find("form_title"):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
-            # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
-            self._handle.click(1671, 64)
+            # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化。
+            # 2026-09-18 实机 run7 04:24（失败截图 form_title=1.000）：点 X
+            # 不等淡出就往下走，后续检查全在模态底下落空 → 归一化死路。
+            # 与 war_title 同款：关一次确认一次（放大镜现形=地图视图），
+            # 表单还开着才补点 X（最多 3 次），关了但地图未就绪交给末尾判据
+            for _ in range(3):
+                self._handle.click(1671, 64)
+                if self._wait_for("search_icon", timeout=6.0):
+                    return
+                if not self._find("form_title"):
+                    break
         if self._find("replace_popup"):
             # 部队替换确认弹窗残留（部队已在集结中又点「+」，2026-09-13
             # 实机 mumu0）：不替换（被替换部队白回城），点弹窗右上角 X
