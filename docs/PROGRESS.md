@@ -1,4 +1,4 @@
-# 实施进度与待办（截至 2026-09-17）
+# 实施进度与待办（截至 2026-09-18）
 
 > 配套文档：`docs/ACCEPTANCE.md`（验收手册）、`docs/session-2026-09-16-误开车根因修复.md`（二次误开车根因分析）、`docs/superpowers/specs/2026-07-15-rok-assistant-design.md`（设计）
 > 本文档记录目标闭环验收的实现状态，接续上次更新。
@@ -9,10 +9,27 @@
 > 检测集结车头是否回城，回城后继续开寨子。循环往复直至体力耗尽或者完成一定的
 > 次数（先默认十次）。
 
-- 配置：mumu0「阑珊寨子号」(either, 7级) ⇄ mumu1「Jy丶阑珊」(either, 8级) 互相填兵，骑兵、预设槽 1
+- 配置：mumu0「阑珊寨子号」(either, 7级) ⇄ mumu1「Jy丶阑珊」(either, 7级) 互相填兵，骑兵、预设槽 1（两号 8 级寨 09-18 夜间实测刷不出，均降 7 级）
 - 运行方式：无头驱动 `_run_goal.py`（`nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &`），banner `max_rounds=10 max_consecutive_failures=3`
 
-## 已实现（全部提交在 main，最新 3b646a9，226 测试绿）
+## 已实现（全部提交在 main，最新 a241205，244 测试绿）
+
+### 三识别栈融合（2026-09-18，commit 2400e4d）
+- **YOLO**：gpu_1080_v3 权重（50 类，mAP50 0.9844 / mAP50-95 0.9544，1080 训练集），`config.yaml app.yolo_model` 启用
+- **OCR**：rapidocr-onnxruntime（PP-OCR ONNX 离线，py3.14 兼容），角色名等 YOLO 不训的类（账号/配置绑定）由 `fill_*` 名字模板失配时 OCR 兜底
+- **融合规则**（`template_registry.build_recognizers`）：每个模板 id → Chain(模板匹配先行, 兜底)；兜底 = id 在 YOLO 类名单里 → YoloClassAdapter，`fill_*` → OCRText，`queue_recall_icon` 等不在名单的 → 纯模板不挂兜底（防运行时 KeyError）
+- **SharedYoloDetector**：全识别器共享一个 YOLO 实例 + 单帧缓存（key=截图 id+shape），`__call__` 推理接口
+- 角色名类不 YOLO 训练（约束：账号/配置绑定，名字走 OCR/模板）
+
+### 2026-09-17/18 实机迭代修复（run2-run7 驱动验证）
+| 问题 | 修复 | commit |
+|---|---|---|
+| WAIT_RETURN 25 分钟卡死，「图标不可辨」×104 | 门槛地图视图判据补 `search_icon`（简化模式下 alliance_btn 在干净地图仅 0.248；放大镜同为地图视图专属且全屏面板打开时不显示，不重演面板残留误判） | 9bf86b2 |
+| 门槛被「创建部队」等全屏弹窗残留挡住 15 分钟白等 | 门槛 unknown 分支补齐 7 种面板关闭（war/warning/form→X 1671,64；replace→1500,170；rally_attack→960,540；ap_refill→1638,120；menu_expanded→1845,1010） | f3a4495 |
+| 成员归一化无集结时段误抛异常 ×4 | 成员 normalize 补 `search_icon` 地图视图判据 | 9e20bc9 |
+| 成员归一化关战争面板不等过渡动画死路（run6 03:46） | war_title 分支点 X 后等 `search_icon` 现形即归一化成功 | 00cb53f |
+| 成员归一化关创建部队表单同样死路（run7 04:24，失败截图 form_title=1.000 实锤；车头停机后成员连带 no_rally_found 停机） | form_title 分支改「点 X→等放大镜现形→表单还开着才补点（≤3 次）」循环 | a241205 |
+| 8 级寨子搜不到（run2 mumu1 六搜全空） | char_jy target_level 8→7（截图证实 7 级寨充足）；打寨子不耗行动力（此前「体力耗尽」系误判） | config |
 
 ### 核心闭环链路（实机验证过）
 | 环节 | 实现 | 实机证据 |
@@ -88,8 +105,8 @@
 # 启动驱动（repo 根目录）
 nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &
 
-# 杀驱动（bash 内联 PowerShell 会坏，用文件）
-powershell -ExecutionPolicy Bypass -File "$(cygpath -w /tmp/kill_driver.ps1)"
+# 杀驱动（bash 内联 PowerShell 会坏，用 repo 根的脚本文件）
+powershell -NoProfile -ExecutionPolicy Bypass -File _kill_driver.ps1
 
 # adb 重连（模拟器重启后）
 C:/模拟器/MuMuPlayer/nx_main/adb.exe connect 127.0.0.1:16384   # mumu0
