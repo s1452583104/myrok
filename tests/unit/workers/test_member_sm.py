@@ -195,6 +195,39 @@ def test_normalize_closes_form_title_residual_and_confirms_map(monkeypatch):
     assert sm.current == "OPEN_WAR"          # 归一化成功进入下一步，未抛异常
 
 
+def test_poll_join_reopens_panel_closed_mid_poll(monkeypatch):
+    # 2026-09-18 实机 run8：战争列表在轮询中途被游戏关掉（自己参与的
+    # 集结发车等），FIND_JOIN 对着关掉的列表空轮询，烧完 60 次加入窗口
+    # 后 no_rally_found 停机。每拍须先确认列表还开着，没了就重开再找
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
+    sm, handle, _, _ = _make_sm()
+    recs = sm._rec
+    wt = recs["war_title"].recognize.return_value
+    wt.matched = False   # 列表已被游戏关掉
+    fb = recs["fill_Boss"].recognize.return_value
+    fb.matched = False   # 列表没开时名字列无从匹配
+
+    def _wt(img):
+        wt.matched = len(handle.clicks) > 0   # 点过旗帜（重开）后列表现形
+        return wt
+
+    def _fb(img):
+        fb.matched = len(handle.clicks) > 0
+        return fb
+
+    recs["war_title"].recognize.side_effect = _wt
+    recs["fill_Boss"].recognize.side_effect = _fb
+    sm._ctx["panel_open"] = True   # 直接进入 FIND_JOIN 轮询态
+    sm.current = "FIND_JOIN"
+    for _ in range(4):
+        sm.step()
+        if sm.current in ("CLICK_JOIN", "VERIFY_JOINED"):
+            break
+    assert (50, 50) in handle.clicks       # 重开：点了联盟旗帜
+    assert (1335, 161) in handle.clicks    # 重开后找到目标行点了「+」
+    assert sm._ctx["join_found"] is True
+
+
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
     # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
     # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError

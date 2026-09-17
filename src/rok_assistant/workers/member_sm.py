@@ -210,6 +210,14 @@ class MemberStateMachine(StateMachine):
         # 就继续等；他人的集结一律不填（见类注释）
         ctx["join_attempts"] = ctx.get("join_attempts", 0) + 1
         n, cap = ctx["join_attempts"], _JOIN_MAX_ATTEMPTS
+        # 列表中途被游戏关掉（自己参与的集结发车/弹窗顶掉等，2026-09-18
+        # 实机 run8：面板关闭后 60 次轮询全在地图上空找，烧完整个加入
+        # 窗口）——每拍先确认战争列表还开着，没了就重开再找
+        if not self._find("war_title"):
+            if not self._click_retry("alliance_btn", attempts=2, interval=1.0):
+                logger.info("成员·战争列表被关闭且联盟旗帜不可见，下拍重试")
+                ctx["join_found"] = False
+                return
         for t in self._fill_targets:
             r = self._wait_for_result(self._target_rec_id(t),
                                       timeout=_JOIN_POLL_TIMEOUT)
