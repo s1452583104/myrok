@@ -73,3 +73,24 @@ def test_rapid_ocr_engine_smoke():
     img = np.full((60, 200, 3), 210, dtype=np.uint8)
     out = eng.detect_text(img)
     assert isinstance(out, list)
+
+
+def test_rapid_ocr_cache_holds_frame_reference():
+    """缓存命中后必须持有该帧的强引用（同 yolo_detect.py:54 的不变量）。
+
+    缓存键含 `id(screenshot)`，若引擎不持有帧，调用方释放裁剪图后新数组会复用
+    同一地址 -> 键碰撞 -> 直接返回**上一帧**的 OCR 结果（静默错误）。直接断言
+    不变量本身：强制 CPython 地址复用不可靠，行为式复现会时灵时不灵。
+    """
+    class _FakeEngine:
+        def __call__(self, img):
+            return [([[0, 0], [50, 0], [50, 20], [0, 20]], "某文本", 0.9)], 0.0
+
+    eng = RapidOcrEngine()
+    eng._eng = _FakeEngine()  # 跳过真实 RapidOCR 的加载
+    frame = np.zeros((40, 120, 3), dtype=np.uint8)
+
+    assert eng.detect_text(frame)[0][1] == "某文本"
+
+    assert any(v is frame for v in vars(eng).values()), (
+        "detect_text 缓存后未持有帧的强引用：id() 被复用时会返回上一帧的 OCR 结果")

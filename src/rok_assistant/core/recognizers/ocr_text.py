@@ -14,6 +14,7 @@ class RapidOcrEngine:
         self._eng = None
         self._cache_key = None
         self._cache_val = None
+        self._cache_img = None
 
     def _ensure(self):
         if self._eng is None:
@@ -36,6 +37,10 @@ class RapidOcrEngine:
                             str(text), float(conf)))
         self._cache_key = key
         self._cache_val = out
+        # 强引用帧：缓存键含 id(screenshot)，不持有引用则调用方释放裁剪图后
+        # 新数组会复用同一地址 -> 键碰撞 -> 返回上一帧的 OCR 结果（同
+        # yolo_detect.py 记录的不变量，那里通过 results 间接持有）。
+        self._cache_img = screenshot
         return out
 
 
