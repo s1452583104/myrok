@@ -287,14 +287,23 @@ class LeaderStateMachine(StateMachine):
         if self._rec.get(rec_id) is None:
             self._click(f"preset_{n}")
             return
-        for _ in range(_PRESET_ATTEMPTS):
+        for attempt in range(_PRESET_ATTEMPTS):
             self._click(f"preset_{n}")
             if self._wait_for(rec_id, timeout=_PRESET_CONFIRM_TIMEOUT,
                               interval=_PRESET_CONFIRM_INTERVAL):
+                # 确认路径要进日志：这条改动的前提就是旧实现「两种失败都静默」，
+                # 若成功也静默，实机就只能靠「没抛异常」反推——那是把静默从
+                # 失败挪到了成功上。
+                logger.info("[车头] 预设槽 %s 已确认（模板点击，第 %s 轮）",
+                            n, attempt + 1)
                 return
+            logger.warning("[车头] 预设槽 %s 模板点击后未确认，按实测几何补点",
+                           n)
             self._click_xy(*slot_center(n))
             if self._wait_for(rec_id, timeout=_PRESET_CONFIRM_TIMEOUT,
                               interval=_PRESET_CONFIRM_INTERVAL):
+                logger.info("[车头] 预设槽 %s 已确认（几何补点，第 %s 轮）",
+                            n, attempt + 1)
                 return
         raise RuntimeError(f"预设槽 {n} 高亮未确认（{_PRESET_ATTEMPTS} 轮），"
                            f"拒绝派错兵，集结未发起")

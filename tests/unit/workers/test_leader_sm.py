@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytest
 from unittest.mock import MagicMock
@@ -467,6 +469,24 @@ def test_select_preset_falls_back_to_measured_geometry(monkeypatch):
 
     assert (_GEOM_X, _SLOT1_Y) in handle.clicks, "没有走几何兜底点击"
     assert len(handle.clicks) == 2, f"期望 模板1 + 几何1，实得 {handle.clicks}"
+
+
+def test_select_preset_logs_which_path_confirmed(monkeypatch, caplog):
+    """确认成功也必须进日志——否则实机只能靠「没抛异常」反推。
+
+    旧实现的毛病就是「两种失败都静默」；成功再静默一次，等于把静默从失败
+    挪到成功上，实机跑一轮根本分不清「模板确认了」和「几何兜底救回来的」。
+    """
+    sm, _h, _rec = _sm_with_verifier("always", monkeypatch)
+    with caplog.at_level(logging.INFO):
+        sm._select_preset()
+    assert "预设槽 1 已确认（模板点击" in caplog.text
+
+    sm2, _h2, _rec2 = _sm_with_verifier("after_geometry_click", monkeypatch)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        sm2._select_preset()
+    assert "预设槽 1 已确认（几何补点" in caplog.text
 
 
 def test_select_preset_raises_when_never_confirmed(monkeypatch):
