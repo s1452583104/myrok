@@ -19,9 +19,22 @@ class TemplateSpec:
     roi: ROI
     classes: list[int]
 
+@dataclass(frozen=True)
+class PixelStatSpec:
+    """像素统计判据条目（manifest 顶层 `pixel_stats:` 小节）。
+
+    与 TemplateSpec 分开是有意的：这些 id 没有模板图，放进 `templates:` 会让
+    `entry["file"]` KeyError，或被 auto_label_yolo / ingest_raw_imgs 逐个
+    cv2.imread 后注入垃圾框。`kind` 决定装配哪个判据族。
+    """
+    id: str
+    kind: str  # "preset_slot"
+
 class TemplateRegistry:
-    def __init__(self, templates: dict[str, TemplateSpec]):
+    def __init__(self, templates: dict[str, TemplateSpec],
+                 pixel_stats: list[PixelStatSpec] | None = None):
         self._t = templates
+        self._pixel = list(pixel_stats or [])
 
     def __contains__(self, k: str) -> bool:
         return k in self._t
@@ -91,6 +104,27 @@ class TemplateRegistry:
                     roi=roi, threshold=spec.threshold, name=tid)
             else:
                 raise ValueError(f"unsupported template type for {tid}: {spec.type}")
+        out.update(self._build_pixel_recognizers())
+        return out
+
+    def _build_pixel_recognizers(self) -> dict:
+        """装配 manifest 顶层 `pixel_stats:` 小节。
+
+        2026-09-27：`selected_preset_N` 从 YOLO 类改成像素判据——同一图标同一
+        位置只有填充亮度不同，`preset_N` 实例数又是它的 13~20 倍，模型永远选
+        多数类（v9 实测在槽 3 上给出 `preset_4@0.06`）。判据见
+        `recognizers/pixel_stat.py`，那里同时是预览与运行时的常量真相。
+        """
+        for spec in self._pixel:
+            if spec.kind not in ("preset_slot",):
+                raise ValueError(
+                    f"unsupported pixel_stat kind for {spec.id}: {spec.kind}")
+        out: dict = {}
+        preset_ids = [s.id for s in self._pixel if s.kind == "preset_slot"]
+        if preset_ids:
+            # 六个 id 共用**一个** judge：单帧只扫一遍 7 个 patch
+            from .recognizers.pixel_stat import build_preset_recognizers
+            out.update(build_preset_recognizers(preset_ids))
         return out
 
     @staticmethod
@@ -127,4 +161,8 @@ class TemplateRegistry:
                 classes=entry.get("classes", []),
             )
             templates[spec.id] = spec
-        return TemplateRegistry(templates)
+        pixel_stats = [
+            PixelStatSpec(id=e["id"], kind=e.get("kind", "preset_slot"))
+            for e in (raw.get("pixel_stats") or [])
+        ]
+        return TemplateRegistry(templates, pixel_stats)

@@ -216,54 +216,73 @@ templates:
   - 870
   - 1620
   - 1020
+# preset_1..6（2026-09-24 重定）：六个 44x44 图标只差中间一个小数字，靠位置
+# 区分不了槽位。**2026-09-27 更正**：当初写的「面板会整体上下移约 80px」是
+# 错的——那是标注被顶部菱形（见文件末 pixel_stats 一节）污染后反推出来的假象。
+# 逐像素实测 44 帧：槽位钉死在 cy 474+82*(N-1)，`march_btn` cy=925、
+# `form_title` cy=69 逐字节不变，面板根本不移动。下面这条宽 ROI 保留，
+# 因为它对「槽位固定」同样够用，且不宜在同一次改动里动两个变量。真正的
+# 槽位判别仍只靠数字字形，所以：
+#   1) 六个槽共用一条覆盖整列的 ROI（x 1600-1712 / y 350-930），
+#      把判别权完全交给 minMaxLoc 最优匹配；
+#   2) 阈值抬到 0.97。实测全库 780 帧：最优匹配落在正确槽位时分数 >=0.9935，
+#      串到邻槽最高只到 0.9616 —— 0.9 会把串位全放行。
+# 旧配置（每槽 100px 窗 + 0.9）的实测代价：25 条被窗裁掉（面板偏高的帧上
+# 模板腿与 YOLO 兜底腿一起静默失效）、串位无拦截。串位不是小事——
+# leader_sm._form_troop 是直接点匹配位置（`self._click(f"preset_{N}")`），
+# 点错槽 = 派错兵。
+# 新配置实测：正确 394 条 / 串位 0 条 / 无标注帧误报 0 条。
+# 副作用（有意）：YOLO 兜底腿共用 spec.threshold（见 build_recognizers），
+# 0.97 等于对 preset_* 关掉兜底。图标在 640 输入下约 15px，模型读不出数字，
+# 兜底只会点错槽——宁可让模板失配（_click 空操作）也不点错。
 - id: preset_1
   file: preset_1.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 420
-  - 1700
-  - 520
+  - 350
+  - 1712
+  - 930
 - id: preset_2
   file: preset_2.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 510
-  - 1700
-  - 610
+  - 350
+  - 1712
+  - 930
 - id: preset_3
   file: preset_3.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 590
-  - 1700
-  - 690
+  - 350
+  - 1712
+  - 930
 - id: preset_4
   file: preset_4.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 670
-  - 1700
-  - 770
+  - 350
+  - 1712
+  - 930
 - id: preset_5
   file: preset_5.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 760
-  - 1700
-  - 860
+  - 350
+  - 1712
+  - 930
 - id: preset_6
   file: preset_6.png
-  threshold: 0.9
+  threshold: 0.97
   roi:
   - 1600
-  - 840
-  - 1700
-  - 940
+  - 350
+  - 1712
+  - 930
 - id: troop_infantry
   file: troop_infantry.png
   threshold: 0.9
@@ -446,3 +465,39 @@ templates:
   - 60
   - 1250
   - 200
+
+# ===========================================================================
+# pixel_stats —— 像素统计判据（**刻意不放进 templates:**）
+#
+# 为什么不放进 templates: 那一节会被 auto_label_yolo.py / ingest_raw_imgs.py /
+# measure_preset_roi.py / relabel_extra_classes.py **逐个 cv2.imread(spec.file)**：
+#   * 缺 file -> TemplateRegistry.load 的 `entry["file"]` 直接 KeyError；
+#   * 假 file -> auto_label_yolo 抛 FileNotFoundError 整个工具挂掉；
+#   * 真 file -> 为一个 dataset.yaml 里不存在的类生成框 = 注入垃圾框
+#     （正是这几轮一直在清的污染模式）。
+# 放成独立顶层小节，registry._t 一字不动，上述四个工具与
+# tests/unit/core/test_preset_roi_anchor.py **零影响**。
+#
+# 几何/阈值全在 src/rok_assistant/core/recognizers/pixel_stat.py 的常量里
+# （单一真相，预览与运行时共用同一份，不可能漂移）。这里只声明 id 与 kind。
+#
+# 判据实测（44 帧，见 docs/PROGRESS.md）：
+#   frac = mean(槽心±22px 的 max(BGR) > 200)
+#   选中槽 0.72~0.75 / 未选中 0.07~0.09 —— 8~10 倍余量，argmax 41/44
+# 两个陷阱（回归测试锚定）：
+#   * 顶部菱形 cy≈389 恒亮 frac 0.80（比任何选中槽都亮），恰在槽 1 上方一个
+#     槽距——从 y=391 起扫就会把它当成槽 1。slot_centers() 从 474 起，永不取样。
+#   * 第 7 槽 cy=966 真实存在（6 帧选中它），所以扫 7 格，但只给 1..6 装识别器。
+pixel_stats:
+- id: selected_preset_1
+  kind: preset_slot
+- id: selected_preset_2
+  kind: preset_slot
+- id: selected_preset_3
+  kind: preset_slot
+- id: selected_preset_4
+  kind: preset_slot
+- id: selected_preset_5
+  kind: preset_slot
+- id: selected_preset_6
+  kind: preset_slot

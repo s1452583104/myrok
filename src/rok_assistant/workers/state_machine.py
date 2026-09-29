@@ -70,6 +70,16 @@ class StateMachine:
         self._handle.click(x, y)
         return True
 
+    def _click_xy(self, x: float, y: float) -> bool:
+        """按绝对像素点一点（反检测抖动仍走 handle.click）。
+
+        用于「实测钉死的固定位置」——预设槽列就是这种：44 帧逐像素实测
+        `cy=474+82*(N-1)`、`cx=1655` 零漂移。模板腿失配（_click 空操作）时
+        用它兜底，比让整轮空过强。
+        """
+        self._handle.click(int(x), int(y))
+        return True
+
     def _click(self, rec_id: str) -> bool:
         r = self._find(rec_id)
         if r is None:

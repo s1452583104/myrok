@@ -407,3 +407,99 @@ def test_launch_closes_leftover_ap_dialog_before_march():
         steps += 1
     assert (1638, 120) in handle.clicks   # 弹窗被 X 关闭
     assert sm.last_rally_event is not None   # 关掉后行军照常发起
+
+
+# ---- 预设槽选中态确认（2026-09-27）-----------------------------------------
+# 旧实现 `self._click(f"preset_{N}")` 是盲点：返回值丢掉，模板失配=空操作
+# （用游戏默认兵种）、模板串位=派错兵，两种都静默。现在点完必须确认高亮
+# 移到了槽 N。判据是像素统计（selected_preset_N 识别器），几何实测钉死：
+# cx=1655、cy=474+82*(N-1)。
+
+_GEOM_X = 1655          # 预设列中心（实测）
+_SLOT1_Y = 474          # 槽 1 中心（实测）
+
+
+class _VerifyRec:
+    """`selected_preset_N` 的替身。`mode` 决定它什么时候认账。"""
+
+    def __init__(self, handle, mode="always"):
+        self._h, self._mode = handle, mode
+        self.calls = 0
+
+    def recognize(self, img):
+        self.calls += 1
+        if self._mode == "always":
+            ok = True
+        elif self._mode == "never":
+            ok = False
+        elif self._mode == "after_geometry_click":
+            # 只有出现过按实测几何点槽心的兜底点击才认账
+            ok = any(x == _GEOM_X for x, _ in self._h.clicks)
+        else:
+            raise AssertionError(self._mode)
+        r = MagicMock()
+        r.matched = ok
+        r.bbox = MagicMock(center=lambda: (_GEOM_X, _SLOT1_Y))
+        return r
+
+
+def _sm_with_verifier(mode, monkeypatch):
+    sm, handle = _make_sm()
+    rec = _VerifyRec(handle, mode)
+    sm._rec["selected_preset_1"] = rec
+    return sm, handle, rec
+
+
+def test_select_preset_confirms_with_one_click(monkeypatch):
+    """正常路径：模板点击即确认——**只点一次**，不引入额外点击。"""
+    sm, handle, _rec = _sm_with_verifier("always", monkeypatch)
+
+    sm._select_preset()
+
+    assert handle.clicks == [(50, 50)], "模板命中且确认通过时不该多点"
+
+
+def test_select_preset_falls_back_to_measured_geometry(monkeypatch):
+    """模板失配（点击空操作）→ 按实测槽心几何兜底点一次，确认通过。"""
+    sm, handle, _rec = _sm_with_verifier("after_geometry_click", monkeypatch)
+
+    sm._select_preset()
+
+    assert (_GEOM_X, _SLOT1_Y) in handle.clicks, "没有走几何兜底点击"
+    assert len(handle.clicks) == 2, f"期望 模板1 + 几何1，实得 {handle.clicks}"
+
+
+def test_select_preset_raises_when_never_confirmed(monkeypatch):
+    """3 轮都不确认 → 抛异常（runner 捕获后重试），绝不派错兵。"""
+    sm, handle, _rec = _sm_with_verifier("never", monkeypatch)
+
+    with pytest.raises(RuntimeError, match="预设槽 1 高亮未确认"):
+        sm._select_preset()
+
+    assert len(handle.clicks) == 6, "3 轮 × (模板 + 几何) = 6 次"
+
+
+def test_select_preset_keeps_blind_click_without_verifier(monkeypatch):
+    """没有 selected_preset_N 识别器 → 退回旧的盲点行为（不加验证、不抛）。
+
+    manifest 没写 pixel_stats 的部署、以及 happy-path 的 26 击断言都靠这条。
+    """
+    sm, handle = _make_sm()
+    assert "selected_preset_1" not in sm._rec
+
+    sm._select_preset()
+
+    assert handle.clicks == [(50, 50)]
+
+
+def test_form_troop_verifies_the_preset_before_troop_types(monkeypatch):
+    """端到端：_form_troop 里确认失败会抛出，且**不会**继续点兵种。"""
+    sm, handle, _rec = _sm_with_verifier("never", monkeypatch)
+
+    with pytest.raises(RuntimeError, match="拒绝派错兵"):
+        sm._form_troop({})
+
+    # 所有 mock 都点在同一坐标，用**次数**区分：3 轮 × (模板 + 几何) = 6。
+    # 多出来的就是 troop_* 点击——那意味着确认失败后还继续点兵种了。
+    assert len(handle.clicks) == 6, \
+        f"确认失败后不该继续点 troop_*（实得 {len(handle.clicks)} 次点击）"

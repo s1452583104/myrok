@@ -219,3 +219,71 @@ def test_fill_spec_ocr_only_without_model(image_manifest):
     reg = TemplateRegistry.load(manifest)
     recs = reg.build_recognizers()   # 未配置 yolo_model：与旧版一致纯模板
     assert isinstance(recs["fill_某人"], TemplateMatch)
+
+
+def test_build_recognizers_rejects_an_unknown_type(tmp_path):
+    """真正未知的 type 走 else 分支——`yolo_detect` 那条测的是另一个分支。"""
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "templates:\n"
+        "  - id: weird\n"
+        "    file: whatever.png\n"
+        "    type: nonsense\n"
+        "    threshold: 0.9\n"
+    )
+    reg = TemplateRegistry.load(manifest)
+    with pytest.raises(ValueError, match="unsupported template type for weird: nonsense"):
+        reg.build_recognizers()
+
+
+# ---- pixel_stats 小节（2026-09-27）：选中态改走像素判据 ----
+
+@pytest.fixture
+def manifest_with_pixel_stats(image_manifest):
+    manifest = image_manifest.parent / "manifest.yaml"
+    manifest.write_text(image_manifest.read_text(encoding="utf-8")
+                        + "pixel_stats:\n"
+                          "  - id: selected_preset_1\n    kind: preset_slot\n"
+                          "  - id: selected_preset_2\n    kind: preset_slot\n",
+                        encoding="utf-8")
+    return manifest
+
+
+def test_pixel_stats_build_recognizers_alongside_templates(manifest_with_pixel_stats):
+    from rok_assistant.core.recognizers.pixel_stat import PixelStatRecognizer
+    reg = TemplateRegistry.load(manifest_with_pixel_stats)
+
+    recs = reg.build_recognizers()
+
+    assert set(recs) == {"search", "search_roi",
+                         "selected_preset_1", "selected_preset_2"}
+    assert isinstance(recs["selected_preset_1"], PixelStatRecognizer)
+
+
+def test_pixel_stats_do_not_enter_the_template_table(manifest_with_pixel_stats):
+    """爆炸半径不变量：pixel_stats 的 id 绝不进 `_t`。
+
+    `_t` 会被 auto_label_yolo / ingest_raw_imgs 逐个 cv2.imread(spec.file)。
+    """
+    reg = TemplateRegistry.load(manifest_with_pixel_stats)
+    assert set(reg._t) == {"search", "search_roi"}
+    assert [s.id for s in reg._pixel] == ["selected_preset_1", "selected_preset_2"]
+
+
+def test_manifest_without_pixel_stats_section_still_works(image_manifest):
+    """没写 pixel_stats 的 manifest（旧部署/测试 fixture）照常装配。"""
+    reg = TemplateRegistry.load(image_manifest)
+    assert reg._pixel == []
+    assert set(reg.build_recognizers()) == {"search", "search_roi"}
+
+
+def test_pixel_stats_rejects_an_unknown_kind(image_manifest):
+    manifest = image_manifest.parent / "manifest.yaml"
+    manifest.write_text(image_manifest.read_text(encoding="utf-8")
+                        + "pixel_stats:\n"
+                          "  - id: selected_preset_1\n    kind: nonsense\n",
+                        encoding="utf-8")
+    reg = TemplateRegistry.load(manifest)
+    with pytest.raises(ValueError, match="unsupported pixel_stat kind for "
+                                         "selected_preset_1: nonsense"):
+        reg.build_recognizers()

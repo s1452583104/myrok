@@ -3,6 +3,7 @@ import threading
 import time
 import weakref
 from .state_machine import StateMachine
+from ..core.recognizers.pixel_stat import slot_center
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,6 +23,12 @@ _LEVEL_CLICK_PACE = 0.35
 # 已知限制：若玩家在 GUI 运行期间手动改过面板等级，缓存会偏一轮。
 _LEVEL_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _LEVEL_CACHE_LOCK = threading.Lock()
+
+# 预设槽选中态确认（2026-09-27，见 _select_preset）。超时给 2.0s：高亮是本地
+# 重绘（不像 queue_badge 要等服务端往返），实测 toast 与高亮同帧出现。
+_PRESET_ATTEMPTS = 3
+_PRESET_CONFIRM_TIMEOUT = 2.0
+_PRESET_CONFIRM_INTERVAL = 0.5
 
 
 class LeaderStateMachine(StateMachine):
@@ -252,9 +259,45 @@ class LeaderStateMachine(StateMachine):
     def _form_troop(self, ctx):
         if not self._wait_for("march_btn", timeout=15.0):
             raise RuntimeError("创建部队弹窗未出现（march_btn 不可见）")
-        self._click(f"preset_{self._march_preset}")
+        self._select_preset()
         for t in self._march_troop_types:
             self._click(f"troop_{t}")
+
+    def _select_preset(self):
+        """点预设槽并**确认**高亮移到了槽 N（2026-09-27）。
+
+        旧实现是盲点：`self._click(f"preset_{N}")` 的返回值直接丢掉，两种失败
+        都静默——模板失配=空操作（用游戏默认兵种），模板串位=**派错兵**
+        （`_click_result` 点的是匹配到的位置，而 preset_* 六个槽只差中间数字）。
+
+        1) 先走模板（现状路径）；
+        2) 失配时按**实测钉死**的槽心几何直接点——44 帧逐像素实测
+           `cx=1655`、`cy=474+82*(N-1)` 零漂移（`march_btn` cy=925、
+           `form_title` cy=69 逐字节不变）。模板腿失配不等于这轮必须空过。
+           串位也走这条路：确认失败 → 几何点正确槽 → 确认通过；
+        3) 3 轮都确认不了就**抛异常**。两个号 `march_preset` 都是 1，点错是
+           **系统性**错兵，宁可 loud 失败让 runner 重试，也不发一轮兵种不可信
+           的集结。
+
+        未配置 `selected_preset_N` 识别器时退回旧的盲点行为——manifest 没写
+        `pixel_stats:` 的部署、以及 test_leader_sm 的 26 击断言都靠这道守卫。
+        """
+        n = self._march_preset
+        rec_id = f"selected_preset_{n}"
+        if self._rec.get(rec_id) is None:
+            self._click(f"preset_{n}")
+            return
+        for _ in range(_PRESET_ATTEMPTS):
+            self._click(f"preset_{n}")
+            if self._wait_for(rec_id, timeout=_PRESET_CONFIRM_TIMEOUT,
+                              interval=_PRESET_CONFIRM_INTERVAL):
+                return
+            self._click_xy(*slot_center(n))
+            if self._wait_for(rec_id, timeout=_PRESET_CONFIRM_TIMEOUT,
+                              interval=_PRESET_CONFIRM_INTERVAL):
+                return
+        raise RuntimeError(f"预设槽 {n} 高亮未确认（{_PRESET_ATTEMPTS} 轮），"
+                           f"拒绝派错兵，集结未发起")
 
     def _launch(self, ctx):
         # 必须确认 march_btn 点击成功后再发布 rally_launched——点击失败
