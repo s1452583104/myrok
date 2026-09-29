@@ -1,0 +1,27 @@
+2026-09-11 21:02:35 [ERROR] rok_assistant.gui.controller: 配置加载失败
+Traceback (most recent call last):
+  File "C:\coding\workspace\git\myrok\src\rok_assistant\gui\controller.py", line 40, in load_config
+    yaml.safe_load(self.config_path.read_text(encoding="utf-8")))
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\coding\python\Lib\pathlib\__init__.py", line 787, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\coding\python\Lib\pathlib\__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'config.yaml'
+2026-09-11 21:02:38 [ERROR] __main__: 重读配置失败
+Traceback (most recent call last):
+  File "C:\coding\workspace\git\myrok\src\rok_assistant\gui\main_window.py", line 99, in _reload_controller_config
+    self._controller.reload_config()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\coding\workspace\git\myrok\src\rok_assistant\gui\controller.py", line 54, in reload_config
+    yaml.safe_load(self.config_path.read_text(encoding="utf-8")))
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\coding\python\Lib\pathlib\__init__.py", line 787, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\coding\python\Lib\pathlib\__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'config.yaml'
