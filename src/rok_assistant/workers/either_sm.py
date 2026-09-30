@@ -66,9 +66,13 @@ class EitherStateMachine:
     def __init__(self, handle_source, recognizers: dict, target_level: int,
                  march_preset: int, march_troop_types: list,
                  fill_target_leaders, event_bus=None, char_id: str = "?",
-                 rally_tracker=None):
+                 rally_tracker=None, ledger=None):
         self._bus = event_bus
         self._char_id = char_id
+        # 进程级动作账本（runtime 注入）：转交两个子状态机，发车/填兵确认
+        # 后由它们写「部队在外」。未注入 = 不记账 = 旧行为（Task 4 的门槛
+        # 逻辑读它，本步只做注入）
+        self._ledger = ledger
         # 进程级集结事件登记簿（runtime 注入，跨 SM 重建存活）：查「对方
         # 的集结/让车事件」决定本轮开不开集结；未注入时空实现=特性关闭
         self._tracker = rally_tracker if rally_tracker is not None else _NullTracker()
@@ -78,10 +82,14 @@ class EitherStateMachine:
         self._leader = LeaderStateMachine(handle_source, recognizers, target_level,
                                           march_preset, march_troop_types, event_bus,
                                           wait_members_seconds=0.0,
-                                          publisher_id=self._char_id)
-        # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数
+                                          publisher_id=self._char_id,
+                                          ledger=ledger)
+        # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数。
+        # char_id 必须传：成员填兵确认后要按本账号 id 写账本，缺省 "?" 会把
+        # 事实记到错误（共享）名下
         self._member = MemberStateMachine(handle_source, recognizers,
-                                          fill_target_leaders)
+                                          fill_target_leaders,
+                                          char_id=self._char_id, ledger=ledger)
         self._phase = "leader"
         self.current = "LEADER:IDLE"
         self.history: list[str] = [self.current]

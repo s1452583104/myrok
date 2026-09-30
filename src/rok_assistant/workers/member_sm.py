@@ -46,7 +46,8 @@ class MemberStateMachine(StateMachine):
     （兵出去填陌生人会错过车头的下一轮集结）。
     """
 
-    def __init__(self, handle_source, recognizers: dict, fill_target_leaders):
+    def __init__(self, handle_source, recognizers: dict, fill_target_leaders,
+                 char_id: str = "?", ledger=None):
         self._handle = handle_source
         self._rec = recognizers
         # 归一化：config 侧是 FillLeader pydantic 对象，测试/事件侧是 dict
@@ -60,6 +61,10 @@ class MemberStateMachine(StateMachine):
         if missing:
             logger.warning("成员·填兵目标缺少名字模板: %s "
                            "（templates/manifest.yaml 需有 fill_<名字> 项）", missing)
+        self._char_id = char_id
+        # 进程级动作账本（runtime 注入）：填兵确认后记「部队在外」+ 填兵
+        # 时刻，供集结门槛的 L0 判据用。未注入 = 不记账 = 旧行为
+        self._ledger = ledger
         self._pending_event = None
         self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
         super().__init__(initial="IDLE")
@@ -278,6 +283,11 @@ class MemberStateMachine(StateMachine):
         if not self._find("war_title"):
             self._click_retry("alliance_btn")
         ctx["joined"] = self._wait_for("swap_btn", timeout=6.0)
+        # 账本写入点：橙「替换」出现 = 填兵确实发出去了。上面的
+        # ap_refill 分支是「行军根本没发出去」，不写账本
+        if ctx["joined"] and self._ledger is not None:
+            self._ledger.mark_troops_out(self._char_id)
+            self._ledger.mark_fill_done(self._char_id)
 
     def _join_missed(self, ctx):
         # 「+」/行军点击未生效或表单没出来：重开列表再找。必须清掉上一轮

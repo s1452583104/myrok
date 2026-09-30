@@ -51,7 +51,8 @@ class LeaderStateMachine(StateMachine):
     def __init__(self, handle_source, recognizers: dict, target_level: int,
                  march_preset: int, march_troop_types: list, event_bus=None,
                  wait_members_seconds: float = 330.0,
-                 publisher_id: str | None = None):
+                 publisher_id: str | None = None,
+                 ledger=None):
         self._handle = handle_source
         self._rec = recognizers
         self._target_level = target_level
@@ -63,6 +64,9 @@ class LeaderStateMachine(StateMachine):
         # 登记簿靠它区分「自己/对方」的集结（跨 SM 重建存活）
         self._publisher_id = publisher_id
         self.last_rally_event = None
+        # 进程级动作账本（runtime 注入）：发车确认后记「部队在外」，
+        # 供集结门槛的 L0 判据用。未注入 = 不记账 = 旧行为
+        self._ledger = ledger
         super().__init__(initial="IDLE")
 
     def _setup(self):
@@ -346,6 +350,12 @@ class LeaderStateMachine(StateMachine):
             "fortress_level": self._target_level,
             "march_preset": self._march_preset,
         }
+        # 账本写入点：到这里才确认发车成功（上面刚验过队列徽标出现）。
+        # 被拒的那条分支在 336-343 行提前 return，不会走到这里——账本
+        # 绝不能记一个没生效的动作。
+        if self._ledger is not None and self._publisher_id:
+            self._ledger.mark_troops_out(self._publisher_id)
+            self._ledger.mark_rally_launched(self._publisher_id)
         logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
                     self._target_level, self._march_preset)
         if self._bus:
