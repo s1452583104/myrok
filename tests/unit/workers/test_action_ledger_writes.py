@@ -80,10 +80,28 @@ def test_member_verify_join_failure_does_not_write_ledger():
     assert led.has_record("c2") is False
 
 
+def test_leader_launch_without_queue_badge_does_not_write_ledger():
+    """未配置队列徽标识别器 = 没有任何确认手段 → 不写账本。
+    账本是门槛信任的层级，写「大概发出去了」等于埋一颗迟早被读到的雷；
+    宁可让门槛退回 fail-closed 的宽限路径。"""
+    handle = MockHandleSource(screenshot=_img())
+    recs = {k: _rec() for k in ("march_btn",)}   # 无 queue_badge
+    led = ActionLedger()
+    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+                            march_troop_types=["infantry"], ledger=led,
+                            publisher_id="c1")
+    sm._launch({})
+    assert led.has_record("c1") is False
+
+
 def test_no_ledger_is_a_no_op():
-    """不传 ledger 时行为与旧版完全一致——这是 423 条现有测试保持绿的前提。"""
+    """不传 ledger 时行为与旧版完全一致——这是现有测试保持绿的前提。
+    显式断言账本侧零副作用：SM 不持有账本，旁置账本对象保持空白。"""
     handle = MockHandleSource(screenshot=_img())
     recs = {k: _rec() for k in ("march_btn", "queue_badge")}
+    led = ActionLedger()   # 见证对象：未注入 SM，必须分毫未动
     sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
                             march_troop_types=["infantry"], publisher_id="c1")
     sm._launch({})   # 不得抛异常
+    assert sm._ledger is None
+    assert led.has_record("c1") is False

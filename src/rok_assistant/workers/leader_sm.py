@@ -351,9 +351,11 @@ class LeaderStateMachine(StateMachine):
             "march_preset": self._march_preset,
         }
         # 账本写入点：到这里才确认发车成功（上面刚验过队列徽标出现）。
-        # 被拒的那条分支在 336-343 行提前 return，不会走到这里——账本
-        # 绝不能记一个没生效的动作。
-        if self._ledger is not None and self._publisher_id:
+        # 被静默拒绝的那条分支已提前 return，走不到这里。未配置徽标识别器
+        # 时上面根本没验，「已确认」无从谈起——那种部署下不写：账本只记
+        # 已确认的事实，绝不能写「大概发出去了」。
+        if self._rec.get("queue_badge") is not None \
+                and self._ledger is not None and self._publisher_id:
             self._ledger.mark_troops_out(self._publisher_id)
             self._ledger.mark_rally_launched(self._publisher_id)
         logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
