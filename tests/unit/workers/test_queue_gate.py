@@ -34,6 +34,23 @@ def test_vote_only_delays_never_flips():
     assert out.verdict == "battle"
 
 
+def test_vote_after_settled_unknown_never_proceeds():
+    """已采信 unknown 后单帧反向判读不得翻成放行：
+    unknown 分支只问账本，投票无权把 unknown 变成 PROCEED。
+    （上一个用例只钉住 battle→none 的粘滞，钉不住这条路径。）"""
+    led = ActionLedger()
+    led.mark_troops_out("c1", now=0.0)
+    g = _gate(led, unknown_grace=100000.0, ledger_stale_after=100000.0)
+    out = _settle(g, "unknown", now=0.0)
+    assert out.decision is GateDecision.WAIT
+    assert out.verdict == "unknown"
+
+    # 单帧 none 只是噪声，不足以翻掉已采信的 unknown
+    out = g.observe("none", now=1.0)
+    assert out.decision is GateDecision.WAIT
+    assert out.verdict == "unknown"
+
+
 def test_battle_blocks_and_gather_passes():
     g = _gate()
     out = _settle(g, "battle", now=0.0)
