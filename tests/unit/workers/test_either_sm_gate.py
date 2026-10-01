@@ -7,6 +7,7 @@ import pytest
 from rok_assistant.core.handle_source import MockHandleSource
 from rok_assistant.coordination.action_ledger import ActionLedger
 from rok_assistant.workers.either_sm import EitherStateMachine
+from rok_assistant.workers.queue_gate import GateDecision
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +58,14 @@ def test_gate_still_blocks_when_ledger_says_out(monkeypatch):
     led.mark_troops_out("c1", now=time.time())
     sm = _sm(led)
     monkeypatch.setattr(sm, "_queue_verdict", lambda: "unknown")
+    # 直接问门槛，钉住「WAIT 的**理由**是账本说在外」——只断言 IDLE 不够：
+    # 投票未采信、账本无记录走宽限，也都停在 IDLE。账本一旦被清空/未注入
+    # 而退化成无记录，source 会变成 "grace"，本断言即挂
+    outcome = None
+    for _ in range(3):
+        outcome = sm._gate.observe("unknown")
+    assert outcome.decision is GateDecision.WAIT
+    assert outcome.source == "ledger"
     for _ in range(3):
         sm.step()
     # 门槛 WAIT → step 提前 return，_leader 一拍都没跑

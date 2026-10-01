@@ -46,17 +46,48 @@ instances:
 # 空模板清单：Registry 加载成功但 recognizers 为空，避免依赖真实 templates/
 EMPTY_MANIFEST = "templates: []\n"
 
+# either 角色配置：验证 _spawn 把进程级账本下发给 EitherStateMachine
+# （either 必须配一个指向 leader 的 fill_target，见 config 校验）
+EITHER = """
+app:
+  mumu_manager_path: ""
+  adb_path: "adb"
+instances:
+  - id: inst0
+    name: a
+    adb_address: "127.0.0.1:5555"
+    characters:
+      - id: boss
+        name: 车头
+        role: leader
+        target_level: 7
+        march_preset: 1
+        march_troop_types: [cavalry]
+  - id: inst1
+    name: b
+    adb_address: "127.0.0.1:5556"
+    characters:
+      - id: solo
+        name: 独狼
+        role: either
+        target_level: 7
+        march_preset: 1
+        march_troop_types: [cavalry]
+        fill_target_leaders:
+          - { instance: inst0, name: 车头 }
+"""
 
-def _write_config(tmp_path):
+
+def _write_config(tmp_path, text=VALID):
     p = tmp_path / "config.yaml"
-    p.write_text(VALID, encoding="utf-8")
+    p.write_text(text, encoding="utf-8")
     return load_config(p)
 
 
 @contextmanager
-def _running_coordinator(tmp_path):
+def _running_coordinator(tmp_path, config_text=VALID):
     """启动一个用 MockHandleSource + 空模板清单的 coordinator，结束即停。"""
-    cfg = _write_config(tmp_path)
+    cfg = _write_config(tmp_path, config_text)
     (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
     bus = EventBus()
     fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
@@ -96,6 +127,21 @@ def test_coordinator_snapshot_returns_jpeg_bytes(tmp_path):
         data = coord.snapshot("boss")
         assert data is not None
         assert data[:2] == b"\xff\xd8"
+
+
+def test_spawn_threads_shared_ledger_by_identity(tmp_path):
+    """_spawn 必须把**进程级账本的同一实例**下发给每个状态机（identity，
+    不是相等）。漏传 ledger 时 EitherStateMachine 会自建一本（either_sm.py），
+    而 runner 每轮终态后重建 SM —— 账本随之每轮清空，集结门槛的 L0 判据永久
+    退化成「无记录 + 宽限兜底」，且不会有任何测试失败。自建对象与共享对象
+    「值相等但身份不同」，故必须用 is 断言才能钉住。"""
+    with _running_coordinator(tmp_path, EITHER) as coord:
+        sm = coord.runners["inst1:solo"].sm
+        assert sm._ledger is coord.ledger
+        # 门槛与两个子状态机读的必须是同一本，不是各自副本
+        assert sm._gate._ledger is coord.ledger
+        assert sm._leader._ledger is coord.ledger
+        assert sm._member._ledger is coord.ledger
 
 
 # ---------------- 用不跑线程的 FakeRunner 精确测路由/生命周期 ----------------
