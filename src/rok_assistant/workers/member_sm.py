@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .state_machine import StateMachine
+from ..core.recognizers.view_probe import View, ViewProbe
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,6 +66,9 @@ class MemberStateMachine(StateMachine):
         # 进程级动作账本（runtime 注入）：填兵确认后记「部队在外」+ 填兵
         # 时刻，供集结门槛的 L0 判据用。未注入 = 不记账 = 旧行为
         self._ledger = ledger
+        # 视图判定探针（2026-09-30）：只做「额外的成功信号」与「失败归因」，
+        # 不取代 _normalize_view 的残留面板清理清单
+        self._view_probe = ViewProbe(recognizers)
         self._pending_event = None
         self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
         super().__init__(initial="IDLE")
@@ -190,8 +194,10 @@ class MemberStateMachine(StateMachine):
                 or self._wait_for("search_icon", timeout=2.0)):
             # 2026-09-18 实机：简化模式下联盟快捷键整体不显示，城市视图
             # 归一化在此处误抛异常连续计败。放大镜与旗帜同为地图视图专属
-            # UI，任一可见即归一化成功
-            raise RuntimeError("联盟旗帜不可见：既不在地图视图，退搜索也没找到")
+            # UI，任一可见即归一化成功。都不见时用探针说清卡在哪
+            view = self._view_probe.probe(self._handle.capture()).view
+            raise RuntimeError(f"归一化失败：卡在[{view.value}]视图"
+                               "（联盟旗帜与放大镜均不可见）")
 
     def _open_war(self, ctx):
         ctx["war_attempts"] = ctx.get("war_attempts", 0) + 1

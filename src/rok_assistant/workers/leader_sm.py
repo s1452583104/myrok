@@ -4,6 +4,7 @@ import time
 import weakref
 from .state_machine import StateMachine
 from ..core.recognizers.pixel_stat import slot_center
+from ..core.recognizers.view_probe import View, ViewProbe
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +68,9 @@ class LeaderStateMachine(StateMachine):
         # 进程级动作账本（runtime 注入）：发车确认后记「部队在外」，
         # 供集结门槛的 L0 判据用。未注入 = 不记账 = 旧行为
         self._ledger = ledger
+        # 视图判定探针（2026-09-30）：只做「额外的成功信号」与「失败归因」，
+        # 不取代 _normalize_view 的残留面板清理清单
+        self._view_probe = ViewProbe(recognizers)
         super().__init__(initial="IDLE")
 
     def _setup(self):
@@ -153,11 +157,22 @@ class LeaderStateMachine(StateMachine):
             # 搜索模式专属底栏盖掉 map_btn，先退搜索再回地图
             self._click("search_back")
         self._click("map_btn")
-        self._wait_for("search_icon", timeout=6.0)
+        if self._wait_for("search_icon", timeout=6.0):
+            return
+        # 放大镜没等到：不再把失败漂到 _search_fortress（那里只能报
+        # 「search_icon 不可见」，说不出到底卡在哪）
+        view = self._view_probe.probe(self._handle.capture()).view
+        if view is View.MAP:
+            # 探针说在地图但放大镜模板失配：与 member 侧同款判据
+            # （「放大镜与旗帜同为地图视图专属 UI，任一可见即成功」）
+            logger.warning("[归一化] 放大镜模板失配但探针确认在地图视图，"
+                           "按归一化成功处理")
+            return
+        raise RuntimeError(f"归一化失败：卡在[{view.value}]视图")
 
     def _search_fortress(self, ctx):
         if not self._click_retry("search_icon", attempts=3):
-            raise RuntimeError("search_icon 不可见且 map_btn 归一化失败")
+            raise RuntimeError("search_icon 点击失败（归一化已成功，放大镜应可见）")
 
     def _select_level(self, ctx):
         # 面板记住上次的 Tab（实测落在「野蛮人」上，2026-09-11 实机验收发现）。
@@ -262,7 +277,8 @@ class LeaderStateMachine(StateMachine):
 
     def _form_troop(self, ctx):
         if not self._wait_for("march_btn", timeout=15.0):
-            raise RuntimeError("创建部队弹窗未出现（march_btn 不可见）")
+            view = self._view_probe.probe(self._handle.capture()).view
+            raise RuntimeError(f"创建部队弹窗未出现，卡在[{view.value}]视图")
         self._select_preset()
         for t in self._march_troop_types:
             self._click(f"troop_{t}")

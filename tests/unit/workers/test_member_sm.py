@@ -134,7 +134,7 @@ def test_form_troop_missing_march_btn_reopens_panel(monkeypatch):
 def test_normalize_closes_war_panel_residual_and_confirms_map(monkeypatch):
     # 2026-09-18 实机（run6 03:46 mumu0）：成员轮空放弃后战争面板残留，
     # 点 X 后面板有关闭过渡，紧接的检查在淡出中全落空 → 归一化超时抛
-    # 「联盟旗帜不可见」连续计败。关面板后须等放大镜现形（地图视图
+    # 「归一化失败：卡在[…]视图」连续计败。关面板后须等放大镜现形（地图视图
     # 确认）才算归一化成功，而不是继续往下走死路
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, _, _ = _make_sm()
@@ -161,7 +161,7 @@ def test_normalize_closes_war_panel_residual_and_confirms_map(monkeypatch):
 def test_normalize_closes_form_title_residual_and_confirms_map(monkeypatch):
     # 2026-09-18 实机（run7 04:24 mumu0，失败截图 form_title=1.000）：
     # 创建部队表单残留时点一次 X 就往下走，淡出未完/首点未生效，后续
-    # 检查全在模态底下落空 → 归一化抛「联盟旗帜不可见」连续计败。
+    # 检查全在模态底下落空 → 归一化抛「归一化失败：卡在[…]视图」连续计败。
     # 须关一次确认一次：表单还开着才补点 X，放大镜现形（地图视图确认）
     # 即归一化成功
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
@@ -252,7 +252,7 @@ def test_verify_join_refills_ap_when_popup_blocks_march(monkeypatch):
 
 
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
-    # 搜索面板开着时联盟旗帜不可见（搜索模式专属底栏）：先点 search_back
+    # 搜索面板开着时右下角联盟旗帜被底部搜索栏替换（搜索模式专属底栏）：先点 search_back
     # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError
     # （环境异常走 runner 错误路径），而不是静默继续
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
@@ -266,7 +266,7 @@ def test_normalize_exits_search_then_finds_flag(monkeypatch):
         for _ in range(10):
             sm.step()
     except RuntimeError as e:
-        assert "联盟旗帜不可见" in str(e)
+        assert "卡在[" in str(e)
     else:
         raise AssertionError("应当抛 RuntimeError 而不是静默继续")
     # 唯一一次点击是 search_back（map_btn 在 elif 分支未被触达）
