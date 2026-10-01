@@ -333,3 +333,67 @@ v8 上线后用户实测：**「7-10 级可以识别，1-6 级仍不识别」**�
   （连抓 6 帧方差 0，位置正确 (1846,306)，其它队列模板全 ≤0.45）→ `verdict=unknown` →
   集结门槛 fail-closed 15 分钟 → mumu1 本轮不发起集结、mumu0 成员窗口白等，
   第 1/10 轮以「填不到兵」结束。修法建议重采模板而非降阈值（负样本集是照旧美术测的）。
+
+### 2026-10-01 计划 A（判据层）落地（spec `2026-09-30-健壮状态判断与任务队列-design.md` 的前半）
+
+**背景**：09-29 实机发现——`queue_flag_icon` 稳定读 0.758、连抓 6 帧方差为 0 → `_queue_verdict`
+落 `unknown` → fail-closed 等 900s 宽限 → 到点告警放行 → 车头部队其实在外，开集结被游戏
+**静默拒绝** → `rally_rejected` 计入连续失败（mumu0 吃到 2/3，再 1 次整轮停机）。
+**方向性关键**：蓝旗语义是「驻扎/集结等待」=**阻塞**态，读对了反而会拦住这次注定被拒的开车。
+所以 0.758 漏检不是「多等一会」，是**把安全的拦截变成了有害的放行**。
+
+**根因（判据层缺位）**：唯一判据是像素，而像素会**稳定地**错。修法不是降阈值（那是拿假阳换假阴），
+而是引入**可信度分层**：账本（自己写下的确凿事实）> 消息（跨 SM 直接消息）> 画面（像素）。
+
+**交付（12 commits，`0cfd458..2f3a5c7`）**：
+1. **`coordination/action_ledger.py`（新）**——进程级 `ActionLedger`，`threading.Lock` 保护，
+   按 `char_id` 记 `troops_out / troops_out_since / last_rally_launched_ts / last_fill_ts / written`。
+   **`written` 与 `troops_out` 成对**：只有「已确认」的动作才写（见第 3 条）。
+2. **`workers/queue_gate.py`（新）**——`QueueGate.observe(verdict)` → `GateOutcome(decision, reason,
+   verdict, source)`，`source ∈ {vote, ledger, grace}`；`VOTE_SIZE=3`、`unknown_grace=900.0`、
+   `LEDGER_STALE_AFTER=3600.0`。**本计划的核心不变式**：多帧投票**只能延迟（hold WAIT），
+   永远不能翻转**——投票不得把 `unknown` 变成 PROCEED。假阳代价是白等 15 分钟，假阴代价是
+   一个注定被静默拒绝的集结且计入连续失败（3 次整轮停机）。
+   `test_vote_only_delays_never_flips` / `test_vote_after_settled_unknown_never_proceeds` 钉住它。
+3. **账本写入点**：`leader_sm` 发车确认后写、`member_sm` 填兵确认后写、`either_sm` 返城
+   （`"none"` 落空分支）写。**未确认即不写**——`leader_sm` 的写入点另加
+   `self._rec.get("queue_badge") is not None` 守卫：队列徽标识别器没配置就无法确认，
+   不能记下未确认的效果。
+4. **`runtime.py` 下发同一个 `ActionLedger` 实例**给三个 SM。集成测试按**对象同一性**断言
+   （不是相等），防止将来改成各建一个。
+5. **`core/recognizers/view_probe.py`（新）**——`ViewProbe` 一次截屏判 7 个视图 + 未知；
+   `_normalize_view` 失败时抛 `归一化失败：卡在[创建部队]视图`，取代原先无从下手的
+   `search_icon 不可见且 map_btn 归一化失败`。单个识别器抛异常按**未命中**处理并记 warning
+   （`scores` 完整性被测试钉住），不让一个坏识别器炸掉整条归因。
+   **`_normalize_view` 的清理清单没有被重写成探测循环**——里面每个 `if self._find(...)` 的顺序
+   与坐标各对应一次实机事故（见本文件 09-16/09-17 各条），重写等于把踩过的坑再踩一遍。
+6. **`infra/config.py` 的 `find_level_collisions`**——同等级且**至少一方填对方**时启动告警。
+   两号同为 7 级互相填兵会命中此告警，**是有意的**：它正是「让车门槛 / `_FOREIGN_RALLY_WINDOW`
+   该退休」的信号（删除本身留给计划 B）。
+
+**测试**：423 → **478 绿**（+55，264.89s）。新增 7 个测试文件：`test_action_ledger.py`、
+`test_queue_gate.py`、`test_action_ledger_writes.py`、`test_either_sm_gate.py`、
+`test_normalize_view.py`、`test_view_probe.py`、`test_level_collision.py`。
+
+**计划自身的 4 处缺陷（执行中发现并裁定，不是静默吸收）**：Task 2 的「10 passed」实为 **9**
+（plan 文字错）；Task 4 的测试自相矛盾（`mark_troops_out(now=0.0)` 而门槛读墙钟 →
+`troops_out_seconds≈1.79e9 ≥ 3600` → 断言方向与预期相反）；Task 5 的「早返回」实现**无法满足
+它自己的** `call_count == 1` 测试（唯一解是删掉早返回）；Task 7 的 `_cfg` 造出违反真实
+`RootConfig` 校验规则的配置（`either` 配空 `fill_target_leaders`）。
+
+**修正 spec §八.2**：`_FOREIGN_RALLY_WINDOW` 在 `either_sm.py` 有**三处**用途（`:18` 常量、
+`:127` 让车门槛、`:157` `rally_rejected` 降级、`:181` 成员提前收尾），不是 spec 写的「一个分支」。
+其中 `:157` **必须被 Mailbox 的消息驱动降级取代**而非删除——直接删会让 `rally_rejected`
+永远计入失败，正好退回 spec §六 要修的那个 bug。`:181` 则因 `:127` 不再发布 `rally_skipped`
+而变成死代码。删除本身留给计划 B。
+
+**待验证（尚未跑）**：Task 8 Step 2/3 的实机验证被推迟——模拟器未启动（`adb devices` 为空，
+`adb connect 127.0.0.1:16384` / `:16416` 均报 `10061 目标计算机积极拒绝`）。
+需启 MuMu、连 adb、两号登录后跑 `_run_goal.py`，然后 `grep -E "集结门槛" _driver.log`：
+期望出现 `放行（判据来源 ledger）` / `grace` 且**不再有** `未知队列图标已持续 900.0s，放行搜索`；
+再 `grep -E "卡在\[" _driver.log`。
+
+**遗留**：`queue_flag_icon` 0.758 **仍未解决**——多帧投票消不掉**方差为 0 的稳定错读**
+（三帧读到同一个错值，投票只是把同一个错答案数三遍）。它现在被账本挡在门外（部队在外时账本
+直接判 WAIT），但**账本只在「本轮自己发起过」时才有话说**，跨轮 / 驱动重启后的第一个 unknown
+仍会落到宽限放行。真正的修法是重采模板（需要实机截图）。
