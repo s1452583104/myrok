@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -127,6 +128,20 @@ def test_coordinator_snapshot_returns_jpeg_bytes(tmp_path):
         data = coord.snapshot("boss")
         assert data is not None
         assert data[:2] == b"\xff\xd8"
+
+
+def test_start_warns_on_level_collision_but_still_runs(tmp_path, caplog):
+    """EITHER 配置里两号同为 7 级且 either 填 leader → 撞车。
+    start() 必须真的记录告警（纯函数测试钉不住「发射」这一步），
+    且告警只是提醒，不得中断启动 —— runner 仍照常建好、coordinator 在运行。"""
+    with caplog.at_level(logging.WARNING,
+                         logger="rok_assistant.coordination.runtime"):
+        with _running_coordinator(tmp_path, EITHER) as coord:
+            assert coord._running is True                      # 未被告警阻断
+            assert set(coord.runners) == {"inst0:boss", "inst1:solo"}
+    warnings = [r.getMessage() for r in caplog.records
+                if r.name == "rok_assistant.coordination.runtime"]
+    assert any("同为 7 级" in m and "填对方" in m for m in warnings)
 
 
 def test_spawn_threads_shared_ledger_by_identity(tmp_path):

@@ -43,6 +43,8 @@ def test_same_level_one_direction_still_warns():
     """A 填 B、B 不填 A：同样会撞车，只查「互为」会漏。"""
     msgs = find_level_collisions(_cfg(7, 7, fill_ba=False))
     assert len(msgs) == 1
+    # 单方向时关系并不互反，文案不能声称「互为」
+    assert "互为" not in msgs[0]
 
 
 def test_same_level_no_fill_relation_is_silent():

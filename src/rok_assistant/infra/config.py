@@ -147,8 +147,8 @@ def find_level_collisions(config: RootConfig) -> list[str]:
             if not related:
                 continue
             out.append(
-                f"[配置] {a.name} 与 {b.name} 同为 {a.target_level} 级且互为"
-                f"填兵目标：可能搜到同一寨子，撞车时后发者被游戏静默拒绝"
+                f"[配置] {a.name} 与 {b.name} 同为 {a.target_level} 级且至少"
+                f"一方填对方：可能搜到同一寨子，撞车时后发者被游戏静默拒绝"
                 f"（已降级不计失败，但白烧一次搜索）。建议配置不同等级。")
     return out
 
