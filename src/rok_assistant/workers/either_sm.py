@@ -3,6 +3,8 @@ import random
 import time
 from .leader_sm import LeaderStateMachine
 from .member_sm import MemberStateMachine
+from .queue_gate import GateDecision, QueueGate
+from ..coordination.action_ledger import ActionLedger
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -70,9 +72,12 @@ class EitherStateMachine:
         self._bus = event_bus
         self._char_id = char_id
         # 进程级动作账本（runtime 注入）：转交两个子状态机，发车/填兵确认
-        # 后由它们写「部队在外」。未注入 = 不记账 = 旧行为（Task 4 的门槛
-        # 逻辑读它，本步只做注入）
-        self._ledger = ledger
+        # 后由它们写「部队在外」。门槛判据读它（见下）。未注入时自建一本
+        # （单账号/测试场景），保证判据逻辑一致
+        self._ledger = ledger if ledger is not None else ActionLedger()
+        # 门槛判据（2026-09-30）：多帧投票 + 账本覆盖 unknown。
+        self._gate = QueueGate(self._ledger, self._char_id,
+                               unknown_grace=_QUEUE_UNKNOWN_GRACE)
         # 进程级集结事件登记簿（runtime 注入，跨 SM 重建存活）：查「对方
         # 的集结/让车事件」决定本轮开不开集结；未注入时空实现=特性关闭
         self._tracker = rally_tracker if rally_tracker is not None else _NullTracker()
@@ -83,13 +88,14 @@ class EitherStateMachine:
                                           march_preset, march_troop_types, event_bus,
                                           wait_members_seconds=0.0,
                                           publisher_id=self._char_id,
-                                          ledger=ledger)
+                                          ledger=self._ledger)
         # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数。
         # char_id 必须传：成员填兵确认后要按本账号 id 写账本，缺省 "?" 会把
         # 事实记到错误（共享）名下
         self._member = MemberStateMachine(handle_source, recognizers,
                                           fill_target_leaders,
-                                          char_id=self._char_id, ledger=ledger)
+                                          char_id=self._char_id,
+                                          ledger=self._ledger)
         self._phase = "leader"
         self.current = "LEADER:IDLE"
         self.history: list[str] = [self.current]
@@ -98,7 +104,6 @@ class EitherStateMachine:
         self._wait_deadline = 0.0
         self._next_check = 0.0
         self._gate_next_log = 0.0
-        self._unknown_since: float | None = None
 
     def step(self, context: dict | None = None) -> None:
         if context is not None:
@@ -107,26 +112,20 @@ class EitherStateMachine:
         if self._phase == "leader":
             # 搜索-集结前置门槛（2026-09-13 用户要求）：上一轮集结部队
             # 未回城就搜下一轮，会搜到上轮已锁定的城寨、且车头回不了城。
-            # 有行军/驻扎队列在外时原地等待，只在轮次入口（IDLE/NORMALIZE）
-            # 拦截，日志 30s 节流。未知队列图标同样拦截（fail-closed，
-            # 2026-09-14 实机），持续超宽限期才放行，防未知良性队列卡死调度
+            # 判据自 2026-09-30 起交给 QueueGate：多帧投票（L1）滤掉单帧
+            # 噪声，unknown 时改问进程级动作账本（L0）而不是干等计时器，
+            # 账本无记录（进程刚起/换账号）才退回旧的 fail-closed + 宽限。
+            # 只在轮次入口（IDLE/NORMALIZE）拦截，日志 30s 节流
             if self._leader.current in ("IDLE", "NORMALIZE"):
-                verdict = self._queue_verdict()
-                if verdict != "unknown":
-                    self._unknown_since = None
-                if verdict == "battle":
-                    self._gate_log("有行军/驻扎队列在城外，等待回城后再搜索")
+                outcome = self._gate.observe(self._queue_verdict())
+                if outcome.decision is GateDecision.WAIT:
+                    self._gate_log(outcome.reason)
                     return
-                if verdict == "unknown":
-                    now = time.time()
-                    if self._unknown_since is None:
-                        self._unknown_since = now
-                    if now - self._unknown_since < _QUEUE_UNKNOWN_GRACE:
-                        self._gate_log("队列图标不可辨（按在外处理），暂缓"
-                                       "搜索")
-                        return
-                    logger.warning("[集结门槛] 未知队列图标已持续 %ss，放行"
-                                   "搜索", _QUEUE_UNKNOWN_GRACE)
+                if outcome.source != "vote":
+                    # 判据来源不是投票 = 是账本/兜底放行的，必须留痕：
+                    # 「为什么这轮放行了」在实机上是最难查的一类问题
+                    logger.warning("[集结门槛] 放行（判据来源 %s）：%s",
+                                   outcome.source, outcome.reason)
                 # 让车门槛（2026-09-18 run11 实锤）：窗内对方已发起集结时，
                 # 同一城寨再开集结会被游戏静默拒绝（表单关闭、无 toast、无
                 # 队列徽标）。窗内不开自己的集结，直接转成员流程填对方的。
@@ -351,6 +350,9 @@ class EitherStateMachine:
                         "等待")
             return
         logger.info("[等待返城] 派遣队列已空，集结部队已回城，本轮完成")
+        # 账本写入点：队列判空 = 部队确实回城（唯一确认口径，非「停止轮询」）。
+        # 清 troops_out 让下一轮门槛的 L0 判据不再误以为部队仍在外
+        self._ledger.mark_troops_home(self._char_id)
         self._phase = "done"
         self.current = "MEMBER:END"
         self.history.append(self.current)

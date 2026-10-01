@@ -193,7 +193,11 @@ def test_member_exhaust_downgrades_when_own_rally_in_flight():
 def test_last_image_delegates_to_active_phase():
     sm = _make_sm()
     assert sm.last_image is None  # 尚未运行
-    sm.step()  # IDLE -> NORMALIZE（leader 阶段 _find 捕获过帧）
+    # 门槛 QueueGate 需连续 VOTE_SIZE 帧同结论才放行（2026-09-30）：前两拍
+    # 停在 IDLE 不委托 leader，故多走两拍才到 NORMALIZE 并捕获首帧
+    for _ in range(3):
+        sm.step()
+    assert sm.current == "LEADER:NORMALIZE"
     assert sm.last_image is not None
 
 
@@ -617,6 +621,9 @@ def test_gate_unknown_queue_icon_proceeds_after_grace(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime)
+    # 宽限计时器自 2026-09-30 起由 QueueGate 持有，时钟在 queue_gate 模块：
+    # 不替换它，FakeTime 的推进对门槛不可见，unknown 永不「超时」
+    monkeypatch.setattr("rok_assistant.workers.queue_gate.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
     badge = _mock_rec()
     sm._leader._rec["queue_badge"] = badge

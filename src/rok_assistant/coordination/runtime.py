@@ -13,6 +13,7 @@ from ..infra.anti_detection import JitteringHandleSource
 from ..infra.logger import get_logger
 from ..workers.factory import create_state_machine
 from ..workers.runner import WorkerRunner
+from .action_ledger import ActionLedger
 from .event_bus import EventBus
 
 logger = get_logger(__name__)
@@ -88,6 +89,9 @@ class RuntimeCoordinator:
         self._routes: dict[str, Callable] = {}
         # 集结事件登记簿：跨 SM 重建存活，either 车头让车/拒绝降级决策用
         self._rally_tracker = RallyEventTracker(self._bus)
+        # 进程级动作账本：跨 SM 重建存活，集结门槛的 L0 判据与「谁在外」
+        # 归因都读它
+        self.ledger = ActionLedger()
         self._running = False
 
     def start(self) -> None:
@@ -131,7 +135,8 @@ class RuntimeCoordinator:
         runner = WorkerRunner(
             instance_id=inst.id, char_id=char.id, char_name=char.name,
             sm_factory=lambda: create_state_machine(char, handle, recognizers,
-                                                    self._bus, self._rally_tracker),
+                                                    self._bus, self._rally_tracker,
+                                                    ledger=self.ledger),
             handle_source=handle, event_bus=self._bus,
             max_rounds=self._config.app.max_rounds,
             max_consecutive_failures=self._config.app.max_consecutive_failures)
