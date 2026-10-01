@@ -8,7 +8,7 @@ import cv2
 
 from ..core.template_registry import TemplateRegistry
 from ..core.handle_source import create_handle_source
-from ..infra.config import RootConfig, RoleEnum
+from ..infra.config import RootConfig, RoleEnum, find_level_collisions
 from ..infra.anti_detection import JitteringHandleSource
 from ..infra.logger import get_logger
 from ..workers.factory import create_state_machine
@@ -97,6 +97,10 @@ class RuntimeCoordinator:
     def start(self) -> None:
         if self._running:
             return
+        # 只告警不拦启动：同等级且互为填兵目标的两号可能搜到同一寨子，
+        # 撞车只会白烧一次搜索（已降级不计失败），不该阻断运行
+        for msg in find_level_collisions(self._config):
+            logger.warning("%s", msg)
         # 先置位再组装：若中途失败（如第 2 个实例连不上），必须走回滚，
         # 否则半启动的 runner 成孤儿、下次 start() 会在同一批模拟器上重复拉起
         self._running = True

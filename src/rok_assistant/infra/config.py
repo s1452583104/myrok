@@ -117,6 +117,42 @@ class RootConfig(BaseModel):
         return self
 
 
+def find_level_collisions(config: RootConfig) -> list[str]:
+    """找出「可能搜到同一寨子」的角色对，返回人类可读的告警文案。
+
+    为什么是告警而不是校验错误：撞车不会让流程出错，只会白烧一次搜索
+    ——车头被游戏静默拒绝后按 rally_rejected 降级、不计失败、转填兵。
+    所以这里只提醒，不拦启动。
+
+    判定条件（三者同时满足）：
+      1. 两个角色 role ∈ {leader, either}（member 不开车）
+      2. target_level 相同（等级不同 → 搜索目标不同 → 不会撞）
+      3. 至少一个方向填对方（互为填兵目标说明两号在同一联盟协同作战；
+         不同联盟各自为战则不会互相干扰）
+
+    注意第 3 条只要求**任一方向**：A 填 B 而 B 不填 A 时同样会撞车，
+    只查「互为」会漏掉这种配置。
+    """
+    cars = [(i, c) for i in config.instances for c in i.characters
+            if c.role in (RoleEnum.LEADER, RoleEnum.EITHER)]
+    out: list[str] = []
+    for idx, (inst_a, a) in enumerate(cars):
+        for inst_b, b in cars[idx + 1:]:
+            if a.target_level != b.target_level:
+                continue
+            related = any(t.instance == inst_b.id and t.name == b.name
+                          for t in a.fill_target_leaders) or \
+                any(t.instance == inst_a.id and t.name == a.name
+                    for t in b.fill_target_leaders)
+            if not related:
+                continue
+            out.append(
+                f"[配置] {a.name} 与 {b.name} 同为 {a.target_level} 级且互为"
+                f"填兵目标：可能搜到同一寨子，撞车时后发者被游戏静默拒绝"
+                f"（已降级不计失败，但白烧一次搜索）。建议配置不同等级。")
+    return out
+
+
 def load_config(path: Path) -> RootConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
