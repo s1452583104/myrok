@@ -65,6 +65,21 @@ def test_confidence_and_scores_are_reported():
     assert v.confidence == pytest.approx(0.87)
     assert v.scores["war_title"] == pytest.approx(0.87)
     assert v.hits == ("war_title",)
+    # scores 要覆盖「每个锚点」供排查：未命中的锚点也必须带 0.0 出现，
+    # 不能只记命中项（否则排查时看不出是没命中还是根本没跑）。
+    assert "search_icon" in v.scores
+    assert v.scores["search_icon"] == 0.0
+
+
+def test_recognizer_that_raises_is_counted_as_miss():
+    """某个识别器抛异常时探针仍要给出判定：它只该算这个锚点未命中，
+    不能让归一化的每拍路径整个挂掉（docstring 的承诺）。"""
+    recs = _recs({"war_title": 0.9})
+    recs["search_icon"].recognize.side_effect = RuntimeError("模板读坏了")
+    v = ViewProbe(recs).probe(IMG)
+    assert v.view is View.WAR_LIST
+    assert v.scores["search_icon"] == 0.0
+    assert v.confidence == pytest.approx(0.9)
 
 
 def test_missing_recognizer_is_skipped_not_crashed():

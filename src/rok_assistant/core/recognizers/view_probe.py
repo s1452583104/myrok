@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class View(str, Enum):
@@ -75,7 +78,16 @@ class ViewProbe:
                 rec = self._rec.get(rid)
                 if rec is None:
                     continue
-                r = rec.recognize(img)
+                try:
+                    r = rec.recognize(img)
+                except Exception as exc:
+                    # 单个识别器炸了不该拖垮整帧判定：记 0.0 当未命中，
+                    # 但仍要留日志——真坏掉的识别器不能被静默吞掉。
+                    logger.warning(
+                        "视图探针：锚点 %s 的识别器抛异常，按未命中处理：%s",
+                        rid, exc)
+                    scores[rid] = 0.0
+                    continue
                 conf = float(getattr(r, "confidence", 0.0) or 0.0)
                 scores[rid] = conf
                 if r.matched:
