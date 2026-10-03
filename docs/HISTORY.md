@@ -420,3 +420,41 @@ v8 上线后用户实测：**「7-10 级可以识别，1-6 级仍不识别」**�
   仍未采信则按 `unknown` 处理，交给账本 / 宽限接手。
 - 5 条 Minor 全部 park（`settled == "battle"` 无上限等待属旧行为；`_normalize_view` 少 ~2s 重试预算
   即 Ruling 18；探针帧未存 `last_image`；`ViewProbe` 每号建两次；文档等级叙述与配置不符——已更正）。
+
+#### 计划 A 裁定存档（28 条，含「错了会怎样」）
+
+执行期（Task 1-7）：
+1. Task 7 只交付 `find_level_collisions()` + 启动告警，不动 `config.yaml`（用户说自己改）。错：告警可能在其改完前误报一次，非阻塞。
+2. Task 7 测试用合成配置（`RootConfig.model_validate`），不读 `config.yaml`。错：无成本。
+3. Task 8 实机验证算「暂定」——配置可能改到一半，grep 不到 `卡在[` 不算 bug。错：实机证据推迟给用户，单测证据不受影响。
+4. Task 1 的 4 条 Minor 全 park（读方法会插默认条目／并发测试用不同 key 测不出锁／`snapshot` 对 `slots=True` 脆弱／缺 `from __future__`）。错：将来 `char_id` 无界或加字段时要回头修，会在改动点暴露。
+5. 计划写「Task 2 有 10 passed」是错的，**9** 才对。错：无成本。
+6. `queue_gate.py:109` 的 `>=` 按计划保留（计划文字说「超过」）。错：恰在 3600.0s 边界早放行 1 秒。
+7. `VOTE_SIZE`/`LEDGER_STALE_AFTER` 是默认参数，`monkeypatch.setattr` 对它们无效——park。错：将来想全局改这两个值的测试会静默失效、可能因错误原因通过。
+8. `written` 与 `troops_out` 的耦合（`mark_rally_launched`/`mark_fill_done` 只设 `written`）跨任务携带、不当场修。错：将来任何只设 `written` 不设 `troops_out` 的写入点会把 unknown 静默变成放行——正是本计划要消灭的 fail-open。
+9. `QueueGate.observe` 无锁、分三次读账本——park。错：将来跨线程共享 `QueueGate` 会读到撕裂视图。
+10. either→member 交接加 `char_id=self._char_id`（超出 brief 文字）——接受。错：无成本。
+11. 车头写入点在 `queue_badge` 未配置时无像素确认——确认不是现行 fail-open，仍在修轮补了守卫。错：该配置下不写账本，退回保守的 fail-closed 宽限路径。
+12. 成员写入点缺 `char_id` 守卫——park。错：将来新的直接构造点会记到 `"?"`、被门槛忽略（退化成无账本）。
+13. Task 4 brief 的测试自相矛盾（`now=0.0` vs 墙钟），采纳实现者的 `now=time.time()`。错：无成本。
+14. `either_sm.py:127` 的 `放行（判据来源 …）` 告警没节流——park。错：那段窗口内日志刷屏。
+15. runtime 共享账本下发没有测试——**升级为必修**（原本只是 Minor）。不修的代价：`ledger=self.ledger` 一旦被删，每轮重建账本、L0 永久退化成宽限，**且没有任何测试会红**。
+16. Task 5 brief 的实现与它自己的测试互相矛盾——采纳「只删早返回」为唯一解。错：每次 probe 多跑 ~13 次 `cv2.matchTemplate`（有帧缓存，有界）。附：我提的「`VIEW_PRIORITY` 会变死代码」假设**被评审员驳回，他是对的**。
+17. `ViewVerdict` 冻结却持有可变 `scores`；`UNKNOWN` 的 `confidence` 硬编码 `0.0`——park。错：将来有消费者改 `scores` 会让人意外。
+18. Task 6 删掉的恢复路径（不再走 `_search_fortress` 的 3 次 `search_icon` 重试）——接受。错：`卡在[` 异常增多，计入 6 连 step 异常断路器。**触发条件：实机日志里 `卡在[` 变多就恢复重试。**
+19. Task 6 两条 Minor park（`member_sm.py:3` 未使用的 `View` 导入；`test_member_sm.py:269` 只断言 `卡在[` 前缀）。错：(a) 无；(b) 那一处指错视图名抓不到，但专门测试会抓。
+20. Task 7 brief 的 `_cfg` 造出违反真实校验规则的配置——采纳实现者改成 `role: "leader"`。错：无成本。
+21. Task 7 告警文案「互为填兵目标」与单向 `or` 不符——**修**。错：一句日志文案。
+22. Task 7 没有测试告警真被发出——**尝试补**，给了逃生口。错：无。
+23. Task 8 Step 2/3 **推迟**（模拟器没起），不是跳过。错：门槛的 ledger/grace 与 `卡在[` 文案未在真机验证——逻辑都有单测，未验的是集成读数。
+24. Task 8 Step 1 结果：478 passed / 264.89s。
+25. Task 8 Step 4/5 完成（`63df703`）。范围说明：`.trae/skills/superpowers` 的改动不是本次工作，未 stage。
+
+最终评审后：
+26. 最终评审 Important #1（填兵方账本 `troops_out` 永不清零）**park + 触发条件**。错：计划 A 的头号收益对填兵方没兑现；但方向安全（账本只产出 WAIT，永不错误放行），且与计划 A 之前逐字相同，**不是回归**。触发条件：计划 B 的 FillTask，或实机日志再次出现填兵方的 900s 放行。
+27. 最终评审 Important #2（投票迟迟无法采信 → 静默死等）**修**（`da90641`）。错：有界地落到同一条 unknown 路径（本来就有 900s 宽限），方向是设计已接受的那个。
+28. 最终评审 5 条 Minor 全 park；其中 1 条是文档错误（等级叙述说 7⇄7，实际 7⇄8），直接更正。错：文档继续误导下一位读者。
+
+**回头先读这四条**：#18、#26（带触发条件），#4、#7、#8、#12（「将来改动会撞到」类）。
+
+**计划 A 收尾（2026-10-03）**：15 commits `0cfd458..72466e3`；全套 **481 passed**；最终评审 0 Critical / 2 Important（一修一 park）/ 5 Minor 全 park；定向复评「all findings addressed, no new breakage」。SDD 工作区已删（`.superpowers/sdd/2026-09-30-判据层/`），git 历史是记录。

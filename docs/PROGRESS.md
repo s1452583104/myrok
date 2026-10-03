@@ -26,7 +26,9 @@
   - **账本写入点**：车头发车确认后 / 成员填兵确认后 / 返城时；**未确认不写**。`runtime` 给三个 SM 下发**同一个** `ActionLedger` 实例（按对象同一性测试钉住）。
   - **视图归因**：`recognizers/view_probe.py` 一次截屏判 7 视图 + 未知；归一化失败改报 `归一化失败：卡在[创建部队]视图`。
   - **两号不同等级**：`infra/config.py find_level_collisions` 在「同等级且至少一方填对方」时启动告警。当前配置是 **7 级 ⇄ 8 级，不会命中告警**（`find_level_collisions` 返回空）；这正是计划 B 删 `_FOREIGN_RALLY_WINDOW` 让车门槛的前提条件。
-  - **实机验证未跑**（Task 8 Step 2/3 推迟）：模拟器没起（`adb devices` 空，`:16384`/`:16416` 报 10061 拒绝）。待启 MuMu + 连 adb + 两号登录后跑一轮，grep `集结门槛` / `卡在[`。
+  - **实机验证未跑**（Task 8 Step 2/3 推迟）：模拟器没起（`adb devices` 空，`:16384`/`:16416` 报 10061 拒绝）。**跑法见下面「关键操作速查 → 实机运行手册」**。
+  - **收尾（2026-10-03）**：15 commits `0cfd458..72466e3`；全套 **481 passed**；最终评审 0 Critical / 2 Important（一修一 park）/ 5 Minor 全 park；定向复评「all findings addressed, no new breakage」。SDD 工作区已删。
+  - **28 条裁定（含「错了会怎样」）存档在 `docs/HISTORY.md` 的「计划 A 裁定存档」**——回头先读 #18、#26（带触发条件）与 #4/#7/#8/#12（将来改动会撞到）。
 - **09-29：选中态/排序态改由像素判据接管**（`recognizers/pixel_stat.py` + manifest 顶层 `pixel_stats:`）。细节见 HISTORY 的 09-29 一节。6 个 commit，**未 push**。
 - **实机验证已过**：
   - 预设槽：`[车头] 预设槽 1 已确认（模板点击，第 1 轮）`——真机真弹窗一次点击确认，没走几何兜底、没抛异常（20:31:40）。
@@ -122,4 +124,63 @@ C:/模拟器/MuMuPlayer/nx_main/adb.exe connect 127.0.0.1:16416   # mumu1
 
 # 监控日志
 grep -E "发起|填兵|锁定|已回城|集结门槛|失败结束|异常" _driver.log | tail
+```
+
+### 实机运行手册（跑一轮完整验收）
+
+**Step 0 — 起模拟器并确认实例真的起来了。** 只有 MuMu 启动器窗口 ≠ 实例在跑；
+`adb connect` 报 `10061 目标计算机积极拒绝` 通常是 **adb server 没起**，不是模拟器没起：
+
+```bash
+# 先看实例真实状态（is_android_started / player_state 必须是 true / start_finished）
+"C:/模拟器/MuMuPlayer/nx_main/MuMuManager.exe" info -v all
+
+# 重起 adb server 再连（连不上先做这一步，多半就好了）
+ADB=C:/模拟器/MuMuPlayer/nx_main/adb.exe
+"$ADB" kill-server; "$ADB" start-server
+"$ADB" connect 127.0.0.1:16384   # mumu0（config.yaml mumu_index: 0）
+"$ADB" connect 127.0.0.1:16416   # mumu1（config.yaml mumu_index: 1）
+"$ADB" devices                    # 两个都要是 device，不是 offline
+```
+
+**Step 1 — 两号都登录并停在地图视图。** 这是唯一必须手工做的：
+车头的归一化要靠 `search_icon`/`alliance_btn` 认地图。任一账号停在登录页/活动弹窗，
+门槛会在 unknown 上白等 900s 宽限。截图确认 1920×1080（不是 1080×1920）：
+
+```bash
+"$ADB" -s 127.0.0.1:16384 exec-out screencap -p > _probe0.png
+"$ADB" -s 127.0.0.1:16416 exec-out screencap -p > _probe1.png
+# 看两张图：应都是地图界面（右下有队列栏、左下放大镜）
+```
+
+**Step 2 — 核对配置。** 当前 `config.yaml`：mumu0「阑珊寨子号」7 级 ⇄ mumu1「阑珊填1」8 级。
+⚠️ **8 级是 09-18 实测「搜不到寨子」才降下来的**，先确认 8 级寨刷得出来，否则 mumu1 连续搜空计失败。
+
+**Step 3 — 启动驱动**（必须 `nohup` 脱离式；harness 的 run_in_background 会被看门狗杀）：
+
+```bash
+nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &
+```
+
+**Step 4 — 观察（跑 2~3 轮，每轮约 20 分钟）。** 本次要验的就是这几条：
+
+```bash
+grep -E "集结门槛" _driver.log | sort | uniq -c | sort -rn
+#   期望：出现「放行（判据来源 ledger）」或「grace」并带原因
+#   期望：不再出现「未知队列图标已持续 900.0s，放行搜索」
+#   期望：「队列图标不可辨」条数大幅下降（原本 166 次）
+#   已知例外：填兵方那一号仍会走 900s 宽限（见「计划 A 已知缺口」）
+
+grep -E "卡在\[" _driver.log | tail
+#   期望：形如「归一化失败：卡在[创建部队]视图」；一轮跑完都没出现也算通过
+#   注意 Ruling 18 的触发条件：若「卡在[」明显变多，恢复 _search_fortress 的 3 次重试
+
+grep -E "预设槽" _driver.log | tail          # 期望「已确认（模板点击，第 1 轮）」
+grep -cE "异常|Traceback" _driver.log        # 期望 0
+```
+
+**Step 5 — 停止**（驱动跑满 10 轮或连续 3 轮失败会自己收工；手动停用脚本）：
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File _kill_driver.ps1
 ```
