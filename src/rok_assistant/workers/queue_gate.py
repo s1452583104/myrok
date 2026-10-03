@@ -11,6 +11,10 @@ VOTE_SIZE = 3
 # 账本称「部队在外」超过这个时长视为账本本身不可信（例如 WAIT_RETURN
 # 那一拍没跑到、或进程被杀在行军中途），放行而不是永久卡死。
 LEDGER_STALE_AFTER = 3600.0
+# 投票迟迟无法采信（判读在两态间反复）时的兜底：超过这个时长仍没有连续
+# VOTE_SIZE 帧同结论，就按 unknown 处理，让账本 / 宽限接手。没有这条，
+# `settled is None` 是个没有出口的死等——旧实现单帧即可放行，不会卡死。
+UNSETTLED_AFTER = 30.0
 
 
 class GateDecision(str, Enum):
@@ -35,6 +39,9 @@ class QueueGate:
         battle→none 的误判会开一次注定被游戏拒绝的车（日志里的
         rally_rejected），反向误判只是多等几拍。这个不对称决定了两帧
         不一致时应该「维持上次采信值」而不是「以最新帧为准」。
+        但投票本身有上限：若迟迟无法采信（判读在两态间反复），超过
+        `unsettled_after` 就按 unknown 处理，交给下面的 L0 / 兜底，
+        不让 `settled is None` 变成没有出口的静默死等。
 
     L0 账本覆盖 —— 采信值是 unknown 时问 ActionLedger，而不是靠计时器
         赌判据。账本无记录时（进程刚起）退回旧的 fail-closed + 宽限，
@@ -47,15 +54,18 @@ class QueueGate:
     def __init__(self, ledger: ActionLedger, char_id: str,
                  vote_size: int = VOTE_SIZE,
                  unknown_grace: float = 900.0,
-                 ledger_stale_after: float = LEDGER_STALE_AFTER):
+                 ledger_stale_after: float = LEDGER_STALE_AFTER,
+                 unsettled_after: float = UNSETTLED_AFTER):
         self._ledger = ledger
         self._char_id = char_id
         self._vote_size = vote_size
         self._unknown_grace = unknown_grace
         self._stale_after = ledger_stale_after
+        self._unsettled_after = unsettled_after
         self._recent: list[str] = []
         self._settled: str | None = None
         self._unknown_since: float | None = None
+        self._unsettled_since: float | None = None
 
     def observe(self, verdict: str, now: float | None = None) -> GateOutcome:
         """喂入一帧队列判读结论，返回本拍的门槛决策。"""
@@ -64,10 +74,18 @@ class QueueGate:
         settled = self._settled
 
         if settled is None:
-            return GateOutcome(
-                GateDecision.WAIT,
-                f"队列判据尚未采信（投票 {len(self._recent)}/{self._vote_size} 帧）",
-                None, "vote")
+            if self._unsettled_since is None:
+                self._unsettled_since = ts
+            if ts - self._unsettled_since < self._unsettled_after:
+                return GateOutcome(
+                    GateDecision.WAIT,
+                    f"队列判据尚未采信（投票 {len(self._recent)}/{self._vote_size} 帧）",
+                    None, "vote")
+            # 投票长时间无法采信（判读在两态间反复）：兜底走已审阅过的
+            # unknown 路径，让账本 / 宽限接手，避免没有出口的静默死等。
+            return self._unknown_outcome(ts)
+
+        self._unsettled_since = None
         if settled == "battle":
             self._unknown_since = None
             return GateOutcome(

@@ -113,6 +113,49 @@ def test_unknown_grace_still_bounds_ledger_out():
     assert g.observe("unknown", now=101.0).decision is GateDecision.PROCEED
 
 
+def test_unsettled_vote_is_bounded_never_holds_forever():
+    """投票迟迟无法采信（判读在两态间反复）不能无限死等：超过
+    unsettled_after 就按 unknown 处理，让账本 / 宽限接手。
+    旧实现 `settled is None` 没有出口，会静默卡死。"""
+    g = _gate(unsettled_after=30.0)
+    out = None
+    for i in range(20):
+        # 交替 none/unknown，永远凑不出连续 VOTE_SIZE 帧同结论
+        out = g.observe("none" if i % 2 == 0 else "unknown", now=float(i))
+    assert out.decision is GateDecision.WAIT
+    assert out.source == "vote"          # 界内仍走投票延迟
+    out = g.observe("none", now=31.0)
+    assert out.source != "vote"          # 越过界：不再是无出口的投票等待
+
+
+def test_unsettled_vote_with_ledger_home_proceeds_via_ledger():
+    """投票无法采信但账本说部队在家 → 越过界立刻按账本放行。"""
+    led = ActionLedger()
+    led.mark_troops_home("c1", now=0.0)
+    g = _gate(led, unsettled_after=30.0)
+    out = None
+    for i in range(20):
+        out = g.observe("none" if i % 2 == 0 else "unknown", now=float(i))
+    assert out.source == "vote"
+    out = g.observe("none", now=31.0)
+    assert out.decision is GateDecision.PROCEED
+    assert out.source == "ledger"
+
+
+def test_unsettled_vote_without_ledger_follows_grace_and_releases():
+    """投票无法采信且账本无记录 → 走旧 fail-closed + 宽限，到点仍放行。"""
+    g = _gate(unsettled_after=30.0, unknown_grace=100.0)
+    out = None
+    for i in range(20):
+        out = g.observe("none" if i % 2 == 0 else "unknown", now=float(i))
+    assert out.source == "vote"
+    out = g.observe("none", now=31.0)
+    assert out.decision is GateDecision.WAIT
+    assert out.source == "grace"
+    # 宽限到点仍放行（不会因投票不采信而卡死）
+    assert g.observe("unknown", now=131.0).decision is GateDecision.PROCEED
+
+
 def test_unknown_since_resets_after_a_settled_non_unknown():
     """判据恢复正常后，unknown 计时必须清零——否则下一段 unknown
     会带着上一段的累计时长立刻放行。"""
