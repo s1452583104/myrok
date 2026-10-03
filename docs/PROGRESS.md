@@ -13,7 +13,8 @@
 > 检测集结车头是否回城，回城后继续开寨子。循环往复直至体力耗尽或者完成一定的
 > 次数（先默认十次）。
 
-- 配置：mumu0「阑珊寨子号」(either, 7级) ⇄ mumu1「Jy丶阑珊」(either, 7级) 互相填兵，骑兵、预设槽 1（两号 8 级寨 09-18 夜间实测刷不出，均降 7 级）
+- 配置（2026-10-03 实读 `config.yaml`，用户已改过一轮）：mumu0「阑珊寨子号」(either, **7 级**) ⇄ mumu1「**阑珊填1**」(either, **8 级**) 互相填兵，骑兵、预设槽 1。
+  ⚠️ **8 级待确认**：09-18 曾实测「8 级寨搜不到」（run2 mumu1 六搜全空）才降的 7 级；现 mumu1 又被设回 8 级，跑之前先确认 8 级寨刷得出来，否则 mumu1 会连续搜空计失败。
 - 运行方式：无头驱动 `_run_goal.py`（`nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &`），banner `max_rounds=10 max_consecutive_failures=3`
 
 
@@ -24,7 +25,7 @@
   - **集结门槛改为「投票 + 账本」**（`coordination/action_ledger.py` + `workers/queue_gate.py`）。判据分层 **账本 > 消息 > 画面**；**多帧投票只能延迟、永不翻转**（不得把 unknown 变成放行）。
   - **账本写入点**：车头发车确认后 / 成员填兵确认后 / 返城时；**未确认不写**。`runtime` 给三个 SM 下发**同一个** `ActionLedger` 实例（按对象同一性测试钉住）。
   - **视图归因**：`recognizers/view_probe.py` 一次截屏判 7 视图 + 未知；归一化失败改报 `归一化失败：卡在[创建部队]视图`。
-  - **两号不同等级**：`infra/config.py find_level_collisions` 在「同等级且至少一方填对方」时启动告警。两号同为 7 级互填**会命中此告警，属预期**（它是让车门槛该退休的信号，删除留给计划 B）。
+  - **两号不同等级**：`infra/config.py find_level_collisions` 在「同等级且至少一方填对方」时启动告警。当前配置是 **7 级 ⇄ 8 级，不会命中告警**（`find_level_collisions` 返回空）；这正是计划 B 删 `_FOREIGN_RALLY_WINDOW` 让车门槛的前提条件。
   - **实机验证未跑**（Task 8 Step 2/3 推迟）：模拟器没起（`adb devices` 空，`:16384`/`:16416` 报 10061 拒绝）。待启 MuMu + 连 adb + 两号登录后跑一轮，grep `集结门槛` / `卡在[`。
 - **09-29：选中态/排序态改由像素判据接管**（`recognizers/pixel_stat.py` + manifest 顶层 `pixel_stats:`）。细节见 HISTORY 的 09-29 一节。6 个 commit，**未 push**。
 - **实机验证已过**：
@@ -64,6 +65,13 @@
 6. leader 冷却重建窗口内 rally 事件会丢；config 路径锚定（GUI 需 repo 根 CWD）；错误截图无限速
 
 ## 接下来需要做的
+
+### 计划 A 已知缺口（最终评审确认，已裁定为后续项，不是遗漏）
+- [ ] **填兵方的账本 `troops_out` 永不清零**——`mark_troops_home` 只在 `either_sm.py:355`（`WAIT_RETURN` 判空）调用，而 `_enter_wait_return`（`:214`）要求 `leader.last_rally_event`。**只填兵不开车的轮次**（对方先开车 → 让车门槛让自己转填兵，约每两轮一次）不进 `WAIT_RETURN`，于是该号账本一直停在「部队在外」。
+  **影响**：下一个 `unknown` 上账本说「在外」→ 仍走 900s 宽限 → 计划 A 的头号收益（消掉 `未知队列图标已持续 900.0s，放行搜索`）**对这一号没兑现**。
+  **但方向安全**：账本只会产出 WAIT，永远不会错误放行；且行为与计划 A 之前逐字相同，**不是回归**。
+  **为什么没当场修**：spec 的写入点表（`specs/2026-09-30-...-design.md:148-153`）本来就把清零只挂在 `WAIT_RETURN` 上——这是 spec 自身的缺口，不是实现偏离。正确修法是给填兵方一条「自己的部队回城」确认路径，属计划 B 的 FillTask/续跑语义；在计划 A 里改等于重写 `_enter_wait_return` 的入场条件（事故编码逻辑），且现在没有实机可验证。
+  **触发条件**：计划 B 落地 FillTask 时一并修；或实机日志里再次出现填兵方的 `未知队列图标已持续 900.0s` 时提前修。
 
 ### 验收剩余项
 - [ ] **计划 A 的实机验证（Task 8 Step 2/3，因模拟器未启动而推迟）**：启 MuMu → `adb connect` 两号 → 跑 `_run_goal.py` 2~3 轮 → `grep -E "集结门槛" _driver.log` 期望出现 `放行（判据来源 ledger）` / `grace` 且**不再有** `未知队列图标已持续 900.0s，放行搜索`；再 `grep -E "卡在\[" _driver.log` 看归一化失败是否可读
