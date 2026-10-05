@@ -1,60 +1,68 @@
 # rok-assistant 配置示例
-# 推荐用 GUI 配置：python -m rok_assistant.gui.main_window → 「⚙ 配置」
-# 注意：GUI 与配置加载均使用相对路径，请从项目根目录启动
+#
+# 绿色包首次启动时，若同目录下没有 config.yaml，会自动复制本文件生成一份，
+# 并尝试自动探测 MuMu/adb 的安装路径填进去。之后请用 GUI 配置：
+#   「⚙ 配置」按钮 → 改完保存
 # 手动编辑后校验：
-#   python -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
+#   .venv/Scripts/python.exe -c "from rok_assistant.infra.config import load_config; from pathlib import Path; print(load_config(Path('config.yaml')))"
+#
+# 面向非程序员的逐步说明见 docs/配置说明.md（连不上模拟器先看那一份）。
 
 app:
   screen_width: 1920        # 模板按 1920x1080 中文 UI 采集，勿改
-  screen_height: 1080
-  locale: zh-CN
-  mumu_manager_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\MuMuManager.exe"  # MuMu 安装目录下
-  adb_path: "C:\\模拟器\\MuMuPlayer\\nx_main\\adb.exe"
+  screen_height: 1080       # 必须和模拟器分辨率一致，否则点击坐标全部错位
+  locale: zh-CN             # 游戏界面语言；模板与检测模型都按中文采集，勿改
+  # 留空 = 首启自动探测；探测不到就点「⚙ 配置」里的「自动检测 MuMu/adb 路径」
+  # 或手动填 MuMu 安装目录下的 MuMuManager.exe / adb.exe
+  mumu_manager_path: ""
+  adb_path: ""
+  # 检测模型（ONNX，运行时只认 .onnx，torch 不进发行包）。
+  # 换权重：先 tools/export_onnx.py 导出，再 tools/calibrate_yolo_threshold.py 复核阈值
+  yolo_model: models/detect.onnx
+  # fill_<名字> 模板未命中时用 OCR 认名字兜底
+  ocr_name_fallback: true
   max_rounds: 10                 # 每角色最多完成多少轮（开集结+填兵+返城）后自动收工
   max_consecutive_failures: 3    # 连续 N 轮失败（或 2N 次 step 异常，疑似体力耗尽）自动收工
+  # 反检测随机化。目的：让点击的坐标/节奏不完全一致，不像脚本。
+  # 下面只有前三项真的生效（JitteringHandleSource 只包了点击这一条路径）：
   anti_detection:
-    click_offset_px: 8
-    action_delay_min: 0.1
+    click_offset_px: 8      # 每次点击坐标在 ±N 像素内随机；0 = 点得完全准
+    action_delay_min: 0.1   # 每次点击前随机等待的秒数范围
     action_delay_max: 0.5
-    state_delay_min: 0.3
-    state_delay_max: 1.2
-    jitter_ratio: 0.3
-    debug_no_jitter: false  # 调试时改 true 看真实点击坐标
+    state_delay_min: 0.3    # 【当前不生效】保留字段：没有任何调用方读它
+    state_delay_max: 1.2    # 【当前不生效】同上，改了不起作用也不报错
+    jitter_ratio: 0.3       # 【当前不生效】同上
+    debug_no_jitter: false  # 改 true = 关闭全部随机化（调试时看真实点击坐标）
 
-# 1 个模拟器实例 = 1 个账号 = 1 组角色（同实例多账号切换暂不支持）
-# 接入方式二选一：mumu_index（推荐，adb 地址自动发现）或 adb_address（手动）
+# 1 个「模拟器」= 1 个游戏账号 = 1 组角色（同一模拟器多账号切换暂不支持）
+# 接入方式二选一：按模拟器选择（推荐，在界面里点「扫描模拟器」按名字选）
+# 或手动填 adb 地址（非 MuMu 的模拟器走这条）
 instances:
-  - id: mumu0
-    name: "阑珊号"
-    mumu_index: 0
+  - id: mumu0              # 自动生成的内部标识，不用改（跨模拟器填兵时靠它引用）
+    name: "模拟器0"        # 显示名，随便起；界面上用这个认机器
+    mumu_index: 0          # MuMu 里的模拟器编号；在界面上按名字选，不用手填
     characters:
-      # 整个配置至少 1 个 leader/either（member-only 实例合法，可跨实例填兵）；同实例内角色名不能重复
+      # 整个配置至少 1 个 leader/either（member-only 模拟器合法，可跨模拟器填兵）；
+      # 同一个模拟器内角色名不能重复。name 必须和游戏内显示名一致（OCR 验证用）。
       - id: char_leader
-        name: "阑珊寨子号"      # 必须和游戏内显示名一致（OCR 验证用）
+        name: "车头角色名"       # ← 改成你的游戏内显示名
         role: leader            # leader=车头 | member=成员 | either=车头或成员
-        target_level: 7         # 打的寨子等级，1-10
+        # 有序搜索列表，最多 3 个、1-10 且不重复。顺序完全自由（6→4→5 合法）：
+        # 从第一个开始搜，每级连搜 5 次无结果就换下一个，绕完一圈放弃本轮
+        target_levels: [7, 6, 5]
         march_preset: 1         # 组建部队弹窗里的预设槽位，1-5
-        march_troop_types: [infantry]
+        march_troop_types: [infantry]   # 可选 infantry(步兵) / cavalry(骑兵) / archer(弓兵)，可多选
 
-      - id: char_either
-        name: "阑珊种地"
-        role: either            # 先自己开寨集结，随即去填 fill_target_leaders 的集结
-        target_level: 7
+      - id: char_member
+        name: "成员角色名"       # ← 改成你的游戏内显示名
+        role: member
+        target_levels: [7]      # member 不开车，这一项不影响行为，但必填
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders:    # member/either 必填；leader 不能填
-          - { instance: mumu0, name: "阑珊寨子号" }
+          - { instance: mumu0, name: "车头角色名" }   # instance 填车头所在的 id，name 填车头角色名
 
-      - id: char_member
-        name: "阑珊挖矿"
-        role: member
-        target_level: 7
-        march_preset: 1
-        march_troop_types: [infantry]
-        fill_target_leaders:    # 指向（本实例或跨实例的）leader/either 角色
-          - { instance: mumu0, name: "阑珊寨子号" }
-
-  # 第二个实例（多开 MuMu 实例 1）示例骨架：
+  # 第二个模拟器（MuMu 里多开一台）示例骨架：
   # - id: mumu1
   #   name: "二号机"
   #   mumu_index: 1

@@ -9,16 +9,22 @@
 组内每份的标注互相矛盾时这里不做合并——合并需要判断哪一遍是对的，那是人工的活，
 本工具只保证「同一张图只有一份」。
 
+默认只报告，`--apply` 才写；写之前整份 labels + train/val + **每一张被删帧的原图**
+备份到 `dataset/_dedupe_backup_<时间戳>/`（删帧会连图一起删，只备份 labels 的话
+图删了就再也拿不回来）。
+
 用法（仓库根目录）：
     .venv/Scripts/python.exe tools/dedupe_dataset.py            # 只看报告（默认不动文件）
-    .venv/Scripts/python.exe tools/dedupe_dataset.py --apply    # 真删
+    .venv/Scripts/python.exe tools/dedupe_dataset.py --apply    # 真删（先备份）
 """
 from __future__ import annotations
 
 import argparse
 import collections
 import hashlib
+import shutil
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -96,6 +102,21 @@ def main() -> int:
         return 0
 
     dropped_stems = {stem for _, stem in drop}
+    # 删帧会连图一起删，图不在 labels/ 里 —— 不单独备份就再也拿不回来了
+    # （prune_labels 踩过：只备份 labels，8 帧的图删掉后 recordings/ 里也没有原件）。
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = args.dataset / f"_dedupe_backup_{stamp}"
+    shutil.copytree(labels_dir, backup / "labels")
+    for p in (train_txt, val_txt):
+        shutil.copy2(p, backup / p.name)
+    (backup / "images").mkdir()
+    for _, stem in drop:
+        src = images_dir / f"{stem}.png"
+        if src.exists():
+            shutil.copy2(src, backup / "images" / src.name)
+    print(f"已备份到 {backup.name}/（labels 全量 + train.txt + val.txt"
+          f" + {len(dropped_stems)} 帧原图）")
+
     for _, stem in drop:
         (images_dir / f"{stem}.png").unlink(missing_ok=True)
         (labels_dir / f"{stem}.txt").unlink(missing_ok=True)

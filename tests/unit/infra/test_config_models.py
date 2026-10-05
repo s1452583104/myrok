@@ -6,14 +6,14 @@ from rok_assistant.infra.config import (
 
 
 def _leader(**kw):
-    base = dict(id="c1", name="Hero", role=RoleEnum.LEADER, target_level=8,
+    base = dict(id="c1", name="Hero", role=RoleEnum.LEADER, target_levels=[8],
                 march_preset=1, march_troop_types=["infantry"])
     base.update(kw)
     return CharacterConfig(**base)
 
 
 def _member(**kw):
-    base = dict(id="c2", name="M1", role=RoleEnum.MEMBER, target_level=5,
+    base = dict(id="c2", name="M1", role=RoleEnum.MEMBER, target_levels=[5],
                 march_preset=2, march_troop_types=["cavalry"],
                 fill_target_leaders=[FillLeader(instance="i1", name="Hero")])
     base.update(kw)
@@ -119,3 +119,35 @@ def test_app_config_mumu_fields():
     app = AppConfig()
     assert app.mumu_manager_path == ""
     assert app.adb_path == "adb"
+
+
+# ---- target_levels 多选（2026-10-04）----
+
+def test_target_levels_order_is_preserved():
+    """顺序完全自由（用户明确要求 6→4→5 合法）：校验不得重排。"""
+    c = _leader(target_levels=[6, 4, 5])
+    assert c.target_levels == [6, 4, 5]
+
+
+def test_target_levels_empty_rejected():
+    with pytest.raises(ValidationError, match="不能为空"):
+        _leader(target_levels=[])
+
+
+def test_target_levels_too_many_rejected():
+    with pytest.raises(ValidationError, match="最多 3 个"):
+        _leader(target_levels=[8, 7, 6, 5])
+
+
+def test_target_levels_out_of_range_rejected():
+    with pytest.raises(ValidationError, match="1..10"):
+        _leader(target_levels=[11])
+
+
+def test_target_levels_duplicate_rejected():
+    with pytest.raises(ValidationError, match="有重复"):
+        _leader(target_levels=[7, 7])
+
+
+def test_target_levels_three_is_allowed():
+    assert _leader(target_levels=[9, 8, 7]).target_levels == [9, 8, 7]

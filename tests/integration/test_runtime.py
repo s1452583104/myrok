@@ -27,7 +27,8 @@ instances:
       - id: boss
         name: 车头
         role: leader
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
   - id: inst1
@@ -37,7 +38,8 @@ instances:
       - id: worker
         name: 成员
         role: member
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
         fill_target_leaders:
@@ -61,7 +63,8 @@ instances:
       - id: boss
         name: 车头
         role: leader
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
   - id: inst1
@@ -71,7 +74,8 @@ instances:
       - id: solo
         name: 独狼
         role: either
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
         fill_target_leaders:
@@ -141,7 +145,7 @@ def test_start_warns_on_level_collision_but_still_runs(tmp_path, caplog):
             assert set(coord.runners) == {"inst0:boss", "inst1:solo"}
     warnings = [r.getMessage() for r in caplog.records
                 if r.name == "rok_assistant.coordination.runtime"]
-    assert any("同为 7 级" in m and "填对方" in m for m in warnings)
+    assert any("都含 7 级" in m and "填对方" in m for m in warnings)
 
 
 def test_spawn_threads_shared_ledger_by_identity(tmp_path):
@@ -267,6 +271,30 @@ def test_partial_start_failure_rolls_back(tmp_path):
         assert len(FakeRunner.instances) == 1
         assert FakeRunner.instances[0].started
         assert FakeRunner.instances[0].stopped
+
+
+def test_start_error_names_the_emulator_that_failed(tmp_path):
+    """报错必须点名是哪一台，且保留原始原因。
+
+    2026-10-05 用户报「点 Start 后只连上一个，另一个成员实例报错」，但运行日志
+    里两个 worker 都正常——失败落在 `create_handle_source` 阶段，worker 还没起来，
+    **日志里一个字都没有**。配了两台时，裸异常里只有「模拟器 1 可能没有启动」
+    这种编号，界面上再包一层泛泛的「启动失败」，用户根本不知道说的是哪台。
+    """
+    cfg = _write_config(tmp_path)
+    (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
+    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    FakeRunner.instances = []
+    with patch("rok_assistant.coordination.runtime.create_handle_source",
+               side_effect=[fake_handle, RuntimeError("模拟器 1 可能没有启动")]), \
+         patch("rok_assistant.coordination.runtime.WorkerRunner", FakeRunner):
+        coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
+        with pytest.raises(RuntimeError) as ei:
+            coord.start()
+    msg = str(ei.value)
+    assert "b" in msg, f"没点名是哪台模拟器：{msg}"          # 第 2 个实例的 name
+    assert "inst1" in msg, f"没带上实例 id：{msg}"
+    assert "模拟器 1 可能没有启动" in msg, f"把原始原因吞了：{msg}"
 
 
 def test_stop_keeps_reference_to_stuck_runner(tmp_path):

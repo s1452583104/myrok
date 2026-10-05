@@ -13,6 +13,15 @@
 cy=163 在 44 帧上逐字节相同。预设列实测：`cx=1655`，槽 N 中心 `cy = 474+82*(N-1)`，
 44 帧全列亮度扫描精确落在这 6 个位置。
 
+> **2026-10-03 实机**：这条基准会过期。同一次集结流程里量到的槽心是
+> `432+82*(N-1)`（白框高 42px，槽 1/2 中心 432/514，9 帧一致）——`march_btn`
+> 仍是 925、`form_title` 仍是 69，**只有预设列整体上移了 42px**，所以拿
+> 面板框当锚点也救不了。结论：基准不能只写死，运行时要能从帧里校准。
+> `PresetSlotJudge.calibrate(top)` 提供这个口子，`leader_sm._select_preset`
+> 用 `preset_N` 模板命中的位置反推 `top = y_hit - 82*(N-1)`。
+> `PRESET_TOP` 仍是默认值与标定锚点（`tests/unit/core/test_pixel_stat.py`
+> 断言它等于 474），**不是**运行时唯一真相。
+
 **反过来做的代价**（`tools/relabel_extra_classes.py` 的旧 `plan_preset` 就是这么错的）：
 用 `fit_slots` 从**被校验的标注本身**反推列基准，标注错→几何错→自洽地错，闭环。
 实测 `top` 在 391~475 间漂移（双峰平均），并且已经把污染写进了数据集。
@@ -48,8 +57,12 @@ from ..recognizer import BBox, RecognizeResult
 
 # --- 预设列几何（实测，见模块 docstring）------------------------------------
 PRESET_CX = 1655.0        # 列中心（44 帧零方差）
-PRESET_TOP = 474.0        # 槽 1 中心
+PRESET_TOP = 474.0        # 槽 1 中心（**默认值**，运行时可按帧自校准，见下）
 PRESET_PITCH = 82.0       # 槽距
+# 列 ROI 半宽：manifest 里 preset_1..6 的 roi 是 x 1600..1712，中心 1656。
+# 自校准只认「落在这条列里」的模板命中（模板命中即槽心，见
+# PresetSlotJudge.calibrate）。
+PRESET_COL_HALF_X = 56.0
 PRESET_HALF = 22          # 取样半径（槽约 44x44）
 PRESET_SCAN_N = 7         # 扫 7 格：第 7 槽真实存在（cy=966）
 PRESET_CLICKABLE_N = 6    # 但只给 1..6 装识别器（march_preset 取值域）
@@ -126,13 +139,19 @@ def sort_dropdown_open(img: np.ndarray) -> bool:
 
 # --- 预设选中态 -------------------------------------------------------------
 
-def slot_center(slot: int) -> tuple[float, float]:
-    """槽 N（1 起）的取样中心。只产出 474+k*82，永不落在菱形 389 上。"""
-    return PRESET_CX, PRESET_TOP + (slot - 1) * PRESET_PITCH
+def slot_center(slot: int, top: float = PRESET_TOP) -> tuple[float, float]:
+    """槽 N（1 起）的取样中心。`top` 是槽 1 中心。
+
+    默认取实测钉死的 `PRESET_TOP`；运行时可用模板命中位置校准它
+    （`PresetSlotJudge.calibrate`，2026-10-03 实机面板整体上移 42px 那次）。
+    校准来源是**模板命中**而不是扫描，所以不会落到顶部菱形上。
+    """
+    return PRESET_CX, top + (slot - 1) * PRESET_PITCH
 
 
-def slot_centers(n: int = PRESET_SCAN_N) -> list[tuple[float, float]]:
-    return [slot_center(i + 1) for i in range(n)]
+def slot_centers(n: int = PRESET_SCAN_N,
+                 top: float = PRESET_TOP) -> list[tuple[float, float]]:
+    return [slot_center(i + 1, top) for i in range(n)]
 
 
 @dataclass(frozen=True)
@@ -148,9 +167,9 @@ class PresetVerdict:
         return self.fracs[self.best] if self.best is not None else 0.0
 
 
-def panel_verdict(img: np.ndarray) -> PresetVerdict:
+def panel_verdict(img: np.ndarray, top: float = PRESET_TOP) -> PresetVerdict:
     """整列扫 7 格，返回选中槽号（1..7）或 None。纯函数，无缓存。"""
-    fracs = [bright_frac(img, cx, cy) for cx, cy in slot_centers()]
+    fracs = [bright_frac(img, cx, cy) for cx, cy in slot_centers(top=top)]
     order = sorted(range(len(fracs)), key=lambda i: -fracs[i])
     best, second = order[0], fracs[order[1]]
     if fracs[best] < PRESET_MIN_FRAC or fracs[best] < PRESET_MIN_RATIO * second:
@@ -168,16 +187,34 @@ class PresetSlotJudge:
     地址可能被复用，`id()` 撞上就是读到上一帧的结论。
     """
 
-    def __init__(self):
+    def __init__(self, top: float = PRESET_TOP):
+        self._top = float(top)
         self._key = None
         self._val: PresetVerdict | None = None
         self._last: np.ndarray | None = None
 
+    @property
+    def top(self) -> float:
+        """当前整列基准（槽 1 中心）。"""
+        return self._top
+
+    def calibrate(self, top: float) -> None:
+        """把整列基准挪到运行时实测位置，并作废本帧缓存。
+
+        2026-10-03 实机：面板整体上移 42px（槽心 474 → 432），写死的基准让
+        `selected_preset_*` 永远不 matched，集结卡在创建部队面板。调用方
+        （`leader_sm._select_preset`）用 `preset_N` 模板命中的位置反推基准。
+        """
+        if top == self._top:
+            return
+        self._top = float(top)
+        self._key = None
+
     def verdict(self, screenshot: np.ndarray) -> PresetVerdict:
-        key = (id(screenshot), screenshot.shape)
+        key = (id(screenshot), screenshot.shape, self._top)
         if key == self._key:
             return self._val
-        val = panel_verdict(screenshot)
+        val = panel_verdict(screenshot, self._top)
         self._key, self._val, self._last = key, val, screenshot
         return val
 
@@ -211,9 +248,13 @@ class PixelStatRecognizer:
     def slot(self) -> int:
         return self._slot
 
+    def calibrate(self, top: float) -> None:
+        """转发给共享 judge——同一列的六个槽共用一份基准，调一次就够。"""
+        self._judge.calibrate(top)
+
     def recognize(self, screenshot: np.ndarray) -> RecognizeResult:
         v = self._judge.verdict(screenshot)
-        cx, cy = slot_center(self._slot)
+        cx, cy = slot_center(self._slot, self._judge.top)
         bbox = BBox(int(cx) - PRESET_HALF, int(cy) - PRESET_HALF,
                     int(cx) + PRESET_HALF, int(cy) + PRESET_HALF)
         return RecognizeResult(

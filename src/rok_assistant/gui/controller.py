@@ -6,6 +6,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from ..coordination.event_bus import EventBus
 from ..coordination.runtime import RuntimeCoordinator
+from ..infra.app_paths import config_path as default_config_path
 from ..infra.config import RootConfig
 from ..infra.logger import get_logger
 
@@ -22,7 +23,7 @@ class GuiController(QObject):
     def __init__(self, config_path: Path | None = None,
                  coordinator_factory=RuntimeCoordinator, parent=None):
         super().__init__(parent)
-        self.config_path = Path(config_path) if config_path else Path("config.yaml")
+        self.config_path = Path(config_path) if config_path else default_config_path()
         self._coordinator_factory = coordinator_factory
         self._coordinator = None
         self._config: RootConfig | None = None

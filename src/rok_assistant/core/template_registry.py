@@ -1,7 +1,27 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+
+import cv2
+import numpy as np
 import yaml
+
+
+def imread_unicode(path: Path) -> np.ndarray | None:
+    """读图，且能在非 ASCII 路径下工作。
+
+    Windows 上 `cv2.imread` 遇到中文/日文路径会**静默返回 None**（同样的坑
+    在 workers/runner.py 的 cv2.imwrite 那里已经踩过）。用户把绿色包解压到
+    `D:\\游戏\\rok-assistant` 之类的目录时，53 张模板会集体加载失败，所以
+    统一走 imdecode + np.fromfile。
+    """
+    try:
+        buf = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    if buf.size == 0:
+        return None
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
 
 @dataclass(frozen=True)
 class ROI:
@@ -9,6 +29,16 @@ class ROI:
     @property
     def is_full(self) -> bool:
         return self.x1 == 0 and self.y1 == 0 and self.x2 == 0 and self.y2 == 0
+
+# YOLO 腿的置信度阈值默认值（2026-10-04 定标：val 65 帧）。
+# 换 app.yolo_model 后要重跑 tools/calibrate_yolo_threshold.py 复核。
+# 与模板阈值是**两把尺子**：TM_CCOEFF_NORMED 的 0.9 和 YOLO conf 的 0.9 不可比，
+# 所以不再共用 spec.threshold。定标结论：46/50 个 id 在「GT 无 + 模板未命中」的
+# 帧上假阳性地板 = 0.000，0.5 离地板余量极大；同时接得住模板掉分的帧
+# （search_icon 实测 0.845 < 模板阈值 0.9）。个别 id 用 manifest 的
+# `yolo_threshold:` 覆盖（preset_* / alliance_btn 关闭、queue_march_icon 抬高）。
+DEFAULT_YOLO_THRESHOLD = 0.5
+
 
 @dataclass(frozen=True)
 class TemplateSpec:
@@ -18,6 +48,7 @@ class TemplateSpec:
     type: str  # "template_match" or "yolo_detect"
     roi: ROI
     classes: list[int]
+    yolo_threshold: float | None = None   # None = 用 DEFAULT_YOLO_THRESHOLD
 
 @dataclass(frozen=True)
 class PixelStatSpec:
@@ -47,11 +78,15 @@ class TemplateRegistry:
                           yolo_shared=None) -> dict:
         """Build {template_id: recognizer} for all loaded templates.
 
-        2026-09-17 三识别栈融合：
-        - type=template_match：TemplateMatch（校准阈值，生产主路径）。
-          配置 yolo_model 时同一 id 装配 Chain([TemplateMatch, 兜底])——
-          模板先行，YOLO 只在模板未命中时兜底（接住动画帧/背景偏移）；
-          fill_ 名字类的兜底是 OCR（用户要求：角色名字走 OCR，账号无关）。
+        2026-09-17 三识别栈融合，2026-10-04 调整先后：
+        - type=template_match：配置 yolo_model 时同一 id 装配 Chain——
+          **YOLO 先行**，模板作为第二腿（用户要求：优先用 YOLO 匹配）。
+          理由：模板在动画帧/背景偏移上会掉分到阈值以下，而 YOLO 仍检出
+          （search_icon 实测模板 0.879 / YOLO 0.845，模板阈值 0.9）。
+          两条腿各有自己的阈值：YOLO 用 `yolo_threshold`（缺省
+          DEFAULT_YOLO_THRESHOLD），模板用 `spec.threshold`。
+          fill_ 例外：兜底腿是 OCR（用户要求角色名字走 OCR，账号无关），
+          仍**模板先行**——OCR 慢且受字体影响，不该抢在主判据前面。
         - type=yolo_detect：未配置 yolo_model 时与旧版一致抛 ValueError
           （回归测试锚定）；配置后构建 YoloClassAdapter。
         """
@@ -74,25 +109,33 @@ class TemplateRegistry:
             roi = None if spec.roi.is_full \
                 else BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2)
             if spec.type == "template_match":
-                img = cv2.imread(str(spec.file))
+                img = imread_unicode(spec.file)
                 if img is None:
                     raise FileNotFoundError(f"cannot load template image: {spec.file}")
                 primary = TemplateMatch(img, threshold=spec.threshold, roi=roi,
                                         name=tid)
-                fallback = None
+                aux = None            # 第二条腿；排第一还是第二由 yolo_first 决定
+                yolo_first = False
                 if shared_yolo is not None:
                     if tid.startswith("fill_"):
-                        fallback = self._ocr_fallback_for(
+                        # 名字类：OCR 兜底，模板仍先行（见 docstring）
+                        aux = self._ocr_fallback_for(
                             tid, roi, ocr_fallback, ocr_engine)
                     elif tid in yolo_class_names:
                         from .recognizers.yolo_detect import YoloClassAdapter
-                        fallback = YoloClassAdapter(
+                        yolo_thr = (DEFAULT_YOLO_THRESHOLD
+                                    if spec.yolo_threshold is None
+                                    else spec.yolo_threshold)
+                        aux = YoloClassAdapter(
                             shared_yolo, class_name=tid, roi=roi,
-                            threshold=spec.threshold, name=f"{tid}@yolo")
+                            threshold=yolo_thr, name=f"{tid}@yolo")
+                        yolo_first = True
                     # 类不在模型里（如 queue_recall_icon 被 YOLO 排除训练）：
-                    # 模板为主，不挂兜底 —— 挂了运行时 resolve 会 KeyError
-                out[tid] = RecognizerChain([primary, fallback], threshold=0.0) \
-                    if fallback is not None else primary
+                    # 模板为主，不挂第二条腿 —— 挂了运行时 resolve 会 KeyError
+                legs = ([aux, primary] if yolo_first else [primary, aux]) \
+                    if aux is not None else None
+                out[tid] = RecognizerChain(legs, threshold=0.0) \
+                    if legs is not None else primary
             elif spec.type == "yolo_detect":
                 if shared_yolo is None:
                     raise ValueError(
@@ -159,6 +202,8 @@ class TemplateRegistry:
                 type=entry.get("type", "template_match"),
                 roi=roi,
                 classes=entry.get("classes", []),
+                yolo_threshold=(None if entry.get("yolo_threshold") is None
+                                else float(entry["yolo_threshold"])),
             )
             templates[spec.id] = spec
         pixel_stats = [

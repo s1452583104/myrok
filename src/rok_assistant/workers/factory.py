@@ -3,6 +3,7 @@ from ..infra.config import CharacterConfig, RoleEnum
 from .leader_sm import LeaderStateMachine
 from .member_sm import MemberStateMachine
 from .either_sm import EitherStateMachine
+from .queue_gate import QueueGate
 
 
 def create_state_machine(character: CharacterConfig, handle_source, recognizers: dict,
@@ -15,10 +16,16 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
     ledger：进程级动作账本（runtime 注入），发车/填兵确认后写「部队
     在外」，供集结门槛的 L0 判据用；未注入 = 不记账 = 旧行为。"""
     if character.role == RoleEnum.LEADER:
-        return LeaderStateMachine(handle_source, recognizers, character.target_level,
+        # 集结前置门槛（2026-10-04 bug：纯车头不查队列，主将还在城外就
+        # 开集结，「创建部队」载不出预设 → 卡在「预设槽 1 高亮未确认」）。
+        # 门槛原先只接在 either 上，纯 leader 拿到的是裸状态机。账本未
+        # 注入时特性关闭（与 ledger 参数的既有语义一致）。
+        gate = QueueGate(ledger, character.id) if ledger is not None else None
+        return LeaderStateMachine(handle_source, recognizers, character.target_levels,
                                   character.march_preset,
                                   character.march_troop_types, event_bus,
-                                  publisher_id=character.id, ledger=ledger)
+                                  publisher_id=character.id, ledger=ledger,
+                                  queue_gate=gate)
     if character.role == RoleEnum.MEMBER:
         # 填兵不使用预设/兵种选择（用户要求 2026-09-09），
         # 故不传 march_preset/march_troop_types
@@ -26,7 +33,7 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
                                   character.fill_target_leaders,
                                   char_id=character.id, ledger=ledger)
     if character.role == RoleEnum.EITHER:
-        return EitherStateMachine(handle_source, recognizers, character.target_level,
+        return EitherStateMachine(handle_source, recognizers, character.target_levels,
                                   character.march_preset, character.march_troop_types,
                                   character.fill_target_leaders, event_bus,
                                   char_id=character.id, rally_tracker=rally_tracker,

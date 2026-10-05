@@ -35,7 +35,7 @@ def _make_sm(fill_targets=None, bus=None):
                              "alliance_btn", "war_title", "join_btn", "swap_btn",
                              "fill_Boss")}
     sm = EitherStateMachine(handle_source=handle, recognizers=recs,
-                            target_level=8, march_preset=1,
+                            target_levels=[8], march_preset=1,
                             march_troop_types=["infantry"],
                             fill_target_leaders=fill_targets or [],
                             event_bus=bus)

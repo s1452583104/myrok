@@ -1,5 +1,4 @@
 from __future__ import annotations
-from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -9,6 +8,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from .character_card import CharacterCard
 from .controller import GuiController
+from ..infra.app_paths import config_path, ensure_user_files, user_dir
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("rok-assistant")
         self.resize(1200, 800)
         self._controller = controller if controller is not None \
-            else GuiController(config_path=Path("config.yaml"))
+            else GuiController(config_path=config_path())
         self._cards: dict[str, CharacterCard] = {}
         self._build_ui()
         self._rebuild_cards()
@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
                 card.set_thumbnail(data)
 
     def _open_config(self):
-        path = Path("config.yaml")
+        path = config_path()
         if not path.exists():
             QMessageBox.warning(self, "配置", f"未找到 {path}（请先在项目根目录准备 config.yaml）")
             return
@@ -158,15 +158,32 @@ class MainWindow(QMainWindow):
 
 def main():
     import sys
-    from pathlib import Path
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QMessageBox
     from rok_assistant.infra.logger import setup_logging
+
+    # 首启：没有 config.yaml 就从 config.example.yaml 生成一份并探测 MuMu 路径。
+    # 冻结运行时 CWD 可能是任意目录，所以 config/logs/recordings 一律按
+    # user_dir()（exe 同级）走，只读资源按 resource_dir()（_internal）走。
+    ensure_user_files()
     # 2026-09-11 实机验收发现：入口从未接 setup_logging —— 日志文件缺失，
     # 控制台报错无 traceback。日志目录优先取项目 logs/（§3.8 验收要求）。
-    setup_logging(Path("logs"))
-    app = QApplication(sys.argv)
-    w = MainWindow()
-    w.show()
+    setup_logging(user_dir() / "logs")
+
+    try:
+        app = QApplication(sys.argv)
+        w = MainWindow()
+        w.show()
+    except Exception as e:            # noqa: BLE001 - console=False 时看不到 traceback
+        import traceback
+        crash = user_dir() / "logs" / "startup_crash.log"
+        try:
+            crash.parent.mkdir(parents=True, exist_ok=True)
+            crash.write_text(traceback.format_exc(), encoding="utf-8")
+        except OSError:
+            pass
+        QMessageBox.critical(None, "启动失败",
+                             f"{e}\n\n详情见：{crash}")
+        raise
     sys.exit(app.exec())
 
 if __name__ == "__main__":

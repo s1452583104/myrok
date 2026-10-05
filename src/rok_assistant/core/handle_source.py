@@ -75,36 +75,74 @@ class AdbHandleSource:
 
     Captures at the emulator's native Android resolution (e.g. 1920x1080)
     regardless of window size or display DPI scaling.
+
+    **必须先 `adb connect`**：MuMu 的 adb 端口是 TCP 设备，没连过时
+    `adb -s 127.0.0.1:16384 exec-out screencap` 会直接报
+    `error: device '...' not found`（2026-10-05 实机确认：`adb devices` 为空）。
+    之前靠运行手册让人手动 connect，所以新用户点「测试连接」必然失败。
+    这里在首次使用前自动连一次，失败时重连一次再试（adb server 重启 /
+    模拟器重启后设备会掉线）。
     """
 
     def __init__(self, adb_address: str, adb_path: str = "adb", _runner=None):
         self._address = adb_address
         self._adb_path = adb_path
         self._run = _runner if _runner is not None else self._subprocess_run
+        self._connected = False
 
     @staticmethod
     def _subprocess_run(args, **kwargs):
-        import subprocess
-        return subprocess.run(args, capture_output=True, check=True, timeout=10)
+        from ..infra.subproc import run as run_child
+        # 走 infra/subproc.run：它负责剥 QT_*，以及带上 CREATE_NO_WINDOW——
+        # **这条是热路径**（每截一帧、每点一下都起一次 adb），漏掉后者的话
+        # 打包后每调一次 adb 就闪一个黑窗，用户看到的就是「黑窗闪个不停」。
+        return run_child(args, capture_output=True, check=True, timeout=10)
 
     def _serial_args(self) -> list:
         return ["-s", self._address]
 
+    def _ensure_connected(self) -> None:
+        """首次使用前连一次。**吞掉异常**：连不上时后续真实命令会给出
+        更具体的错误（比如 adb.exe 路径不对），在这里抛只会掩盖它。"""
+        if self._connected:
+            return
+        try:
+            self._run([self._adb_path, "connect", self._address])
+        except Exception:                       # noqa: BLE001 - 见 docstring
+            pass
+        self._connected = True
+
+    def _run_checked(self, args):
+        """跑一条真实命令；失败时重连一次再试一次。
+
+        掉线是常态而非异常：adb server 重启、模拟器重启都会让设备从
+        `adb devices` 里消失，重连即可恢复，不该让整轮跑挂掉。
+        """
+        self._ensure_connected()
+        try:
+            return self._run(args)
+        except Exception:
+            self._connected = False
+            self._ensure_connected()
+            return self._run(args)
+
     def capture(self) -> np.ndarray:
         import cv2
-        proc = self._run([self._adb_path, *self._serial_args(), "exec-out", "screencap", "-p"])
+        proc = self._run_checked(
+            [self._adb_path, *self._serial_args(), "exec-out", "screencap", "-p"])
         img = cv2.imdecode(np.frombuffer(proc.stdout, dtype=np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             raise RuntimeError(f"screencap returned undecodable data from {self._address}")
         return img
 
     def click(self, x: int, y: int) -> None:
-        self._run([self._adb_path, *self._serial_args(),
-                   "shell", "input", "tap", str(int(x)), str(int(y))])
+        self._run_checked([self._adb_path, *self._serial_args(),
+                           "shell", "input", "tap", str(int(x)), str(int(y))])
 
     def swipe(self, x1, y1, x2, y2, duration_ms=300):
-        self._run([self._adb_path, *self._serial_args(), "shell", "input", "swipe",
-                   str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)), str(int(duration_ms))])
+        self._run_checked([self._adb_path, *self._serial_args(), "shell", "input", "swipe",
+                           str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)),
+                           str(int(duration_ms))])
 
     def is_alive(self) -> bool:
         try:

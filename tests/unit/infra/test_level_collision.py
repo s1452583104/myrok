@@ -1,6 +1,11 @@
 from rok_assistant.infra.config import RootConfig, find_level_collisions
 
 
+def _levels(v) -> list:
+    """允许传单个数（旧用法）或列表（多选）。"""
+    return [v] if isinstance(v, int) else list(v)
+
+
 def _cfg(level_a, level_b, fill_ab=True, fill_ba=True):
     a_targets = [{"instance": "i1", "name": "B"}] if fill_ab else []
     b_targets = [{"instance": "i0", "name": "A"}] if fill_ba else []
@@ -15,12 +20,12 @@ def _cfg(level_a, level_b, fill_ab=True, fill_ba=True):
         "instances": [
             {"id": "i0", "mumu_index": 0, "characters": [
                 {"id": "ca", "name": "A", "role": a_role,
-                 "target_level": level_a, "march_preset": 1,
+                 "target_levels": _levels(level_a), "march_preset": 1,
                  "march_troop_types": ["infantry"],
                  "fill_target_leaders": a_targets}]},
             {"id": "i1", "mumu_index": 1, "characters": [
                 {"id": "cb", "name": "B", "role": b_role,
-                 "target_level": level_b, "march_preset": 1,
+                 "target_levels": _levels(level_b), "march_preset": 1,
                  "march_troop_types": ["cavalry"],
                  "fill_target_leaders": b_targets}]},
         ]})
@@ -30,13 +35,27 @@ def test_same_level_mutual_fill_warns():
     msgs = find_level_collisions(_cfg(7, 7))
     assert len(msgs) == 1
     assert "7" in msgs[0]
-    assert "不同等级" in msgs[0]
+    assert "建议错开等级" in msgs[0]
 
 
 def test_different_level_is_silent():
     """两号配不同等级 → 不会搜到同一寨子 → 无告警。
     这是删除 _FOREIGN_RALLY_WINDOW 的前提。"""
     assert find_level_collisions(_cfg(7, 6)) == []
+
+
+def test_partial_overlap_warns():
+    """多选后不再比「相等」：只要两个列表有共同等级就会撞车。
+    这里 A=[7,6]、B=[6,5] 都不相等，但 6 级会撞。"""
+    msgs = find_level_collisions(_cfg([7, 6], [6, 5]))
+    assert len(msgs) == 1
+    assert "6 级" in msgs[0]
+    assert "7 级" not in msgs[0]   # 只报真正重叠的等级
+
+
+def test_no_overlap_is_silent():
+    """列表都非单元素但完全不重叠 → 不会撞车。"""
+    assert find_level_collisions(_cfg([7, 6], [5, 4])) == []
 
 
 def test_same_level_one_direction_still_warns():
@@ -59,11 +78,11 @@ def test_pure_member_does_not_participate():
         "instances": [
             {"id": "i0", "mumu_index": 0, "characters": [
                 {"id": "ca", "name": "A", "role": "leader",
-                 "target_level": 7, "march_preset": 1,
+                 "target_levels": [7], "march_preset": 1,
                  "march_troop_types": ["infantry"]}]},
             {"id": "i1", "mumu_index": 1, "characters": [
                 {"id": "cb", "name": "B", "role": "member",
-                 "target_level": 7, "march_preset": 1,
+                 "target_levels": [7], "march_preset": 1,
                  "march_troop_types": ["cavalry"],
                  "fill_target_leaders": [{"instance": "i0", "name": "A"}]}]},
         ]})

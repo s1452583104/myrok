@@ -97,6 +97,31 @@ def test_build_recognizers_rejects_yolo(tmp_path):
         reg.build_recognizers()
 
 
+def test_templates_load_from_non_ascii_path(tmp_path):
+    """中文路径下模板必须能加载。
+
+    cv2.imread 在 Windows 的非 ASCII 路径上静默返回 None；用户把绿色包解压到
+    「D:\\游戏\\rok-assistant」这类目录时，53 张模板会集体加载失败。
+    这条测试就是钉住 imread_unicode 那个绕法。
+    """
+    zh_dir = tmp_path / "游戏" / "rok-assistant"
+    zh_dir.mkdir(parents=True)
+    png = zh_dir / "btn_a.png"
+    ok, buf = cv2.imencode(".png", np.full((8, 8, 3), 128, dtype=np.uint8))
+    assert ok
+    png.write_bytes(buf.tobytes())
+    (zh_dir / "manifest.yaml").write_text(
+        "templates:\n"
+        "  - id: btn_a\n"
+        "    file: btn_a.png\n"
+        "    threshold: 0.9\n",
+        encoding="utf-8")
+
+    reg = TemplateRegistry.load(zh_dir / "manifest.yaml")
+    recognizers = reg.build_recognizers()
+    assert "btn_a" in recognizers
+
+
 # ---- 三识别栈融合（2026-09-17）：Chain(模板→YOLO/OCR 兜底) 装配 ----
 
 class _FakeBoxes:
@@ -115,9 +140,9 @@ class _FakeBox:
 
 class _FakeResult:
     def __init__(self, rows):
-        # 行格式 (x1, y1, x2, y2, conf)，类别固定 0（fake 只覆盖单类命中路径）
+        # 行格式 (x1, y1, x2, y2, conf[, cls])，cls 缺省 0
         self.boxes = _FakeBoxes(
-            [_FakeBox(r[:4], r[4], 0) for r in rows])
+            [_FakeBox(r[:4], r[4], r[5] if len(r) > 5 else 0) for r in rows])
 
 class _FakeSharedYolo:
     """Stub SharedYoloDetector: fixed detections, class-name -> id 0..n order."""
@@ -148,13 +173,80 @@ def test_yolo_fallback_fires_when_template_misses(image_manifest):
     assert r.matched
     assert r.bbox.x1 == 10
 
-def test_yolo_fallback_respects_threshold(image_manifest):
-    reg = TemplateRegistry.load(image_manifest)  # threshold 0.9
-    fake = _FakeSharedYolo([(10, 10, 30, 30, 0.6)], {0: "search"})
+def test_yolo_threshold_decoupled_from_template(image_manifest):
+    """YOLO 用自己的 yolo_threshold（默认 0.5），不再共用模板的 0.9。
+
+    2026-10-04 改语义：旧版这里断言「YOLO 0.6 < 模板阈值 0.9 -> 整链未命中」，
+    那条耦合正是本次要去掉的——TM_CCOEFF_NORMED 和 YOLO conf 是两把尺子。
+    """
+    from rok_assistant.core.template_registry import DEFAULT_YOLO_THRESHOLD
+    assert DEFAULT_YOLO_THRESHOLD == 0.5
+    reg = TemplateRegistry.load(image_manifest)          # 模板阈值 0.9
+    img = np.full((200, 200, 3), 128, dtype=np.uint8)
+    # 0.6 >= 0.5 -> YOLO 命中（旧语义下会被模板的 0.9 拦掉）
+    recs = reg.build_recognizers(
+        yolo_shared=_FakeSharedYolo([(10, 10, 30, 30, 0.6)], {0: "search"}))
+    r = recs["search"].recognize(img)
+    assert r.matched and r.bbox.x1 == 10
+    # 低于 YOLO 阈值 -> 整链不命中（模板在灰底上也不命中）
+    recs2 = reg.build_recognizers(
+        yolo_shared=_FakeSharedYolo([(10, 10, 30, 30, 0.4)], {0: "search"}))
+    assert not recs2["search"].recognize(img).matched
+
+
+def test_yolo_wins_over_a_matching_template(image_manifest):
+    """YOLO 优先：模板同样命中时，返回的是 YOLO 的框（顺序反转的锚点）。"""
+    reg = TemplateRegistry.load(image_manifest)
+    fake = _FakeSharedYolo([(50, 60, 90, 100, 0.7)], {0: "search", 1: "search_roi"})
+    recs = reg.build_recognizers(yolo_shared=fake)
+    img = cv2.imread(str(FIX / "screenshot_with_template.png"))   # 模板会命中
+    r = recs["search"].recognize(img)
+    assert r.matched
+    assert r.recognizer_id == "search@yolo"      # 不是模板腿
+    assert r.bbox.x1 == 50
+
+
+def test_yolo_threshold_override_can_disable_the_leg(image_manifest):
+    """条目写 yolo_threshold: 1.01 = 关掉 YOLO 腿（preset_* / alliance_btn 用）。
+
+    定标实测这两类 YOLO 不可用：preset_* 漏检（640 输入下图标约 15px），
+    alliance_btn 漏检 + 真误报 0.480。它们都要点击，假阳性 = 点错位置。
+    """
+    manifest = image_manifest.parent / "manifest.yaml"
+    manifest.write_text(manifest.read_text(encoding="utf-8")
+                        + "  - id: search_off\n    file: template_search.png\n"
+                          "    roi: full\n    threshold: 0.9\n"
+                          "    yolo_threshold: 1.01\n", encoding="utf-8")
+    reg = TemplateRegistry.load(manifest)
+    assert reg.get("search_off").yolo_threshold == 1.01
+    assert reg.get("search").yolo_threshold is None      # 未写的条目吃默认
+    fake = _FakeSharedYolo([(50, 60, 90, 100, 0.99, 2)],
+                           {0: "search", 1: "search_roi", 2: "search_off"})
     recs = reg.build_recognizers(yolo_shared=fake)
     img = np.full((200, 200, 3), 128, dtype=np.uint8)
-    r = recs["search"].recognize(img)
-    assert not r.matched   # YOLO 0.6 < 模板阈值 0.9 -> 整链未命中
+    assert not recs["search_off"].recognize(img).matched   # 0.99 < 1.01 -> 腿关闭
+
+
+def test_fill_leg_stays_template_first(image_manifest):
+    """fill_ 的兜底腿是 OCR，不该被「YOLO 优先」波及——保持模板先行。"""
+    from rok_assistant.core.recognizers.ocr_text import OCRText
+    from rok_assistant.core.recognizers.template_match import TemplateMatch
+
+    class _StubOcr:
+        def detect_text(self, frame):
+            return []
+
+    manifest = image_manifest.parent / "manifest.yaml"
+    manifest.write_text(manifest.read_text(encoding="utf-8")
+                        + "  - id: fill_阑珊填1\n    file: template_search.png\n"
+                          "    roi: [0, 0, 80, 80]\n    threshold: 0.9\n",
+                        encoding="utf-8")
+    reg = TemplateRegistry.load(manifest)
+    recs = reg.build_recognizers(yolo_shared=_FakeSharedYolo([], {0: "search"}),
+                                 ocr_engine=_StubOcr())
+    legs = recs["fill_阑珊填1"]._recognizers
+    assert isinstance(legs[0], TemplateMatch)     # 模板仍是第一腿
+    assert isinstance(legs[1], OCRText)
 
 def test_yolo_spec_builds_adapter_with_model(image_manifest):
     manifest = image_manifest.parent / "manifest.yaml"

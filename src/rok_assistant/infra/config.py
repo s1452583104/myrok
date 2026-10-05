@@ -18,11 +18,21 @@ class FillLeader(BaseModel):
     name: str = Field(min_length=1)
 
 
+# 搜索目标等级上限（2026-10-04 用户要求）：按**配置顺序**依次搜，每级
+# 连搜 5 次无结果就换下一级，绕完一圈（回到第一个之前）放弃本轮。
+# 为什么是 3：再多也不会用上——附近的城寨等级就那么几档，列表越长
+# 一圈的代价越大（每级 5 次全量重搜 ≈ 40s）。
+MAX_TARGET_LEVELS = 3
+
+
 class CharacterConfig(BaseModel):
     id: str
     name: str = Field(min_length=1)
     role: RoleEnum
-    target_level: int = Field(ge=1, le=10)
+    # 有序搜索列表：先搜第 1 个，搜不到换第 2 个……绕完一圈放弃本轮。
+    # 顺序**完全自由**（用户明确要求，例如 6→4→5 合法），不强制降序；
+    # 下限即列表中的最小值，不另设 min_level 字段。
+    target_levels: list[int]
     march_preset: int = Field(ge=1, le=5)
     march_troop_types: list[Literal["infantry", "cavalry", "archer"]]
     fill_target_leaders: list[FillLeader] = []
@@ -32,6 +42,21 @@ class CharacterConfig(BaseModel):
     def _not_empty(cls, v):
         if not v:
             raise ValueError("march_troop_types must be non-empty")
+        return v
+
+    @field_validator("target_levels")
+    @classmethod
+    def _check_levels(cls, v):
+        if not v:
+            raise ValueError("target_levels 不能为空：至少选一个城寨等级")
+        if len(v) > MAX_TARGET_LEVELS:
+            raise ValueError(
+                f"target_levels 最多 {MAX_TARGET_LEVELS} 个（收到 {len(v)} 个）")
+        for lv in v:
+            if not 1 <= lv <= 10:
+                raise ValueError(f"target_levels 取值须在 1..10（收到 {lv}）")
+        if len(set(v)) != len(v):
+            raise ValueError(f"target_levels 有重复等级：{v}")
         return v
 
 
@@ -126,7 +151,8 @@ def find_level_collisions(config: RootConfig) -> list[str]:
 
     判定条件（三者同时满足）：
       1. 两个角色 role ∈ {leader, either}（member 不开车）
-      2. target_level 相同（等级不同 → 搜索目标不同 → 不会撞）
+      2. target_levels 两个列表**有交集**（2026-10-04：改多选后不再比
+         「相等」——只要有一个共同等级，两号就可能在那一级搜到同一寨子）
       3. 至少一个方向填对方（互为填兵目标说明两号在同一联盟协同作战；
          不同联盟各自为战则不会互相干扰）
 
@@ -138,7 +164,8 @@ def find_level_collisions(config: RootConfig) -> list[str]:
     out: list[str] = []
     for idx, (inst_a, a) in enumerate(cars):
         for inst_b, b in cars[idx + 1:]:
-            if a.target_level != b.target_level:
+            shared = sorted(set(a.target_levels) & set(b.target_levels))
+            if not shared:
                 continue
             related = any(t.instance == inst_b.id and t.name == b.name
                           for t in a.fill_target_leaders) or \
@@ -146,10 +173,12 @@ def find_level_collisions(config: RootConfig) -> list[str]:
                     for t in b.fill_target_leaders)
             if not related:
                 continue
+            levels = "、".join(f"{lv} 级" for lv in shared)
             out.append(
-                f"[配置] {a.name} 与 {b.name} 同为 {a.target_level} 级且至少"
+                f"[配置] {a.name}（{a.target_levels}）与 {b.name}"
+                f"（{b.target_levels}）都含 {levels} 且至少"
                 f"一方填对方：可能搜到同一寨子，撞车时后发者被游戏静默拒绝"
-                f"（已降级不计失败，但白烧一次搜索）。建议配置不同等级。")
+                f"（已降级不计失败，但白烧一次搜索）。建议错开等级。")
     return out
 
 

@@ -31,7 +31,7 @@ def _sm(ledger=None, char_id="c1"):
     recs = {k: rec for k in ("search_icon", "map_btn", "search_back",
                              "level_plus", "search_btn", "alliance_btn")}
     return EitherStateMachine(handle_source=handle, recognizers=recs,
-                              target_level=7, march_preset=1,
+                              target_levels=[7], march_preset=1,
                               march_troop_types=["infantry"],
                               fill_target_leaders=[], char_id=char_id,
                               ledger=ledger)

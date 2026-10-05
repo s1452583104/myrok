@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.dedupe_dataset import find_duplicate_groups, pick_survivor
+from tools.dedupe_dataset import find_duplicate_groups, main, pick_survivor
 
 
 def _mk(images_dir: Path, labels_dir: Path, stem: str, content: bytes, n_labels: int):
@@ -63,3 +63,32 @@ def test_survivor_counts_missing_label_file_as_zero(tmp_path: Path):
     (images / "no_labels.png").write_bytes(b"same")
 
     assert pick_survivor(["has_labels", "no_labels"], labels) == "has_labels"
+
+
+def test_apply_backs_up_the_images_of_removed_frames(tmp_path, monkeypatch):
+    """删帧会连图一起删，图不在 labels/ 里。
+
+    实测踩过（prune_labels）：只备份 labels，8 帧的图删掉后 recordings/ 里也没有
+    原件，只剩标注无从复原。本工具同样必须连原图一起进备份。
+    """
+    d = tmp_path / "dataset"
+    images, labels = d / "images", d / "labels"
+    images.mkdir(parents=True), labels.mkdir()
+    _mk(images, labels, "a", b"same", 1)
+    _mk(images, labels, "b", b"same", 1)
+    (d / "train.txt").write_text(
+        "\n".join(str(images / f"{s}.png") for s in ("a", "b")) + "\n",
+        encoding="utf-8")
+    (d / "val.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["dedupe_dataset.py", "--dataset", str(d),
+                                     "--apply"])
+
+    assert main() == 0
+
+    backups = list(d.glob("_dedupe_backup_*"))
+    assert len(backups) == 1
+    # 幸存者是 a（名字最小、标注并列）→ 备份里必须有 b 的原图
+    assert (backups[0] / "images" / "b.png").exists()
+    assert (backups[0] / "labels" / "b.txt").exists()
+    assert not (images / "b.png").exists()
+    assert (images / "a.png").exists()

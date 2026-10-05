@@ -6,7 +6,8 @@ instances:
       - id: m1
         name: "OnlyMember"
         role: member
-        target_level: 5
+        target_levels:
+        - 5
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders:

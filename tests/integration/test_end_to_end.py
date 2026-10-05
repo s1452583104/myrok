@@ -57,7 +57,7 @@ def test_leader_launches_member_fills_and_runner_rebuilds(monkeypatch):
 
     def leader_factory():
         sm = LeaderStateMachine(handle, _recs(LEADER_IDS),
-                                target_level=7, march_preset=1,
+                                target_levels=[7], march_preset=1,
                                 march_troop_types=["cavalry"], event_bus=bus,
                                 wait_members_seconds=0.0)
         leader_sms.append(sm)

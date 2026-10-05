@@ -1,3 +1,8 @@
+"""YOLO 检测识别器（三栈融合里的第二/第一条腿）。
+
+模型是 YOLO，但执行后端是 **onnxruntime**（见 `onnx_detect.py`）——发行包
+因此不必带 torch。ultralytics 只在训练与导出时需要，`src/` 里已无引用。
+"""
 from __future__ import annotations
 import numpy as np
 from ..recognizer import RecognizeResult, BBox
@@ -13,8 +18,8 @@ class YoloDetect:
 
     def _load(self):
         if self._yolo is None:
-            from ultralytics import YOLO
-            self._yolo = YOLO(self._model)
+            from .onnx_detect import OnnxYoloModel
+            self._yolo = OnnxYoloModel(self._model)
         return self._yolo
 
     def recognize(self, screenshot: np.ndarray) -> RecognizeResult:
@@ -59,15 +64,16 @@ class SharedYoloDetector:
 
     def __init__(self, model_path, device=None):
         self._path = model_path
-        self._device = device
+        self._device = device          # ONNX CPU 后端不用；保留是为了兼容调用方
         self._yolo = None
         self._cache_key = None
         self._cache_val = None
+        self._cache_img = None
 
     def _model(self):
         if self._yolo is None:
-            from ultralytics import YOLO
-            self._yolo = YOLO(str(self._path))
+            from .onnx_detect import OnnxYoloModel
+            self._yolo = OnnxYoloModel(str(self._path))
         return self._yolo
 
     @property
@@ -83,6 +89,10 @@ class SharedYoloDetector:
         results = self._model()(screenshot, device=self._device, verbose=False)
         self._cache_key = key
         self._cache_val = results
+        # 缓存键用 id(frame)，必须自己持有帧的强引用：ultralytics 的 Results
+        # 会间接引用原图，ONNX 后端的 Detections 只存 numpy 框，帧一旦被回收
+        # id() 就可能被复用 -> 命中别的帧的缓存。
+        self._cache_img = screenshot
         return results
 
 

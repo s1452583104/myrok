@@ -7,11 +7,11 @@
 
 | 项 | 状态 | 备注 |
 |---|---|---|
-| 自动化测试 | ✅ 185/185 通过 | `pytest tests/`（含端到端 leader→member→冷却重建集成测试） |
+| 自动化测试 | ✅ 554/554 通过（2026-10-04） | `pytest tests/ -q`，278.20s（含端到端 leader→member→冷却重建集成测试） |
 | 运行时接线 | ✅（2026-09-10） | WorkerRunner/RuntimeCoordinator/GuiController 已接线，GUI Start/Stop 可用；member 填兵不点预设；leader 流程含 red_rally/归一化/toast/被锁恢复 |
 | 采集路线 | ✅ **改为 ADB** | `AdbHandleSource`：截图/点击都走 MuMu adb（127.0.0.1:16384），原生 1920×1080，与窗口/DPI 无关 |
 | 真实模板 | ✅ 31/31 已采 | 见下表，验证方式=跨帧+跨角色 TemplateMatch |
-| 用户 config | ✅ 已写（2026-09-09） | 2 实例：mumu0「如愿」阑珊寨子号(either,7级) ⇄ mumu1「15634025219」Jy丶阑珊(either,8级)，互相填兵；骑兵、预设1；`丶`=U+4E36 待 OCR 校验 |
+| 用户 config | ✅ 已写（2026-09-09） | 2 实例、每实例 1 角色；角色分工 / 目标等级列表 / 预设槽 / 兵种 / 填兵目标齐全。**具体取值以 `config.yaml` 为准，本文档不记录** |
 | 实机验收 8 项 | ⏳ 未开始 | §3 |
 
 ## §1.4 模板采集进度（2026-09-07）
@@ -47,6 +47,7 @@
 4. **搜索无结果有 toast**：「您的城市附近暂未找到符合条件的野蛮人城寨」——已是模板 `toast_no_fortress`，leader_sm 应处理（换等级/稍后重试）。实测 1-6 级城寨均不在附近，7 级有。✅ 已实现（leader_sm `_check_result`：toast 可见即确证无结果，计数 ≤3 次重搜后放弃）
 5. **Win32 采集路线放弃**：2560×1600@150% DPI 下 PrintWindow 裁剪且无法保证 1920×1080；ADB 路线已完全替代（点击、截图实测可用）。✅ 已实现（`AdbHandleSource` 为默认路线）
 6. 搜索结果详情弹窗有 ⭐ 书签（与锁定无关，WIP 推测正确）；消失倒计时如 19:59:51 在弹窗左下。✅ 已证实（leader_sm `_verify_unlocked` 锁定判定只看 `rally_attack_popup`，与书签无关）
+7. **识别链顺序：YOLO 先行**（2026-10-04，用户要求）。`template_match` 条目装配成 `[YOLO, 模板]`，两条腿各有自己的阈值（YOLO 用 `yolo_threshold`，缺省 0.5；模板用 `threshold`）。`fill_*` 的兜底腿是 OCR，仍**模板先行**。`preset_1..6` 与 `alliance_btn` 显式关掉 YOLO 腿（定标实测漏检/误报）。细节见 `docs/PROGRESS.md` 阈值参考与 `docs/HISTORY.md` 10-04 一节。
 
 ---
 
@@ -151,26 +152,32 @@ templates/
 
 ## §2 写你的 config.yaml
 
-**推荐方式：** 启动 GUI（`python -m rok_assistant.gui.main_window`，从项目根目录），点「⚙ 配置」，在左树右表单界面里配置全局路径、实例（MuMu 实例号）与角色阵容（分工/等级/预设/兵种/填兵目标），保存时自动校验。配置前先用实例页「测试连接」确认连对了模拟器。
+**推荐方式：** 启动 GUI（`python -m rok_assistant.gui.main_window`，从项目根目录），点「⚙ 配置」，在左树右表单界面里配置全局路径、模拟器（点「扫描模拟器」按 MuMu 里的名字选）与角色阵容（分工/等级/预设/兵种/填兵目标），保存时自动校验。配置前先用模拟器页「测试连接」确认连对了模拟器。
+
+> 面向非程序员的逐步说明见 [`配置说明.md`](配置说明.md)（会随绿色包一起分发）。
 
 **手动方式：** 复制 `config.example.yaml` 为 `config.yaml` 修改。要点：
 - `instances` 取代旧 `accounts`；1 实例 = 1 账号；`mumu_index` 与 `adb_address` 二选一
 - `role`: `leader`（车头，自己开寨）/ `member`（成员，只填兵）/ `either`（先开寨再填兵）
 - `member`/`either` 必填 `fill_target_leaders`（显式列表，可跨实例）；`leader` 不能配
-- `target_level` / `march_preset` / `march_troop_types` 对每个角色必填
+- `target_levels`（有序搜索列表，1–3 个、1–10、不重复；顺序完全自由）/ `march_preset` / `march_troop_types` 对每个角色必填
 - 校验命令见 `config.example.yaml` 头部注释
 
 ---
 
-## §3 跑 8 项手动验收
+## §3 跑 5 项手动验收
 
-运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ Start，8 项验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
+运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ Start，验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
 
 ```bash
 python tools/verify.py
 ```
 
-输出 8 项 checklist。逐项跑：
+输出 checklist。逐项跑：
+
+> **编号 3.3–3.5 已删除（2026-10-04，用户裁定不再要求单独验收）**：锁定城寨→跳过重搜 /
+> 集结超时→自动下一轮 / 关模拟器→paused→重开恢复。编号**保留跳跃**不重排——`leader_sm.py`
+> 与 `runner.py` 的注释里引用了 §3.3/§3.5。
 
 ### 3.1 [x] Start 1 emulator + 1 character, run 1 rally
 
@@ -187,30 +194,9 @@ python tools/verify.py
 3. GUI 显示多张 card
 4. leader 开战后，member card 应自动从 `idle` → `switching` → `joining` → `done`
 
-### 3.3 [x] Locked fortress -> skip + next
-
-1. 选一个已被别人集结的寨子（搜结果里看到 ⭐ 或 锁图标）
-2. 点红集结，等 5 秒应**不出现**"集结进攻"弹窗
-3. 状态机应走到 `next_fortress` 状态，自动选下一只
-4. 看 log 应有 `fortress_locked` 记录
-
-### 3.4 [x] Rally times out empty -> leader relaunches
-
-1. leader 开战
-2. 没有 member 加
-3. 5 分钟倒计时结束，rally 自动解散
-4. leader 状态机应重新进入 `SEARCH_FORTRESS` 找下一只
-
-### 3.5 [x] Close emulator window -> assistant pauses
-
-1. 跑到一半关掉 MuMu 窗口
-2. 所有 worker 应检测到 `is_alive() == False` → 暂停
-3. GUI 不应崩溃，log 应有 `window_disappeared` + `PAUSE_ALL`
-4. 重开 MuMu 窗口 → 可手动 resume
-
 ### 3.6 [x] Invalid config (level=11) -> refused at startup
 
-1. config.yaml 改一个角色 `target_level: 11`
+1. config.yaml 改一个角色 `target_levels: [11]`
 2. 启动 GUI 应弹错误对话框，明确指出哪个字段错了
 3. 拒绝启动，进程退出
 

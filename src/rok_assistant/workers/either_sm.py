@@ -65,7 +65,7 @@ class EitherStateMachine:
         （member END 即终态）。
     """
 
-    def __init__(self, handle_source, recognizers: dict, target_level: int,
+    def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
                  march_preset: int, march_troop_types: list,
                  fill_target_leaders, event_bus=None, char_id: str = "?",
                  rally_tracker=None, ledger=None):
@@ -83,8 +83,11 @@ class EitherStateMachine:
         self._tracker = rally_tracker if rally_tracker is not None else _NullTracker()
         self._jitter_done = False
         # either 角色不等自己的集结（用户要求）：开完立即转成员流程填
-        # 他人集结，故 wait_members_seconds=0.0（默认 330s 留给纯车头）
-        self._leader = LeaderStateMachine(handle_source, recognizers, target_level,
+        # 他人集结，故 wait_members_seconds=0.0（默认 330s 留给纯车头）。
+        # queue_gate 刻意不传：either 自己那面门（self._gate）已经在
+        # step() 里观测同一份判读，再给子车头一面会让 QueueGate 的内部
+        # 投票/计时器被喂两遍，采信节奏翻倍
+        self._leader = LeaderStateMachine(handle_source, recognizers, target_levels,
                                           march_preset, march_troop_types, event_bus,
                                           wait_members_seconds=0.0,
                                           publisher_id=self._char_id,
@@ -104,6 +107,7 @@ class EitherStateMachine:
         self._wait_deadline = 0.0
         self._next_check = 0.0
         self._gate_next_log = 0.0
+        self._gate_last_msg = ""
 
     def step(self, context: dict | None = None) -> None:
         if context is not None:
@@ -223,94 +227,22 @@ class EitherStateMachine:
             self._phase = "done"   # current 保持 MEMBER:END
 
     def _queue_verdict(self) -> str:
-        """右侧 */5 派遣队列判读（2026-09-16 实机重校准）：
+        """右侧 */5 派遣队列判读 —— 实现在 LeaderStateMachine.queue_verdict。
 
-        - 'none'    地图视图上徽标不可见=无队列在外
-        - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
-                    黄色箭头=返程中 / 红色刀剑=战斗中（动态多形态动画：
-                    交叉 X=queue_battle_icon、平行双剑=queue_fight_icon、
-                    白色「上箭头」挥舞帧=queue_recall_icon —— 2026-09-17
-                    实机确认无独立召回态，取消集结直接解散无图标、撤回
-                    显示绿脚印普通行军；该模板匹配的就是战斗动画帧）
-                    （阻塞，无宽限）。
-                    2026-09-16 用户报告：预设主将未回城（返程/战斗态）时
-                    开集结，游戏让默认武将代开车打不过寨子。同日第二次
-                    事故：返程/战斗图标无模板，采集锄头匹配把混合队列
-                    误判成「仅采集」放行 —— 五态+战斗动画各形态
-                    全部补齐模板
-        - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
-        - 'unknown' 徽标在但已知图标都不可辨，或不在地图视图无法判读
-          —— fail-closed 按在外处理，持续超宽限期才放行告警。
-          2026-09-14 实机教训：模板裁剪含背景像素换场景掉分，误判
-          「仅采集/已回城」提前开集结。2026-09-16：战争列表面板开着时
-          队列栏整体隐藏，「徽标不可见」被误读成「无队列」放行搜索。
-          未知宁可等。注：_find 不匹配与未配置都返回 None，须用
-          _rec.get 区分（未配置=门槛不生效，保持旧行为）
+        2026-10-04 搬家：整段只用 leader 的 _rec/_find/_handle，而纯 leader
+        角色也需要它（集结前置门槛）。留这层薄壳是为了两点：either 自己的
+        门槛调用点不变，以及既有测试对 either 实例打 monkeypatch
+        （test_either_sm_gate 的 setattr(sm, "_queue_verdict", ...)）继续有效。
         """
-        if self._leader._rec.get("queue_badge") is None:
-            return "none"   # 未配置徽标识别器：门槛不生效（与旧版一致）
-        if self._leader._find("queue_badge") is None:
-            # 徽标不可见 ≠ 一定无队列在外：战争列表等面板开着时右侧队列栏
-            # 整体隐藏（2026-09-16 实机：重启后战争面板残留，mumu0/mumu1
-            # 双双被误判「无队列」放行搜索，而填兵部队还在他人集结里）。
-            # 判据用「联盟旗帜可见=在地图视图」：地图上徽标才可信。
-            # 不在地图视图时先关已知残留面板（与 normalize 同位）、点
-            # map_btn 回地图，本拍按 unknown fail-closed 拦截，下一拍在
-            # 地图视图上重新判读
-            # 地图视图判据：alliance_btn（联盟旗帜）或 search_icon（左下
-            # 放大镜）任一可见即可 —— 2026-09-18 实机：简化模式下联盟快捷
-            # 键整体不显示（alliance_btn 模板在干净地图上仅 0.248），但
-            # search_icon 只在地图视图出现，且战争列表/预警等全屏面板打开
-            # 时同样被盖住（normalize 需先关面板才见 search_icon），不会
-            # 重演 2026-09-16 面板残留误判「无队列」
-            for proof in ("alliance_btn", "search_icon"):
-                if self._leader._rec.get(proof) is not None \
-                        and self._leader._find(proof) is not None:
-                    return "none"   # 地图视图且无徽标：队列确实为空
-            closed = False
-            # 已知残留面板 → 关闭动作（与 leader normalize 同位坐标）：
-            # 全屏模态（创建部队 form_title 2026-09-18 实机 run4 残留挡
-            # 门槛）盖住一切时，normalize 根本没机会跑，门槛必须自己关
-            for panel, action in (
-                    ("war_title", ("click", 1671, 64)),
-                    ("warning_panel", ("click", 1671, 64)),
-                    ("form_title", ("click", 1671, 64)),
-                    ("replace_popup", ("click", 1500, 170)),
-                    ("rally_attack_popup", ("click", 960, 540)),
-                    ("menu_expanded", ("click", 1845, 1010))):
-                if self._leader._find(panel) is not None:
-                    self._leader._handle.click(action[1], action[2])
-                    closed = True
-                    break
-            if not closed and self._leader._find("ap_refill") is not None:
-                # 行动力不足弹窗：补体力（每日免费 500 + 初级恢复 100）而非
-                # 关弹窗 —— 关掉下次行军还是弹，白烧轮次（2026-09-18 run9）
-                closed = self._leader._refill_ap()
-                if not closed:
-                    self._leader._handle.click(1638, 120)
-            if not closed and self._leader._find("search_back") is not None:
-                # 搜索面板开着（残留/恢复回流）：队列栏被搜索模式底栏整体
-                # 隐藏（2026-09-16 实机 21:08 mumu1），退出搜索再判读
-                self._leader._click("search_back")
-                closed = True
-            if not closed:
-                # 城市视图：左下角地图图标出城按钮（实机 (72,1034)，2026-09-16
-                # 两号齐卡城市视图实锤）直接点击出城回地图。注意 map_btn
-                # 模板是地图视图的「进入城市」城堡按钮 (92,985)，在
-                # 城市视图不匹配、且语义相反，不能用它出城
-                self._leader._handle.click(72, 1034)
-            return "unknown"
-        for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
-                     "queue_battle_icon", "queue_fight_icon", "queue_recall_icon"):
-            if self._leader._find(icon) is not None:
-                return "battle"
-        if self._leader._find("queue_gather_icon") is not None:
-            return "gather"
-        return "unknown"
+        return self._leader.queue_verdict()
 
     def _gate_log(self, message: str) -> None:
+        # 30s 节流，但换了理由立刻打（与 leader_sm._gate_log 同一口径）：
+        # 每轮第一拍固定是「投票 1/3 帧」，它若吃掉节流窗口，随后真正采信
+        # 的那条理由就被压掉，日志会读成「门槛放行了」
         now = time.time()
-        if now >= self._gate_next_log:
+        if message != self._gate_last_msg or now >= self._gate_next_log:
+            self._gate_last_msg = message
             self._gate_next_log = now + 30.0
             logger.info("[集结门槛] %s", message)
 

@@ -21,5 +21,5 @@ def test_load_no_leader_raises():
 
 
 def test_load_invalid_level_raises():
-    with pytest.raises(ValidationError, match="target_level"):
+    with pytest.raises(ValidationError, match="target_levels"):
         load_config(FIX / "config_invalid_level.yaml")

@@ -93,7 +93,16 @@ def test_status_update_routes_to_card(qapp):
     fake = FakeController()
     w = MainWindow(controller=fake)
     fake.status_changed.emit({"char_id": "worker", "state": "WAIT_LAUNCH_EVENT"})
-    assert w._cards["worker"].status_label.text() == "WAIT_LAUNCH_EVENT"
+    # 卡片上显示中文（内部状态名是英文；映射见 gui/labels.py）
+    assert w._cards["worker"].status_label.text() == "等待车头发车"
+
+
+def test_status_update_unknown_state_falls_back_to_raw(qapp):
+    from rok_assistant.gui.main_window import MainWindow
+    fake = FakeController()
+    w = MainWindow(controller=fake)
+    fake.status_changed.emit({"char_id": "worker", "state": "SOME_FUTURE_STATE"})
+    assert w._cards["worker"].status_label.text() == "SOME_FUTURE_STATE"
 
 def test_refresh_button_rebuilds_cards(qapp):
     from rok_assistant.gui.main_window import MainWindow

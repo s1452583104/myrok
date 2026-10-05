@@ -7,8 +7,8 @@ from rok_assistant.workers.either_sm import EitherStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
 
 
-def _char(role):
-    return CharacterConfig(id="c1", name="H", role=role, target_level=8,
+def _char(role, levels=(8,)):
+    return CharacterConfig(id="c1", name="H", role=role, target_levels=list(levels),
                            march_preset=1, march_troop_types=["infantry"],
                            fill_target_leaders=[{"instance": "i1", "name": "Boss"}]
                            if role != RoleEnum.LEADER else [])
@@ -34,3 +34,12 @@ def test_factory_builds_member():
 def test_factory_builds_either():
     sm = create_state_machine(_char(RoleEnum.EITHER), _handle(), {})
     assert isinstance(sm, EitherStateMachine)
+
+
+def test_factory_passes_level_list_through_in_order():
+    """多等级列表要**原样按序**传给两个开车角色（不得重排/截断）。"""
+    levels = (6, 4, 5)
+    lead = create_state_machine(_char(RoleEnum.LEADER, levels), _handle(), {})
+    assert lead._target_levels == [6, 4, 5]
+    either = create_state_machine(_char(RoleEnum.EITHER, levels), _handle(), {})
+    assert either._leader._target_levels == [6, 4, 5]

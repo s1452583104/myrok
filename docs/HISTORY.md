@@ -458,3 +458,909 @@ v8 上线后用户实测：**「7-10 级可以识别，1-6 级仍不识别」**�
 **回头先读这四条**：#18、#26（带触发条件），#4、#7、#8、#12（「将来改动会撞到」类）。
 
 **计划 A 收尾（2026-10-03）**：15 commits `0cfd458..72466e3`；全套 **481 passed**；最终评审 0 Critical / 2 Important（一修一 park）/ 5 Minor 全 park；定向复评「all findings addressed, no new breakage」。SDD 工作区已删（`.superpowers/sdd/2026-09-30-判据层/`），git 历史是记录。
+
+## 2026-10-03 实机：日志乱码 + 预设列整体上移 42px
+
+真机跑 `_run_goal.py` 报的两个问题，都定位到根因并修了（尚未跑完整验收）。
+
+### 1. `_driver.log` 全是双编码乱码
+
+**现象**：`杩炵画 6 娆?step 寮傚父` 这种。`杩炵画` 就是「连续」的 UTF-8 字节被按 GBK
+解码的产物——典型双重编码。
+
+**根因**：`python -X utf8 _run_goal.py > _driver.log`（PowerShell 5.1）两边编码打架——
+Python 按 `-X utf8` 吐 **UTF-8 字节**，PowerShell 却按 `[Console]::OutputEncoding`
+（本机 cp936）**解码**，再以 UTF-16LE 落盘。字节级验证：不带 `-X utf8` 时 Python 输出
+`\xc1\xac\xd0\xf8`（GBK 的「连续」），带 `-X utf8` 时输出 `\xe8\xbf\x9e\xe7\xbb\xad`
+（UTF-8 的「连续」）。
+
+**只影响控制台那半边**：应用自己的 `logs/rok_assistant_*.log` 一直是干净 UTF-8
+（`FileHandler` 不经过控制台）。
+
+**修**：`_run_goal.py` 加 `_align_stdout_encoding()`——`GetConsoleOutputCP()` 读控制台
+实际代码页（`chcp` 改过就是新值），`sys.stdout.reconfigure(encoding=f"cp{cp}",
+errors="replace")`。`errors="replace"` 兜住代码页外的字符，别让一行日志把进程带崩。
+必须在 `setup_logging` **之前**调：`StreamHandler` 持有的是 `sys.stdout` 这个**对象**，
+reconfigure 改的就是它，控制台那半边同样受益。
+
+### 2. 开集结卡在「创建部队」面板：预设列整体上移 42px
+
+**现象**：驱动卡死不动，日志末行
+`RuntimeError: 预设槽 1 高亮未确认（3 轮），拒绝派错兵，集结未发起`。
+
+**根因**：`pixel_stat` 的预设槽判据按实测钉死的 `cy = 474 + 82*(N-1)` 取样，
+但今天 9 帧实机量到的白框中心是 **`432 + 82*(N-1)`**（框高 42px，槽 1/2 中心 432/514，
+9 帧零方差）——**整列上移 42px**。
+
+关键：`march_btn` 仍在 (1395,925)、`form_title` 仍在 (960,68.5)，**只有预设列动了**。
+所以「拿面板框当锚点」救不了，写死哪个值都只是换一个将来会过期的常数。
+
+**模板点击本身是对的**：`preset_1` 模板在 (1656,430) 命中、得分 0.988，点击确实落对了槽；
+坏的是随后用于确认的像素判据低了 42px，永远读不到高亮 → 3 轮重试 → 抛错拒绝发车。
+（fail-closed 方向是对的：宁可不发车，不派错兵。）
+
+**修（用户选的「自适应标定基准」）**：不再写死基准，改成运行时从帧里校准——
+- `PresetSlotJudge.calibrate(top)`：挪基准 + 作废本帧缓存（缓存键含 `top`）；
+- `PixelStatRecognizer.calibrate` 转发给共享 judge（同一列六个槽共用一份基准，调一次就够）；
+- `leader_sm._calibrate_preset_column(hit, n)`：拿 `preset_N` 模板命中的 `cy` 反推
+  `top = cy - 82*(n-1)`，**仅在命中落在预设列 ROI 内时**（`PRESET_COL_HALF_X = 56`；
+  manifest 里 preset_* 的 roi 是 x 1600..1712）——真实命中必然在列里，列外的命中不是槽心。
+- `PRESET_TOP = 474` 仍是默认值与标定锚点（测试钉住），**不再是运行时唯一真相**。
+
+**已知取舍（记下来）**：若模板真的串到邻槽（命中错槽），基准会**跟着串**，确认就成了自证——
+判据永远同意模板。这条由 0.97 阈值挡住：正确槽下限 0.9935、跨槽上限 0.9616，780 帧 0 次串位。
+**将来若降阈值，这个自证风险要重新评估。**
+
+**顺带发现**：
+- 失败截图有时是在屏幕已经变了之后才截的（15:16 那帧是地图不是面板）——排查时别当现场。
+- `mumu0` 当时是 `paused`（模拟器窗口消失）。
+
+**测试**：`test_pixel_stat.py` +3（`panel_verdict` 收 `top` / `calibrate` 推动识别器 /
+`calibrate` 作废缓存）；`test_leader_sm.py` +4（反推基准 / 列外命中忽略 / 基准推给 judge /
+面板移动时自校准）。
+
+### 数据集「0 框帧」污染清理（2026-10-03）
+
+**起因**：用户问「训练集里是不是有非标准尺寸的图，会不会污染」。
+
+**结论**：尺寸不统一**无害**（标签是归一化坐标，训练统一 letterbox 到 `imgsz: 640`）；
+真污染是 **0 框帧**——777 帧里有 31 张标签为空。
+
+**两类 0 框帧、两个成因**：
+
+1. **模板素材裁剪图被当成检测样本灌进 `dataset/images/`**（24 张，全部非 1920x1080）：
+   `scenes___z_join.png`(270x210) 画的就是绿色「+」按钮（`join_create_btn`），标签 0 行；
+   文件名与类名一一对应（`z_redrally`→`red_rally`、`z_wartitle`→`war_title`、
+   `z_magnifier`→`search_icon`、`z_sort`/`z_sorted`→`sort_selector`、
+   `z_tabs`→`barb_search_tab`、`z_level`→`zhaizi_level_text`、`z_blue`→`blue_rally` ……），
+   另有 4 张 `window_check__win_*.png` 窗口截图 + 1 张 `failure_i1_c1_*.png`(100x100)。
+   **判据是尺寸**：manifest 的 ROI 是 1920x1080 绝对像素，裁剪帧的归一化坐标对不上
+   屏幕位置，运行时永远不可能被采纳（`prune_labels.py` 规则 2）。撤掉不可能让任何类
+   归零——它们的标签本来就是 0 行。
+2. **动画过渡帧落在阈值下**（整屏 7 张里确认 1 张）：
+   `failure_mumu1_char_jy_20260915_001019.png` 与四张已标 `warning_panel` 的帧近乎同图
+   （64x36 灰度 mad=0.0087），而它自己的 `warning_panel` 模板读数只有 **0.664 < 阈值 0.85**
+   ——就是 `queue_flag_icon` 0.758 那个病的同款：入库时读不到 → 写成 0 框。
+   其余 6 张跑遍 53 个模板，最高原始分 0.654，全部远低于各自阈值 → 判背景、保留。
+
+**为什么现有护栏没拦住**：`prune_labels.py` 只管**被自己摘空**的帧，管不到**生下来就是
+0 框**的帧（且默认只跑 3 个类）；`dedupe_dataset.py` 只看逐字节相同（md5），抓不到
+mad=0.009 这种视觉同图。
+
+**新工具 `tools/audit_empty_frames.py`**：遍历 `images/`（不是 `labels/`——标签文件缺失
+也是 0 框帧），分两组出报告。裁剪帧组按尺寸判、`--apply` 撤；整屏组靠近重复判
+（64x36 灰度 mad，`--max-mad` 默认 0.03），**只出报告，`--drop <帧名>` 点名才撤**
+——近重复是概率证据，不替人拍板。默认 dry-run，写前整份 labels + train/val +
+**每一张被撤帧的原图**备份到 `dataset/_emptyfix_backup_<时间戳>/`。
+
+**顺带修**：`dedupe_dataset.py` 删帧时**没有备份**（直接 unlink），违反本仓库自己定的
+「删帧必须连图一起备份」规则——补上同款备份块 + 测试。
+
+**安全性核对**：53 个 manifest 模板文件的 `file:` 全相对于 `templates/`，无一指向
+`dataset/`；全仓无代码引用 `scenes___*` / `window_check__*` / `failure_i1_c1*`；
+带标注的裁剪帧（`manual4_sort_open_*` / `manual5_fix_sort_open_*`）不在判据范围内，
+一根汗毛不动。
+
+**测试**：`test_audit_empty_frames.py` +11、`test_dedupe_dataset.py` +1。
+
+**待办**：`--apply` 未执行（写盘动作被权限分类器拦下，需手动跑）：
+
+    .venv/Scripts/python.exe -X utf8 tools/audit_empty_frames.py --apply \
+        --drop failure_mumu1_char_jy_20260915_001019.png
+
+预期 777 → 752 帧、train 708 → 684、val 69 → 67（val 少 2，指标不能与上一版直接比）。
+
+---
+
+## 2026-10-04 · YOLO 先行：链顺序对调 + 阈值解耦 + 定标
+
+**用户要求**：「调整 yolo 和模板匹配的先后顺序，优先使用 yolo 进行匹配。」
+走 `superpowers:brainstorming` 的 bounded 路径（设计在对话里给、停下等点头，不写 spec 文档）。
+
+### 先摆数据，再动代码
+
+改之前先量「YOLO 到底比模板强在哪」。三帧实机画面（`search_icon`）：
+
+| 帧 | 模板分 | YOLO conf | 阈值 0.9 |
+|---|---|---|---|
+| `failure_..._095713`（当天卡死那帧） | 0.879 | 0.845 | **两个都没过** |
+| p0 | 0.918 | 0.538 | 模板过 |
+| p1 | 0.998 | 0.867 | 模板过 |
+
+**结论一**：三帧上模板都 ≥ YOLO，且失败帧两边都够不到 0.9。**光调顺序救不了那帧**——
+链返回第一个 `matched` 的，YOLO 在 0.9 阈值下 `matched=False`，照样落到模板。
+真正卡住的是「YOLO 共用模板阈值」这条耦合。
+
+**结论二（blast radius）**：53 个 manifest 条目里 50 个有 YOLO 腿，全都会受影响。
+
+### 定标（本次最花时间、也最出意外的部分）
+
+`tools/calibrate_yolo_threshold.py`：对每个 id，把 val 65 帧分成
+present（GT 有此类的帧，取 YOLO 最大 conf）/ absent（GT 无此类**且模板也没命中**的帧，
+取最大 conf = 假阳性地板）。阈值要落在两者之间。生产里 `YoloClassAdapter` 按框心过滤 ROI，
+所以定标也必须套 ROI，否则测出来的假阳性生产根本看不到。
+
+**首版结论是错的，而且错得很有诱惑力**：不修正标签时，`search_icon` 地板 0.721 / 最小正 0.649
+（重叠），`alliance_btn` 更是「有它的 3 帧全 0.000、没它的帧 0.480」（反相关）。
+照这个结果，正确做法是**放弃这个方向**。
+
+**翻案证据**：逐帧 dump 发现 `search_icon` 的所有检出（含「无 GT」的帧）都落在同一位置 (85,811)；
+两个「无 GT」帧是 `03_queue_panel__*` 队列面板场景。用模板做裁判——
+`03_queue_panel__...220756-394` 上 `search_icon` 模板 **1.000**（框心 (86,811)）、
+`alliance_btn` 模板 **1.000**（框心 (1846,869)），正是 YOLO 报出的位置。
+**图标明明在画面里，是标注漏标了常驻 HUD。**
+
+修正后（absent 剔除模板命中帧，漏标单独计数）：
+
+| id | 最小正 | 中位正 | 假阳地板 | 漏标 | 判读 |
+|---|---|---|---|---|---|
+| level_minus | 0.933 | 0.976 | 0.000 | 0 | 干净 |
+| search_btn | 0.921 | 0.981 | 0.000 | 0 | 干净 |
+| war_title | 0.935 | 0.952 | 0.000 | 0 | 干净 |
+| join_btn | 0.922 | 0.948 | 0.000 | 0 | 干净 |
+| march_btn | 0.897 | 0.964 | 0.000 | 0 | 干净 |
+| troop_infantry/cavalry/archer/siege | 0.853-0.960 | 0.907-0.969 | 0.000 | 0 | 干净 |
+| search_icon | 0.649 | 0.868 | **0.000** | 2 | 干净（首版误判） |
+| search_back | 0.338 | 0.963 | 0.000 | 1 | 弱，但有模板腿兜 |
+| **alliance_btn** | **0.000** | **0.000** | **0.480** | 3 | 漏检 + 真误报 |
+| **queue_march_icon** | 0.876 | 0.876 | **0.689** | 0 | 间隙仅 0.19 |
+| preset_1..6 | 0.000 | 0.45-0.93 | — | 0 | 完全漏检 |
+
+**全局统计：46/50 个 id 的假阳性地板 = 0.000。** 15 个类 YOLO 完全漏检（正样本帧上不出框）
+——**无害**，YOLO 不触发就落到模板，行为与改前一致。
+
+### 改动
+
+1. `core/template_registry.py`
+   - `TemplateSpec` 加 `yolo_threshold: float | None = None`；`load()` 读 manifest 的 `yolo_threshold`。
+   - 新增模块常量 `DEFAULT_YOLO_THRESHOLD = 0.5`（附「换模型要重标」说明）。
+   - `build_recognizers`：YOLO 腿用 `yolo_threshold`（不再用 `spec.threshold`）；
+     `template_match` 链装配成 **`[YOLO, 模板]`**；`fill_*` 保持 `[模板, OCR]`；
+     无 YOLO 类的 id 保持纯 `TemplateMatch`。
+2. `templates/manifest.yaml`：`preset_1..6` / `alliance_btn` 写 `yolo_threshold: 1.01`（关腿）、
+   `queue_march_icon` 写 `0.85`。8 个条目带覆盖，其余吃全局默认。
+3. `tools/calibrate_yolo_threshold.py`：定标脚本（从临时脚本提升——阈值常量跟着模型走，
+   换权重必须重标）。
+4. 测试：`test_yolo_fallback_respects_threshold` **重写**为
+   `test_yolo_threshold_decoupled_from_template`——它原来断言的「YOLO 0.6 < 模板阈值 0.9 → 不命中」
+   正是本次要拆掉的耦合。新增顺序锚定 `test_yolo_wins_over_a_matching_template`、
+   覆盖关腿 `test_yolo_threshold_override_can_disable_the_leg`、
+   fill_ 仍模板先行 `test_fill_leg_stays_template_first`。
+
+### 效果与遗留
+
+失败帧 `failure_mumu0_char_zhaizi_20261004_095713` 现在 `视图=地图 命中=('search_icon',)`：
+YOLO 0.845 命中，框心 (83,810) 与模板 (86,811) 差 3px（8px 抖动内）。p0/p1 也照旧命中
+（改由 YOLO 腿给出）。
+
+- **实机复跑已过（10-04 11:52 起，两号各 3 轮）**：见下节。
+- **`search_back` 的 0.338/0.379 两个弱正样本**说明 YOLO 在这个类上不稳；有模板腿兜着，
+  但若模板也掉分，这里会先暴露。
+- **13 个类 val 无正样本**（`red_rally`/`swap_btn`/`settings_btn`/`tab_fortress`/`replace_popup`/
+  `click_to_enter`/`switch_confirm_yes`/`char_avatar_*`/`char_mgmt_title`/`profile_title`/
+  `toast_no_fortress`/`queue_battle_icon`）：顺序翻转对它们是**未验证**的，已观测到的
+  假阳性地板均为 0.000。
+- **ViewProbe 的判定跟着变了**（它复用同一批链）：`search_icon`/`alliance_btn` 是 MAP 锚点，
+  YOLO 更容易命中 → MAP 判定更灵敏（今天那个「归一化失败」顺带缓解）。反过来，
+  `map_btn` 若误报会把 CITY 顶到 MAP 前面；实测 `map_btn` 在 0.5 下惰性（正样本最小 0.427），
+  暂不构成问题。
+
+### 实机复跑（2026-10-04 11:52 起，两号各 3 轮）
+
+改完当天下午就拉了真机跑（用户要求）。驱动脱离式启动（`nohup .venv/Scripts/python.exe -X utf8
+_run_goal.py > _driver.log 2>&1 &`），日志落在 `logs/rok_assistant_20261004_115236.log`。
+
+| 指标 | 改前 09:48 那次 | 本次（YOLO 先行） |
+|---|---|---|
+| `归一化失败：卡在[…]` | **18 次** → 连 6 次 step 异常收工 | **0 次** |
+| ERROR 总数 | 多次（全是归一化） | **1** |
+| 完成轮数 | 0（mumu0 没跑完一轮就停） | mumu1 3 轮 / mumu0 3 轮 |
+
+轮次时间线：mumu1（`阑珊填1`，member）1@11:56:26 → 2@12:04:12 → 3@12:12:08；
+mumu0（`阑珊寨子号`，leader）1@12:01:03 → 2@12:08:29 → 3@12:16:36。全链路
+`NORMALIZE → SEARCH_FORTRESS → SELECT_RALLY_TIME → FORM_TROOP → LAUNCH` 与 member 的
+`OPEN_WAR → FIND_JOIN → CLICK_JOIN → …` 都跑通，**没有一次 `卡在[`**。
+
+改动要解决的正是 `归一化失败`（模板 `search_icon` 0.879 < 0.9 → 视图判 unknown）。改前那次的
+18 次失败与本次的 0 次，就是这个改动的直接产出。
+
+#### 唯一一条 ERROR：预设槽 1 高亮未确认（既有问题，非本次引入）
+
+12:10:19 mumu0 抛 `预设槽 1 高亮未确认（3 轮），拒绝派错兵，集结未发起`，runner 记
+「出现异常，已截图记录，退避后自动重试」，25s 后 12:10:42 走 `预设槽 1 已确认（几何补点，第 1 轮）`
+自愈，该轮最终完成。
+
+**判定它是既有问题，靠两条证据，不是靠感觉：**
+
+1. **历史日志里有原样复现**。`logs/rok_assistant_20261003_152733.log` 与
+   `…_151151.log`（10-03 两次运行，在任何改动之前）都有同样的
+   `预设槽 1 高亮未确认（3 轮），拒绝派错兵，集结未发起`，且前面同样是 3 次
+   `模板点击后未确认，按实测几何补点`。同一条代码路径、同一个 RuntimeError 串。
+2. **代码路径上这次改动够不着它**。`_select_preset` 里点击位置来自 `self._find(f"preset_{n}")`，
+   而 `preset_n` 的 YOLO 腿被 `yolo_threshold: 1.01` 关掉，`[yolo@1.01, 模板@0.97]` 等价于
+   改前的纯模板行为（`_calibrate_preset_column` 拿到的 `hit` 也是同一张模板给的）；确认判据是
+   `selected_preset_{n}`，走**像素判据**（`recognizers/pixel_stat.py`），根本不经过识别链。
+
+**顺带纠正一个差点用错的对照**：我一度想拿 `_driver_run1_20261004.log` 当基线，`grep` 返回 0
+就以为「改前没这症状」。实际那文件是轮转时创建的 **0 字节空文件**——0 是「文件空」不是
+「症状不存在」。改前真正的基线在 `logs/` 下按时间戳命名，不在根目录的 `_driver*.log`。
+
+## 2026-10-04 · 纯车头补挂集结前置门槛（bug：主将在城外就开集结）
+
+用户报的原文：「目前在集结开始之前没有检测是否有行军队列。导致集结武将在城外未回归时
+就开始集结，选不中武将。请在集结开始之前检查是否有在外的行军或返回或集结中的队列」。
+
+### 根因（不是「门槛判据不对」，是「门槛没接在这条路上」）
+
+`QueueGate` + 队列判读这套东西 10-01 就做完了，判据本身没问题——问题是它只挂在
+`EitherStateMachine.step()` 里。而 `factory.create_state_machine` 对 `role == leader`
+返回的是**裸** `LeaderStateMachine`：
+
+```python
+if character.role == RoleEnum.LEADER:
+    return LeaderStateMachine(...)          # 没有 gate
+```
+
+当前 `config.yaml` 里 `char_zhaizi` 正是纯 `leader`，于是它每轮开头**一次都没查过队列**，
+上一轮集结部队还在行军/返程/集结中就直接开下一轮。武将不在城里 → 「创建部队」表单载不出
+预设 → 卡在 `预设槽 N 高亮未确认`。这与 10-04 实机复跑里那条唯一 ERROR 是同一个症状家族。
+
+判据实现本来就在错的地方：`EitherStateMachine._queue_verdict` 整段只用 `self._leader._rec` /
+`_find` / `_handle` / `_refill_ap` ——它从头到尾讲的就是车头自己的事，只是因为历史原因长在
+either 上。纯车头要它，就得先把它挪到 `LeaderStateMachine`。
+
+### 改动
+
+| 文件 | 改动 |
+|---|---|
+| `workers/leader_sm.py` | `queue_verdict()` 从 either 搬入（方法体逐行等价，`self._leader.X` → `self.X`）；`__init__` 收 `queue_gate=None`；新增 `step()` 覆写，在 `IDLE`/`NORMALIZE` 入口观测门槛，`WAIT` 就原地返回；`_gate_log()` 30s 节流 |
+| `workers/either_sm.py` | `_queue_verdict` 留一层薄壳 `return self._leader.queue_verdict()`（保住既有测试对 either 实例的 `monkeypatch.setattr(sm, "_queue_verdict", …)`）；给自己的子车头显式 `queue_gate=None` |
+| `workers/factory.py` | `role == LEADER` 且 `ledger is not None` 时构造 `QueueGate(ledger, character.id)` 注入 |
+| `tests/unit/workers/test_leader_sm_gate.py` | 新增 7 条 |
+
+两个设计点值得记住：
+
+1. **either 刻意不给子车头传门**。either 自己那面门已经在 `step()` 里观测同一份判读，再给
+   子车头一面，`QueueGate` 的内部投票缓冲和 `_unknown_since` 计时器会被同一批帧喂两遍，
+   采信节奏翻倍（3 帧变 1.5 帧），`unsettled_after` 也跟着错。
+2. **门槛放行时补写账本回城**。纯 leader 原本只有 `_launch` 里的 `mark_troops_out`，
+   **没有对应的回城写入**（either 那边是在 `WAIT_RETURN` 判空时写的，纯 leader 不走那条路）。
+   不补这一笔，账本会永远停在「在外」——而门槛的 unknown 分支正是读账本的，图标一旦不可辨
+   就会 fail-closed 干等 `unknown_grace`（900s）。那等于把「开错车」换成「卡 15 分钟」，
+   修了个寂寞。
+
+### 写入口径：只在 `verdict == "none"`，`gather` 不写
+
+一开始我写的是 `verdict in ("none", "gather")` 都写，理由是「仅采集队列在外 = 战斗部队已回」。
+改成只写 `"none"`，因为两处硬约束：
+
+- `ActionLedger.mark_troops_home` 的 docstring 自己写着口径是**「派遣队列判空」**，而
+  `gather` 恰恰是队列**非空**；账本的立身之本就是「只记已确认的事实」。
+- `test_either_sm_gate.py::test_wait_return_gather_does_not_mark_home` 已经把这个口径钉死在
+  either 侧（理由：写回城会让下一轮门槛误判）。同一面旗帜、同一个问题，两处给出不同答案
+  是纯负债。
+
+代价：采集队列在外的轮次账本仍停在「在外」，后续遇 unknown 会多等一段。**方向安全**——
+账本只会产出 WAIT，永远不会错误放行。这个取舍与 PROGRESS「计划 A 已知缺口」里那条是同一个
+（纯 leader 这一侧已随本次关闭，缺口只剩 either 的纯填兵轮次）。
+
+### 测试
+
+新增 7 条，钉住：拦得住（`battle` → 留在 IDLE 且 `gate._settled == "battle"`）、
+放行时补写回城（`none` → `troops_out is False`）、`gather` 放行但**不**写回城、
+未采信（`unknown`）时不写、未注入门槛时行为逐字节不变、factory 真的接了线、
+没账本时 factory 不接门。
+
+### 实机验证（2026-10-04 13:46 起，驱动重启）
+
+改完就重启驱动跑真机（先杀干净上一轮遗留的两个 `_run_goal.py` PID，再
+`nohup .venv/Scripts/python.exe -X utf8 _run_goal.py > _driver.log 2>&1 &`）。
+`config.yaml` 里 `char_zhaizi` 正是纯 leader，改动直接落在它身上。
+
+**拦住的那一轮（第 3 轮，实锤）**：
+
+```
+14:03:03  [集结门槛] 队列判据尚未采信（投票 1/3 帧）
+14:03:36  [集结门槛] 有行军/驻扎队列在城外，等待回城后再搜索
+14:04:09  [集结门槛] 有行军/驻扎队列在城外，等待回城后再搜索
+14:04:36  mumu0 -> SEARCH_FORTRESS        ← 队列清空后放行
+```
+
+第 2 轮 13:56:55 发起、约 14:00:55 发车（绿脚印）、14:01:50 到寨子开打
+（红交叉刀剑），第 2 轮在 14:02:29 结束时**部队正在寨子战斗中** —— 这正是用户报的
+场景。门槛把 mumu0 摁在 `IDLE` **93 秒**（14:03:03 → 14:04:36），一拍没搜，
+队列判空后才放行。改前这里会直接开搜 → 武将不在城里 → `预设槽 N 高亮未确认`。
+
+**独立佐证**：第 2 轮开头（13:55:27）门槛是**放行**的。这不是漏判——43 秒后
+13:56:17 打出「预设槽 1 已确认（模板点击，第 1 轮）」，说明那一刻主将确实在城里。
+判据与实际状态一致。
+
+**判据本身用探针复核过**（`_probe_queue.py`，只读抓帧打印各模板分数，不点击）：
+部队在寨子战斗时 `queue_battle_icon` 命中、`queue_badge` 0.9+；队列清空后
+`queue_badge` 掉到 0.19、各图标 0.25~0.42、判读 `none`。分数分布与判读方向一致。
+
+### 顺带修掉一处误导性日志（验证过程自己踩的）
+
+`_gate_log` 的 30s 节流不分内容，于是**每轮第一拍固定的「投票 1/3 帧」会把窗口吃掉**，
+紧接着真正采信的那条「有行军/驻扎队列在城外」被压掉。日志读起来像「门槛放行了」——
+我在看 13:55:27 那一轮时就是这么被误导的，一度以为修了没用。改成**换了理由立刻打、
+同一条理由仍节流**（leader 与 either 两处同口径），并加测试钉住。
+
+#### 遗留
+
+- 驱动在 12:18 仍在跑（mumu0 第 4 轮），未跑到 10 轮自然停止点；上面的结论基于前 3 轮。
+- `预设槽 1 高亮未确认` 这个既有问题**没修**：它自愈了，且根因是像素判据取样位置，属于
+  10-03 那条线的遗留，与 YOLO 先行无关。要修得单开。
+
+## 2026-10-04 · 城寨等级改多选 `target_levels`（搜不到就换下一级）
+
+用户原话：「多次搜索城寨搜索不到时，可能是因为对应等级的寨子在附近已经被消灭殆尽。
+此时加入失败次数检查，多次搜不到时，可降低一级进行搜索并集结」。随后经三轮问答收口：
+**复数字段 + 1–10 复选框**（用户答「使用复数字段，使用1-10复选框」）、**每级 5 次**
+（「改成 5 次」）、**跑完一圈就放弃**、**下限即列表最低级**（不另设 `min_level`）、
+以及最后一条覆盖：**「希望列表顺序完全自由（比如想 6→4→5）」**。
+
+> 我一开始提的校验是「必须降序」（理由是降级语义自然降序），被用户明确否掉。
+> 记住这条：**列表顺序是用户的表达，不是可推导的约束**——校验只该管
+> 「非空 / ≤3 / 1..10 / 不重复」。
+
+### 改动
+
+| 层 | 文件 | 改了什么 |
+|---|---|---|
+| 配置 | `infra/config.py` | `target_level: int` → `target_levels: list[int]`；新增 `MAX_TARGET_LEVELS = 3` 与 `_check_levels` 校验（非空/≤3/1..10/不重复，**不管顺序**） |
+| 配置 | `infra/config.py` | `find_level_collisions`：判据由「`a.target_level == b.target_level`」改成 **`set(a.target_levels) & set(b.target_levels)` 非空**，文案改成报出真正重叠的那几级 |
+| 状态机 | `workers/leader_sm.py` | `_MAX_NO_RESULT` 3 → **5**；构造参数改名 `target_levels`，存 `self._target_levels`；新增 `_current_level(ctx)`（= `_target_levels[ctx["level_index"]]`，**不做越界钳制**）；`_select_level` 用当前下标；新增 `_switch_level` 与降级边；`_launch` 发布当前等级；`_give_up` 日志报「已试等级」 |
+| 状态机 | `workers/either_sm.py` / `workers/factory.py` | 构造参数与传参改名，两个角色都传 `character.target_levels` |
+| GUI | `gui/config_dialog.py` | `QSpinBox` → 1–10 复选框（2 行 × 5）+ 「搜索顺序：…」标签；勾选顺序即搜索顺序；选满 3 个后未选中的框置灰；表格列显示 `8→7→6` |
+| 配置 | `config.yaml` / `config.example.yaml` | 两个角色迁成列表 |
+
+### 状态机细节（值得记住的两点）
+
+**降级边的注册顺序。** `StateMachine.step` 按注册顺序取**第一条** from_state 匹配且 guard
+通过的转移，所以 `CHECK_RESULT` 的三条出口必须按「重试 → 降级 → 放弃」排：
+
+```python
+self.add_transition("CHECK_RESULT", "CONFIRM_SEARCH", self._retry_search,
+                    guard=lambda ctx: ... no_result_count < _MAX_NO_RESULT)
+self.add_transition("CHECK_RESULT", "CONFIRM_SEARCH", self._switch_level,
+                    guard=lambda ctx: ... no_result_count >= _MAX_NO_RESULT
+                    and level_index + 1 < len(self._target_levels))
+self.add_transition("CHECK_RESULT", "END", self._give_up,
+                    guard=lambda ctx: ctx.get("search_outcome") == "no_result")
+```
+
+最后那条 `_give_up` 的 guard 只判 `no_result`：**「还有下一个等级」这个条件由降级边的
+guard 表达**，绕完一圈（下标越界）自然落到这里。两条 guard 用 `>=` / `<` 互补，互斥。
+
+**计数按级清零，不是整轮额度。** `_switch_level` 里 `no_result_count = 0`。因此
+`_give_up` 的日志**不能**报累计次数（会读成「只搜了 5 次就放弃」），改报
+`self._target_levels[:level_index + 1]`（已试过的等级）。
+
+**`_current_level` 不做钳制。** 下标越界由转移 guard 挡在 `_switch_level` 之前；若在这里
+`min(idx, len-1)` 静默钳制，「下标算错」会被伪装成「一直在搜最后一级」——最难查的那类问题。
+
+### GUI 的顺序表达
+
+复选框天然表达不了顺序（`6→4→5` 和 `4→5→6` 勾出来一模一样）。做法：
+
+- `self._level_order` 保存**勾选先后**，`_refresh_level_order()` 把它写成
+  「搜索顺序：6 → 4 → 5」显示在下方；
+- **信号在 `setChecked` 之后再接**——否则初始化回填会按回调顺序重排 `_level_order`，
+  配置里存的顺序就丢了（这条有专门测试 `test_level_boxes_initialized_from_config_in_order`）；
+- 想调顺序 = 取消再重勾（重勾排到末位，`test_level_recheck_moves_to_end` 钉住）；
+- 超上限时**撤销本次勾选**而不是弹窗（`setChecked(False)` 递归回 `_on_level_toggle`，
+  但那时 level 已不在列表里，等于无操作）。
+
+### 测试（+21 条，533 → 554）
+
+- `tests/unit/workers/test_leader_sm.py` +5：`test_max_no_result_is_five`、
+  `test_switch_to_next_level_resets_counter`、`test_full_cycle_over_three_levels_gives_up`
+  （15 次 CHECK_RESULT）、`test_switch_order_follows_config_not_sorted`（6→4→5 照走，
+  用 `_LEVEL_CACHE` 观察每步实际设的等级）、`test_found_after_switch_launches_that_level`。
+  **注意**：造「搜不到」不能用 recognize 调用次数判定——每次 `CHECK_RESULT` 失败时
+  `_wait_for` 按 interval 会重试 9 次（timeout 8.0 / interval 1.0），改成传
+  `found_when(ctx)` 判据回调。
+- `tests/unit/infra/test_config_models.py` +6、`tests/unit/infra/test_level_collision.py` +2、
+  `tests/integration/test_config_dialog.py` +7、`tests/unit/workers/test_worker_factory.py` +1
+  （工厂按序原样透传列表）。
+- `test_no_result_toast_retries_then_ends` 的期望由 3 次改 5 次（单元素列表 = 旧行为）。
+- 全套 `pytest tests/ -q` → **554 passed / 278.20s**。
+
+### 迁移时容易漏的
+
+`target_level` 是**位置参数**（第 3 个），所以除了关键字调用，`test_state_machine.py` 里
+4 处 `LeaderStateMachine(handle, {"x": rec}, 7, 1, ["cavalry"])` 这种**位置传参**也会炸，
+grep `target_level=` 抓不到——改字段名时两种调用都要扫。
+
+---
+
+## 2026-10-04 实机验证：10 轮完整闭环（target_levels 降级 + 计划 A 门槛）
+
+`_run_goal.py`（mumu0 leader 阑珊寨子号 / mumu1 member 阑珊填1）17:54:11 起跑，
+19:49:56 双方 `10/10 轮完成`，驱动 `全部 worker 已收工` 自行退出。全程约 116 分钟，
+日志 `_driver.log`（旧日志备份为 `_driver_prev_*.log`）。
+
+### 两项待验功能均通过
+
+- **`target_levels` 降级路径**：实机触发 2 次 —— 19:25:30、19:41:32
+  `[车头] 6 级连续 5 次搜不到，改搜 5 级（列表第 2/3 个）`，随后设 5 级并
+  `集结已发起：5 级城寨`。6 级城寨被清光后按列表顺序降级、计数按级清零、每次
+  全量重同步等级，行为与单测一致。代价：第 9、10 轮因此明显变慢（每级 5 次无结果 ×
+  每次「降到底再升到目标级」约 1.5 分钟）。
+- **计划 A 判据层**：门槛全程 **0 次** 900s 宽限放行（`未知队列图标已持续…` 0 条），
+  改为 **17 次** `队列图标不可辨，账本显示部队在外 Xs，继续等待`（source=ledger，决策 WAIT）。
+  即 `queue_flag_icon` 读不可辨（unknown）时，**账本覆盖了旧的 grace 放行**——正是 10-04
+  阻塞条目想要的修复：把「安全拦截」从「有害放行」改回来。
+  `放行（判据来源 ledger）` 0 次：账本始终判「在外」，不需要放行。
+  两次典型区间：18:37:47–18:38:01（在外 382→392s）、18:48:05–18:48:30（402→427s）、
+  19:00:19 前（401→435s），随后图标重新可辨转 `battle`。
+
+### 实机抖动（均已退避自恢复，未致停机）
+
+1. **车头 `_launch` 行动力临界失败 ×3**（18:23:35 / 19:04:26 / 19:43:42）：
+   `行动力补充后 march_btn 点击失败，集结未发起`。链路：`leader_sm.py:588` 补体力后
+   `_click_retry("march_btn")` 失败 → 抛错 → runner 退避重试 → `_launch` 重跑，此时
+   `_find("ap_refill")` 仍命中 → 再 `_refill_ap()` → 成功发起（三次均在 ~30–45s 内恢复）。
+   **成因**：`_refill_ap()` 返回 True 只代表「弹窗已关」，不代表 AP 已够；行军点击再次
+   触发 AP 不足弹窗时，`_launch` 直接抛错而**不做二次补体力**。
+   失败截图探针（`recordings/failure_mumu0_char_zhaizi_20261004_182335.png`）确认
+   视图=弹窗遮罩、`ap_refill` 命中。→ 修法见 PROGRESS 已知问题 8。
+2. **成员 `SWITCH_TO_SELF` 归一化失败 ×1**（19:28:15）：
+   `归一化失败：卡在[未知]视图（联盟旗帜与放大镜均不可见）`；退避重试后恢复。
+   全程 `卡在[` 的 step 失败仅此 1 条。
+3. **成员第 4 轮填兵失败 ×1**：`加入未生效，重开战争列表重试` → `联盟旗帜不可见`
+   连试 11 次耗尽 → `第 4 轮失败结束：no_rally_found（连续失败 1/3）`。
+   该轮车头集结无人填兵但仍完成本轮；后续轮次正常，未累计到 3 连败。
+
+### 其它观测
+
+- 预设列自校准 + `预设槽 1 已确认` **10/10 轮**成功，**0 次**「高亮未确认」（cy=472 稳定）。
+- `面板等级已是 6 级，跳过调整` 8 次（等级缓存差量生效）；其余轮走全量重同步。
+- 集结已发起 / 填兵出发各 10 次；放弃本轮 0 次。
+- 成员轮编号含 1 次失败（第 4 轮），故 `轮完成` 日志 19 条 = 车头 10 + 成员 9。
+
+## 2026-10-04 修：车头 `_launch` 行动力临界（补一次不够就再补再点）
+
+上一节实机 3 次 `行动力补充后 march_btn 点击失败，集结未发起`（均靠 runner 退避自恢复）
+的根因修复。**用户裁定：只修这一项，§3.3/§3.4/§3.5 三项不再单独验收**（已从
+`ACCEPTANCE.md` 删除，编号保留跳跃）。
+
+### 根因
+
+`_refill_ap()` 返回 True 只表示**弹窗已关**，不表示 **AP 已够**。旧 `_launch` 的顺序是
+「弹窗在 → 补 → 点行军 → 又弹 → 再补 → 再点」，**只有两轮**；两轮之后仍点不出去就直接
+`raise`。实机上 AP 处在临界（补的 50/100 仍不够一次集结消耗）时正好落在这条路径上，
+一轮 6 分钟全靠 runner 退避把 `_launch` 重跑一遍才恢复。
+
+### 修法
+
+`leader_sm.py`：新增 `_AP_REFILL_MAX = 3`，把 `_launch` 里「补体力 → 点行军」改成有界循环：
+
+- 每次迭代先看 `ap_refill`（入口残留或上轮补完仍不够）→ 补；
+- `_click_retry("march_btn", attempts=3)`；
+- `_wait_for("ap_refill", timeout=3.0)` 仍在 → 记 warning、进下一轮；
+- 循环跑满仍复现 → `for...else` 抛
+  `行动力补充 3 次后 march_btn 仍点不出去（疑似体力耗尽/道具用尽）`，放弃本轮，
+  交 runner 的连续失败计数停机（不再无限补）。
+
+### 测试
+
+`tests/unit/workers/test_leader_sm.py` 新增：
+
+- `test_launch_refills_ap_repeatedly_until_march_goes_out`：假弹窗「前两次行军点击复现、
+  第三次才发出去」→ 断言行军点 3 次、每日领取点 2 次、`rally_launched` 正常发布。
+- `test_launch_gives_up_after_ap_refill_cap`：弹窗永远复现 → 断言按上限抛错、行军点
+  `_AP_REFILL_MAX` 次、补体力 `_AP_REFILL_MAX - 1` 次（第 1 轮入口无残留弹窗，跳过补充）。
+
+辅助函数 `_ap_popup_by_march_click(handle, res, reappear_until)` 按点击序列造弹窗状态；
+`_unique_march_point(sm)` 把 `march_btn` 点击坐标从默认 `(50,50)` 挪到 `(77,88)` ——
+`_make_sm` 里所有 mock 的 bbox 中心都是 `(50,50)`，不挪就没法只数行军点击
+（首版测试就栽在这：断言 `count((50,50)) == 3`，实际 26）。
+
+### 待办
+
+**实机确认未做**——要真跑到行动力耗尽才走得到这条路径。等一次自然耗尽或手动压体力。
+
+---
+
+## 2026-10-05 · ONNX 推理后端 + 绿色 zip 发行包
+
+用户需求：**「打包目标是发给别人用的安装包。训练用的数据不要放进打包目录，
+打包时使用 ONNX」**。三项决策（AskUserQuestion）：绿色 zip 包（非安装向导）、
+ONNX CPU 推理、首启自动探测 MuMu 路径。
+
+开工前仓库里**没有任何打包设施**：无 `.spec`、无 build 脚本，`.gitignore` 连
+`dist/` 都没忽略，`docs/` 里也没写过。三件事要一起解决——体积、路径、首启。
+
+### 1. 为什么是 ONNX：体积
+
+`.venv` 5.4 GB，大头是 `torch 2.11.0+cu128`（ultralytics 的传递依赖），
+而生产推理只跑一个 6.3 MB 的 yolov8n。把 torch 打进发行包不可接受。
+
+关键判断：**只替换 `_model()` 返回的对象**，不动调用方。
+`YoloClassAdapter.recognize`（`yolo_detect.py`）消费结果的方式是
+`result.boxes` 里每个 box 的 `.conf[0]` / `.cls[0]` / `.xyxy[0]`，
+`SharedYoloDetector.detect` 调 `self._model()(screenshot, device=..., verbose=False)`。
+所以只要新后端满足「可调用 + `.names` 属性」这个鸭子类型契约：
+
+- `YoloClassAdapter`、`template_registry.build_recognizers` **一行都不用改**
+- `tests/unit/core/test_yolo_detect.py` 里 `shared._yolo = fake` 的注入缝**继续有效**，
+  现有测试作为回归锚
+- 类名与文件名保持不变（模型仍是 YOLO，换的只是执行后端），manifest 的
+  `yolo_threshold` 语义不变
+
+新增 `core/recognizers/onnx_detect.py`（letterbox / postprocess / NMS / `OnnxYoloModel`）。
+预处理与后处理必须与 ultralytics **逐位一致**（conf 0.25 / iou 0.7 /
+`agnostic_nms=False`），否则 `tools/calibrate_yolo_threshold.py` 标定出的阈值全部失效。
+
+**踩到的坑**：`cv2.copyMakeBorder` 的颜色参数给标量只会填第一个通道 →
+填充变成 `(114,0,0)` 蓝色而不是中性灰。由单测发现，改成接受 int 或元组并归一化。
+
+**另一个坑**：parity 脚本首版按置信度排序后 `zip()` 配对两个后端的框，小的置信度
+重排序就会拿不同对象对比，报出 661.7 px 的假偏差。改成按 IoU ≥ 0.5 的贪心匹配后：
+匹配 61 个、最小 IoU 0.924、最大中心偏差 2.3 px。
+
+**排除 ONNX 回归**：校准输出里有很多「漏检」行，写了个临时脚本逐类比较两个后端的
+最大置信度 —— **`.pt` 有而 `.onnx` 完全没有的类：0**；最差回归 −0.071
+（`queue_badge` 0.909→0.838），最大改进 +0.259（`city_btn` 0.000→0.259）。
+结论：漏检是模型既有局限，不是 ONNX 造成的。
+
+### 2. 路径：计划里写错的一处
+
+原计划是 frozen 时 `os.chdir(exe目录)` 一处收口。**实测行不通**：PyInstaller 6 的
+onedir 模式把 `datas` 放在 `<exe目录>/_internal/`（即 `sys._MEIPASS`），
+chdir 到 exe 目录照样找不到 `templates/`。已向用户报告这处偏差。
+
+改成 `infra/app_paths.py` 显式区分两种根目录：
+
+- `resource_dir()` —— 只读资源，冻结时 = `_internal`，源码运行时 = 仓库根
+- `user_dir()` —— 可写数据（`config.yaml` / `logs/` / `recordings/`），= exe 同级
+
+穿透点：`main_window.main()`（`ensure_user_files()` + `setup_logging(user_dir()/"logs")`）、
+`controller.py`（默认 config 路径）、`runtime.py`（`resolve_asset(template_dir)`、
+`resolve_asset(yolo_model)`、`screenshot_dir=user_dir()/"recordings"`）。
+
+**非 ASCII 路径**：Windows 上 `cv2.imread` 遇到中文/日文路径会**静默返回 None**。
+用户把包解压到 `D:\游戏\rok-assistant` 时 53 张模板会集体加载失败。加
+`template_registry.imread_unicode()`（`np.fromfile` + `cv2.imdecode`），
+并用单测钉住「`cv2.imread` → None / `imread_unicode` → (8,8,3)」的对比。
+
+**帧缓存 `id()` 复用**：`SharedYoloDetector` 的缓存键是 `id(frame)`。ultralytics 的
+`Results` 会间接引用原图，所以原来不用自己持引用；ONNX 后端的 `Detections` 只存
+numpy 框，帧一旦被回收 `id()` 就可能被复用 → 命中别的帧的缓存。加了
+`self._cache_img` 强引用。（`ocr_text.py` 的 `RapidOcrEngine` 有同样的不变量。）
+
+### 3. 首启：自动生成配置
+
+`config.example.yaml` 原本含用户真实角色名和 MuMu 绝对路径，**不能原样发出去**。
+脱敏重写：路径留空串、角色名换占位符、实例名换「实例0」。
+
+`app_paths.ensure_user_files()`：没有 `config.yaml` 就从 `config.example.yaml` 复制，
+再调 `mumu.detect_mumu_paths()` 回填空字段。**已存在则绝不改动。**
+
+`detect_mumu_paths()`（`infra/mumu.py`）：winreg 查 `SOFTWARE\Netease\MuMuPlayer*`，
+再 glob `%ProgramFiles%` / `%LOCALAPPDATA%` 下的 `Netease/MuMuPlayer*/shell|nx_main`，
+以及各盘 `{C..G}:/模拟器/MuMuPlayer*/nx_main`。adb 优先用 MuMu 自带的
+（版本和它的 adb server 匹配），其次 `shutil.which("adb")`。**不抛异常**——
+探测失败只让用户手填，不该阻断启动。本机实测探到
+`C:\模拟器\MuMuPlayer\nx_main\MuMuManager.exe`。
+
+**回填实现改了两次**：首版走 `yaml.safe_load` → `safe_dump` 往返，实测**把
+`config.example.yaml` 里的注释全抹了**。那份注释是这份配置唯一的说明书
+（`target_levels` 顺序自由、`role` 三种取值、哪些字段互斥），首启就吃掉的话
+新用户只能对着光秃秃的键值猜。改成**逐行正则替换**只动那两行；值用单引号包裹
+（双引号 YAML 里 `\M` 不是合法转义，单引号才是字面量）。
+
+GUI 的「⚙ 配置」页加了**「自动检测 MuMu/adb 路径」**按钮（探测失败时的手动重试），
+复用同一份 `detect_mumu_paths()`。
+
+### 4. 打包
+
+- `packaging/launcher.py` —— 入口脚本。`main_window.py` 用相对导入
+  （`from .character_card import ...`），不能直接当 PyInstaller 入口。
+  顺便挂 `--selftest`。
+- `rok-assistant.spec` —— onedir、`console=False`、`upx=False`
+  （upx 压过的 onnxruntime DLL 有加载失败的报告）。`collect_all`
+  `rapidocr_onnxruntime`（模型在 wheel 数据目录里，且 `RapidOCR` 是函数内懒
+  import，静态分析抓不到）、`onnxruntime`、`pyclipper`、`shapely`。
+- `tools/build_package.py` —— 前置检查 → PyInstaller → **产物断言** → 打 zip。
+- `.gitignore` 加 `dist/`、`build/`、`models/*.onnx`（保留 `models/.gitkeep`）。
+
+**瘦身 55 MB**：cv2 的两个 `opencv_videoio_ffmpeg*.dll` 我们从不读视频，
+是 delay-load，删掉不影响 `import cv2`。**首版过滤没生效**——它们是 PyInstaller
+自带的 `hook-cv2` 在 `Analysis` 里加的，在 spec 顶部过滤 `collect_all` 的返回值
+拦不住，必须在 `Analysis` **之后**过滤 `a.binaries`。383 → 326 MB，zip 175 → 150 MB。
+
+### 5. 验证：`--selftest`
+
+绿色包最坑的失败模式是「开发机上好好的，解压到别人机器上缺东西」——开发机
+`import cv2` 走的是 venv，掩盖打包遗漏。所以加了 `infra/selftest.py`：
+`exe --selftest` 不开窗口，跑一遍**真实识别链路**（读模板 → 装 59 个识别器 →
+拿一帧喂 ONNX → 跑 OCR），逐项 PASS/FAIL，写 `logs/selftest.log`。
+
+冻结包实测 **9/9 通过**：`resource_dir` 正确解析到 `_internal`、cv2 无 ffmpeg DLL
+仍能解码往返、ONNX 单帧 **30ms**（目标 < 100ms）、59 个识别器、OCR 三个模型就位、
+`config.yaml` 自动生成并探到 MuMu 路径。GUI 启动存活 12s、无 `startup_crash.log`。
+
+（`--selftest` 的 stdout 在 GBK 控制台会乱码，加 `sys.stdout.reconfigure`；
+日志文件本身是 UTF-8 不受影响。）
+
+### 6. 依赖清理
+
+`pyproject.toml`：base 加 `onnxruntime>=1.17`；**删** `ultralytics`、`paddleocr`、
+`pywin32`（全仓从未 import，Win32 走 `ctypes.windll`）；新增 `train` extra
+（`ultralytics` / `onnx` / `onnxslim` / `paddleocr`）和 `build` extra（`pyinstaller>=6.16`）。
+
+### 待办
+
+- **干净机测试**（拷到没装 Python 的机器跑 `--selftest`）——本机不算数。
+- **冻结包连真模拟器跑一轮**——`--selftest` 只证明识别链路通，不证明点击链路通。
+
+---
+
+## 2026-10-05（续）连接模拟器：真机验证 + 根因更正
+
+### 1. 计划 A/B/C/D 全部落地
+
+- **A 自动 `adb connect`**（`core/handle_source.py`）：`_ensure_connected()` 首次
+  使用前连一次，`_run_checked()` 失败重连再试一次；`capture`/`click`/`swipe`
+  都走它。`is_alive()` 保持纯查询。
+- **B 扫描模拟器**（`infra/mumu.py:list_instances` + 配置对话框）：按 MuMu 里的
+  **名字**选，不再让人猜「实例号」。打开对话框自动扫一次（`QTimer.singleShot(0, ...)`），
+  结果缓存，所有模拟器页共用。
+- **C 术语**：「实例」→「模拟器」；新增 `gui/labels.py` 收拢分工/兵种/状态中文映射；
+  校验错误路径 `humanize_loc()` 翻中文。
+- **D 文档**：新增 `docs/配置说明.md`（面向非程序员，随绿色包分发），
+  `config.example.yaml` 补注释，`README-用户.txt` 同步。
+
+### 2. 真机验证（无头，`QT_QPA_PLATFORM=offscreen`）
+
+先 `adb kill-server` 抹掉手动连接的前提，`adb devices` 里**没有** `127.0.0.1:16384`
+（只有一个无关的 `emulator-5554`），然后跑配置对话框：
+
+```
+rows: ['● 如愿 · 运行中', '○ 15634025219 · 未启动', '○ 如愿-2 · 未启动']
+picked mumu_index: 0
+status: ● 已连接，截图 1920x1080
+preview px: (320, 180)
+```
+
+即：扫描按名字列对了、「测试连接」在**没有手动 connect** 的前提下直接成功。
+另外两条：选中未启动的「如愿-2」→ 报「模拟器「如愿-2」没有启动，请先在 MuMu 里
+启动它，再点「测试连接」」；手动填 `adb_address` 模式仍能连（方案 A 无回归）。
+
+### 3. 根因更正：**是我自己的环境 bug，不是 MuMuManager 不稳**
+
+上一轮把 `list_instances` 的失败判成「MuMuManager 偶发卡死/崩溃」，还据此加了
+重试和「请稍后重试」文案。**判错了。** 真正原因是
+**`QT_QPA_PLATFORM=offscreen` 被继承给子进程**：`MuMuManager.exe` 自己就是 Qt
+程序，会去加载父进程指定的平台插件，插件不在它目录里就当场崩。
+
+A/B 三连（各 3 次）：
+
+| 父进程环境 | `info -v all` 结果 |
+|---|---|
+| 不设 `QT_QPA_PLATFORM` | rc=0，1259 B |
+| `QT_QPA_PLATFORM=offscreen` | **rc=3221226505**（0xC0000409），0 B |
+| `QT_QPA_PLATFORM=offscreen` 但剥掉再传 | rc=0，1259 B |
+
+**修法**：`infra/mumu.py:child_env()` 剥掉所有 `QT_*`。
+`MumuLocator._subprocess_run`（**「测试连接」走的就是这条**）和模块级
+`_default_run` 都传它；`AdbHandleSource._subprocess_run` 同样处理。
+**重试删掉了**——环境修好后没有任何真实的偶发证据，留着只会掩盖问题。
+
+### 4. 走查又抓到两个真问题
+
+- **自动填的显示名不跟着换选走**：先点「15634025219」再点「如愿」，结果
+  `mumu_index=0`（如愿）而显示名停在「15634025219」，用户认不出自己选的是哪台。
+  修法：`_autofilled_names` 按**实例 id**（不是下标，增删会移位）记住「这个名字是
+  我们自动填的」，换选时只在「空着」或「还是上次自动填的那个」时才改，
+  **用户自己敲的名字绝不覆盖**。`_reload_tree` 顺手清掉已删实例的记录。
+- **实例 id 前缀不一致**：首启模板给 `mumu0`，界面点「＋ 添加模拟器」却生成 `inst0`。
+  统一成 `mumu{n}`。
+
+`docs/配置说明.md` 也据此更正两处事实错误：`MuMuManager.exe` 在
+`nx_main\`（不是 `shell\`，老版本才在 `shell\`）；扫描是**打开配置窗口就自动跑**，
+不用先点按钮。
+
+### 5. 验证结果
+
+- 全量回归：**647 passed**（基线 639）。
+- 打包冒烟：`tools/build_package.py` 产物校验含 `配置说明.md`（326 MB / zip 150 MB）；
+  `dist/rok-assistant/rok-assistant.exe --selftest` **9/9 通过**。
+
+---
+
+## 2026-10-05（三）启动超时：定位 + 更正我自己的超时收紧
+
+### 症状
+
+用户（打包后的 exe）点 Start 报：
+
+```
+启动失败：无法运行 MuMuManager（请检查安装路径）：
+Command '[...MuMuManager.exe', 'info', '-v', '0']' timed out after 6.0 seconds
+```
+
+### 排查（systematic-debugging）
+
+**逐个证伪，都留了数据：**
+
+| 假设 | 结果 |
+|---|---|
+| 无控制台（windowed 进程）让子进程卡住 | ❌ 0.6s 正常 |
+| `_internal` 混进 `PATH` → MuMuManager 加载到我们的 DLL | ❌ 带/不带都是 0.13s |
+| 查未启动的模拟器（`-v 1`/`-v 2`）会卡 | ❌ 0.14~0.16s |
+| 查不存在的编号（`-v 9`）会卡 | ❌ 0.14s，返回 `player index not found` |
+| 冻结环境本身有问题 | ❌ 用 `ShellExecuteW` 模拟双击（无控制台、cwd=exe 目录）→ rc=0 0.67s |
+
+**查出来的真差异**：冻结包跑同一条命令 **0.67~1.11s**，开发机只要
+**0.12~0.23s**（n=30）——**慢 4~6 倍**（冻结进程无控制台、`_internal`
+挂在 PATH 上，起子进程本身就贵）。顺带发现 PyInstaller 会把 `_MEIPASS`
+放进 `PATH`，环境里还有个 `QT_PLUGIN_PATH`（`child_env()` 已剥掉）。
+
+### 我引入的回归
+
+上一轮我把 `MumuLocator._subprocess_run` 的超时**从 10s 收到 6s**，
+理由是「实机正常 124~208ms，给到 6s 已经很宽松」——**那个数字只在开发机的
+venv 里量过**，冻结包慢 4~6 倍，余量远没有我以为的宽。错误信息里的
+「6.0 seconds」正好证明用户跑的是收紧后的版本。
+
+**改回 10s**，并写进注释：**别按开发机耗时定这个值。**
+
+### 顺带修掉的误导文案
+
+`resolve_adb_address` 原来 `except Exception` 一把抓，把 `TimeoutExpired`
+也说成「无法运行 MuMuManager（**请检查安装路径**）」——超时恰恰说明路径是
+对的、程序也起来了。用户按这句话去反复改路径，方向全错。
+现在超时单独 catch，文案是「超过 10 秒没有响应……稍等一会再试」，
+`FileNotFoundError` 才说路径。配置对话框的 `_explain_connect_error` 同步
+加了超时分支。
+
+### 新增诊断（永久保留）
+
+`--selftest` 加了一行 **「MuMu 连接诊断（只诊断，不判定）」**：打印
+`frozen` / `cwd` / `QT_*` / `_MEIPASS` 是否混进 `PATH` / 实际耗时与返回码。
+**故意用 20s 超时**——用正式的 10s 去测只会复现同一个超时，问不出新东西。
+MuMu 没装/没开不算包有问题，所以这项不判定成败。
+
+### 诚实的边界
+
+**没能复现用户那次 >6s 的调用。** 修掉的是「我确实引入的回归」+
+「确实误导人的文案」；用户那次的真实耗时是多少，要靠他跑一次新包的
+`--selftest` 把诊断行发回来才知道。测试：**650 passed**；冻结包 9/9 → 10/10。
+
+---
+
+## 2026-10-05（四）点 Start 后黑窗一闪一闪：根因 + 统一封装
+
+用户报两件事：**（1）点 Start 后一直有黑色弹窗一闪而过、持续很多轮；
+（2）只连上一个模拟器，另一个成员实例报错。** 本记录只讲（1），（2）见文末。
+
+### 根因：无控制台的父进程会给控制台子系统子进程新开窗口
+
+绿色包是 PyInstaller `console=False` 的 GUI 程序，**自身没有控制台**。
+而 `adb.exe` 与 `MuMuManager.exe` 都是**控制台子系统**程序（PE Subsystem=3，
+用 `struct.unpack_from('<H', data, pe + 0x5C)` 读出来的）。父进程没有控制台时，
+Windows 会给每个这样的子进程**分配一个新的、可见的控制台窗口**。
+`adb` **每截一帧、每点一下都要起一次**，于是连成串地闪。
+
+**A/B 验证**（从真正无控制台的父进程里跑，窗口用 `EnumWindows` +
+`GetWindowThreadProcessId` + `GetClassNameW` + `IsWindowVisible` 枚举）：
+
+```
+探针自身控制台 = 0
+裸 subprocess.run           → 类=['PseudoConsoleWindow']  可见窗口数=1
+infra.subproc.run（修法）    → 类=[]                       可见窗口数=0
+```
+
+注意窗口类是 `PseudoConsoleWindow` 而不是 `ConsoleWindowClass`——
+Win11 把控制台路由给 Windows Terminal，第一次按老类名找是找不到的。
+
+### 修法：`infra/subproc.py`，所有 fork 外部程序的地方都走它
+
+新增一个只有 40 行的模块，把两件**只在打包后才暴露**的事一次做对：
+
+1. `env=child_env()` —— 剥掉所有 `QT_*`（已知问题 9 那个坑）。
+   实测冻结后 PyInstaller **自己会设 `QT_PLUGIN_PATH`**，
+   所以这不是防用户，是防我们自己。
+2. `creationflags=CREATE_NO_WINDOW` —— 别给子进程分配控制台窗口。
+
+改到位的调用点：`core/handle_source.py`（热路径）、`infra/mumu.py` 的
+`MumuLocator._subprocess_run` 与 `_default_run`、`infra/selftest.py`。
+`tests/unit/infra/test_subproc.py`（9 条）里有一条
+`test_no_bare_subprocess_calls_left_in_src` 扫描 `src/`，以后谁新写调用点
+忘了带标志会直接红。
+
+**这两个标志为什么必须有单测钉住**：从终端跑源码时父进程有控制台、环境也干净，
+漏掉它们怎么试都是好的；只有打包后才现形。
+
+### `--selftest` 新增「各模拟器连接（只诊断，不判定）」
+
+照 `config.yaml` 逐台 `create_handle_source` + 真截一帧，把每台的结果
+（成功 / 异常全文 / 耗时）写进自检日志。
+
+加它的理由正是用户报的第（2）件事：**如果失败发生在 `create_handle_source`
+阶段，worker 还没起来，运行日志里一个字都没有**，事后完全查不出来。
+现在绿色包自己能回答「哪一台连不上、报什么错」。
+
+### 用户报的第（2）件事：没能复现，也没有证据
+
+查过的东西（都是**否定**结果）：
+
+- 用户 `logs/` 里那次运行（17:14:34–17:16:12）：**两个 worker 都起来了**
+  （mumu1 → 待机 17:14:46，mumu0 → 待机 17:15:05），**没有任何 ERROR 行**。
+- 17:16:07 / 17:16:09 两条 `在 2.0s 内未停止` 警告**前面没有**
+  `运行时启动失败，回滚已创建的 worker`，所以那是用户**点了 Stop**，
+  不是启动回滚。
+- 没有 `recordings/` 目录 → runner 的 `error` 状态**从未触发过**
+  （`_save_failure_screenshot` 一次都没写）。
+- 用户那个 exe 的 md5 与我们的 `dist` 一致，所以他手上已经有 10s 超时修复。
+- 同一台机器、同一份 `config.yaml`：源码模式两台都连得上（1.36s / 2.10s），
+  **冻结后也两台都连得上**（1.24s / 2.07s，`--selftest` 11/11 通过）。
+
+所以**要么是当时的瞬时状态**（比如那台模拟器还没起、或 MuMu 正忙），
+**要么报错发生在界面上而没进日志**。问了用户要报错原文，他答「记不清了」——
+**没拿到原文就不动代码**（`/systematic-debugging`：没有根因不动手）。
+后面按「最可能的情况」修的是**另一个真问题**（失败说不清是哪一台），
+不是这次的根因，见本节末。
+
+### 测试与冻结验证
+
+- `pytest tests/ -q`：**659 passed**。
+- 冻结包 `--selftest`：**11/11 通过**，含新增的「各模拟器连接」一项。
+
+### 追加：按最可能的情况修「另一个成员实例报错」
+
+用户答「记不清了，按最可能的情况先修」，并选择**保持「一台连不上就都不跑」**
+的语义不变。所以不动回滚，只修**「失败时说不清是哪一台」**这个真问题。
+
+最可能的情形：点 Start 时某台模拟器还没起来 → `resolve_adb_address` 抛
+`MumuNotRunningError` → 整个启动回滚 → 界面弹一个泛泛的「启动失败：…」。
+用户配了两台，看到的却是：
+
+```
+启动失败：MuMuManager 输出中未找到 adb 端口（模拟器 1 可能没有启动）:
+{'0': {'index': 0, 'name': '如愿', ... <300 字符 JSON> ...}}
+```
+
+既没说清是哪一台（「模拟器 1」是 MuMu 界面上根本不显示的编号），
+又被一坨 JSON 把重点冲掉。**这段文本完全在日志之外**——worker 还没起来，
+运行日志里一个字都没有（用户的 `logs/` 里那次就是 0 字节），事后无从还原。
+
+两处改动：
+
+1. `RuntimeCoordinator.start()`：逐实例包一层，失败时点名并保留原始原因——
+   `模拟器「阑珊填1」（mumu1，MuMu 编号 1）连不上：<原始原因>`，同时
+   `logger.error` 落一份。测试 `test_start_error_names_the_emulator_that_failed`。
+2. `MumuNotRunningError` 的文案：**原始 JSON 只进日志，不进异常文本**，
+   正文改成「模拟器 N 没有启动（MuMuManager 查不到它的 adb 端口）。
+   请先在 MuMu 里启动它，再点 Start。」保留「adb 端口」这个词——
+   `config_dialog._explain_connect_error` 靠它匹配。测试
+   `test_not_running_message_is_actionable_and_has_no_json_dump`。
+
+**诚实边界**：这是「按最可能的情况」修的，**不是**已确认的根因。
+用户的报错原文还是没拿到（他说记不清了）。如果重装后再撞上，
+`logs/selftest.log` 的「各模拟器连接」那一行 + 运行日志能定位。
+测试：**661 passed**（659 + 2）；冻结包 `--selftest` 11/11。

@@ -11,12 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+# 2026-10-04：锁定城寨重搜 / 集结超时重开 / 关模拟器暂停三项按用户裁定不再要求
+# 单独验收，与 docs/ACCEPTANCE.md §3 同步删除（编号 3.3–3.5 保留跳跃）。
 CHECKS = [
     ("Start 1 emulator + 1 character, run 1 rally", "leader_full_session"),
     ("Add 1 member, verify auto-switch + join", "member_with_switch"),
-    ("Locked fortress -> skip + next", "lock_skip"),
-    ("Rally times out empty -> leader relaunches", "rally_timeout"),
-    ("Close emulator window -> assistant pauses", "window_disappear"),
     ("Invalid config (level=11) -> refused at startup", "config_invalid"),
     ("Wrong char name -> OCR verify fails + retry", "switch_verify_fail"),
     ("Log records all steps + screenshot on failure", "logging"),

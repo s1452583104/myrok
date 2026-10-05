@@ -51,7 +51,7 @@ def test_base_helpers_click_retry_and_wait_for():
     results = [MagicMock(matched=False), MagicMock(matched=False),
                MagicMock(matched=True, bbox=MagicMock(center=lambda: (50, 50)))]
     rec.recognize.side_effect = results + [results[-1]] * 100
-    sm = LeaderStateMachine(handle, {"x": rec}, 7, 1, ["cavalry"])
+    sm = LeaderStateMachine(handle, {"x": rec}, [7], 1, ["cavalry"])
     assert sm._wait_for("x", timeout=10.0, interval=0.0) is True
     assert sm._click_retry("x", attempts=1, interval=0.0) is True
     assert handle.clicks == [(50, 50)]
@@ -64,7 +64,7 @@ def test_wait_for_timeout_bails_false():
     from rok_assistant.workers.leader_sm import LeaderStateMachine
 
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
-    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, 7, 1, ["cavalry"])
+    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, [7], 1, ["cavalry"])
     assert sm._wait_for("x", timeout=0.0, interval=0.0) is False
 
 
@@ -77,7 +77,7 @@ def test_wait_click_reuses_found_result():
     screenshot = np.zeros((100, 100, 3), dtype=np.uint8)
     # always-miss recognizer: _wait_click gives up, no click
     handle = MockHandleSource(screenshot=screenshot)
-    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, 7, 1, ["cavalry"])
+    sm = LeaderStateMachine(handle, {"x": _fake_rec(matched=False)}, [7], 1, ["cavalry"])
     assert sm._wait_click("x", timeout=0.0, interval=0.0) is False
     assert handle.clicks == []
 
@@ -90,6 +90,6 @@ def test_wait_click_reuses_found_result():
         MagicMock(matched=True, bbox=MagicMock(center=lambda: (50, 50))),
     ]
     handle = MockHandleSource(screenshot=screenshot)
-    sm = LeaderStateMachine(handle, {"x": rec}, 7, 1, ["cavalry"])
+    sm = LeaderStateMachine(handle, {"x": rec}, [7], 1, ["cavalry"])
     assert sm._wait_click("x", timeout=10.0, interval=0.0) is True
     assert handle.clicks == [(50, 50)]

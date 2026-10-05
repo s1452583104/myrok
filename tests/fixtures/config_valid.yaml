@@ -11,13 +11,15 @@ instances:
       - id: leader1
         name: "Hero"
         role: leader
-        target_level: 8
+        target_levels:
+        - 8
         march_preset: 1
         march_troop_types: [infantry, archer]
       - id: member1
         name: "M1"
         role: member
-        target_level: 5
+        target_levels:
+        - 5
         march_preset: 2
         march_troop_types: [cavalry]
         fill_target_leaders:

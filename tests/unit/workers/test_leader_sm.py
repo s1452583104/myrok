@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import MagicMock
 from rok_assistant.workers.leader_sm import LeaderStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
+from rok_assistant.core.recognizers.pixel_stat import PRESET_TOP
 
 
 class _FakeTime:
@@ -33,10 +34,10 @@ def _fast_time(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
 
 
-def _mock_rec(matched=True):
+def _mock_rec(matched=True, center=(50, 50)):
     rec = MagicMock()
     rec.recognize.return_value.matched = matched
-    rec.recognize.return_value.bbox = MagicMock(center=lambda: (50, 50))
+    rec.recognize.return_value.bbox = MagicMock(center=lambda: center)
     return rec
 
 
@@ -48,7 +49,7 @@ RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "queue_badge")   # 派遣队列徽标：发射验证用（默认在场）
 
 
-def _make_sm(target_level=7, wait=0.0):
+def _make_sm(target_levels=(7,), wait=0.0):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
     # 环境弹层默认不在场（专项测试再置 True）；其余弹层沿用上方默认
@@ -56,7 +57,7 @@ def _make_sm(target_level=7, wait=0.0):
     recs["menu_expanded"] = _mock_rec(matched=False)   # 底部快捷菜单展开态
     recs["warning_panel"] = _mock_rec(matched=False)   # 「预警」警报面板
     recs["ap_refill"] = _mock_rec(matched=False)       # 行动力补充弹窗
-    sm = LeaderStateMachine(handle, recs, target_level=target_level,
+    sm = LeaderStateMachine(handle, recs, target_levels=list(target_levels),
                             march_preset=1, march_troop_types=["cavalry"],
                             event_bus=None, wait_members_seconds=wait)
     return sm, handle
@@ -86,7 +87,7 @@ def test_happy_path_reaches_end_and_publishes():
 
 
 def test_select_level_resets_with_minus_then_plus():
-    sm, handle = _make_sm(target_level=3)
+    sm, handle = _make_sm(target_levels=[3])
     sm.step()  # IDLE -> NORMALIZE (search_icon visible: no map_btn click)
     sm.step()  # NORMALIZE -> SEARCH_FORTRESS (1 click on search_icon)
     sm.step()  # SEARCH_FORTRESS -> SELECT_LEVEL (tab + minus*12 + plus*2 = 15 clicks)
@@ -99,7 +100,7 @@ def test_select_level_reuses_cached_level():
     # 等级缓存：同一句柄第二轮只点差量；等级已是目标则零点击
     # （2026-09-11 验收反馈：每轮 12 降 + N 升太慢）
     from rok_assistant.workers.leader_sm import _LEVEL_CACHE
-    sm, handle = _make_sm(target_level=7)
+    sm, handle = _make_sm(target_levels=[7])
     for _ in range(3):   # 走到 SELECT_LEVEL：首轮全量 12 降 + 6 升
         sm.step()
         if sm.current == "SELECT_LEVEL":
@@ -108,7 +109,7 @@ def test_select_level_reuses_cached_level():
     assert base == 1 + 1 + 18   # search_icon + tab_fortress + 18 次等级点击
 
     sm2 = LeaderStateMachine(handle, {k: _mock_rec() for k in RECOGNIZER_IDS},
-                             target_level=7, march_preset=1,
+                             target_levels=[7], march_preset=1,
                              march_troop_types=["cavalry"])
     assert _LEVEL_CACHE.get(handle) == 7
     for _ in range(3):
@@ -120,7 +121,7 @@ def test_select_level_reuses_cached_level():
 
     # 目标变化时只点差量：7 → 3 为 4 次 minus
     sm3 = LeaderStateMachine(handle, {k: _mock_rec() for k in RECOGNIZER_IDS},
-                             target_level=3, march_preset=1,
+                             target_levels=[3], march_preset=1,
                              march_troop_types=["cavalry"])
     for _ in range(3):
         sm3.step()
@@ -138,9 +139,10 @@ def test_no_result_toast_retries_then_ends():
         sm.step()
         steps += 1
     assert sm.is_terminal()
-    # cap math: no_result_count 1,2,3 then the retry guard (count < 3) fails
-    # and CHECK_RESULT takes the END edge — exactly 3 entries, never 4
-    assert sm.history.count("CHECK_RESULT") == 3
+    # 单元素列表 = 旧行为：no_result_count 1..5 都走重试，第 5 次之后重试
+    # guard（count < 5）失败、降级 guard 又因没有下一个等级而失败，于是走
+    # END —— 恰好 5 次 CHECK_RESULT，不会更多
+    assert sm.history.count("CHECK_RESULT") == 5
     assert sm._ctx.get("failed") is True  # give_up sets the member_sm convention
     assert sm._ctx.get("fail_reason") == "no_fortress_found"
 
@@ -298,7 +300,7 @@ def test_no_result_invalidates_level_cache_and_resyncs_on_retry():
     # 「跳过调整」永远搜错等级（2026-09-12 实机 mumu0：缓存 7 实际 6，
     # 连续 9 搜全空 -> 断路器停机）。无结果必须清缓存，重试前全量重同步
     from rok_assistant.workers.leader_sm import _LEVEL_CACHE, _LEVEL_CACHE_LOCK
-    sm, handle = _make_sm(target_level=3)
+    sm, handle = _make_sm(target_levels=[3])
     with _LEVEL_CACHE_LOCK:
         _LEVEL_CACHE[handle] = 3   # 假缓存：声称已是目标等级
     recs = sm._rec
@@ -325,7 +327,7 @@ def test_launch_publishes_char_id_for_tracker():
     recs["menu_expanded"] = _mock_rec(matched=False)
     recs["warning_panel"] = _mock_rec(matched=False)
     recs["ap_refill"] = _mock_rec(matched=False)
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["cavalry"], event_bus=bus,
                             wait_members_seconds=0.0, publisher_id="char_jy")
     for _ in range(30):
@@ -409,6 +411,78 @@ def test_launch_closes_leftover_ap_dialog_before_march():
         steps += 1
     assert (1638, 120) in handle.clicks   # 弹窗被 X 关闭
     assert sm.last_rally_event is not None   # 关掉后行军照常发起
+
+
+_MARCH_PT = (77, 88)   # 唯一化行军点击坐标
+
+
+def _unique_march_point(sm):
+    """把 march_btn 的点击坐标从默认 (50,50) 挪开。_make_sm 里所有 mock 的
+    bbox 中心都是 (50,50)（`test_happy_path…` 就在数这个总数），不挪就没法
+    只数行军点击。"""
+    sm._rec["march_btn"].recognize.return_value.bbox = MagicMock(
+        center=lambda: _MARCH_PT)
+
+
+def _ap_popup_by_march_click(handle, res, reappear_until):
+    """造「行军点击弹行动力不足、补体力关掉、再点行军又弹」的假弹窗。
+
+    弹窗可见当且仅当：最近一次「行军(_MARCH_PT) / X(1638,120)」点击是行军，
+    且行军被点次数 <= reappear_until（模拟 AP 还没补够）。领每日/使用
+    这类中间点击不动弹窗状态。"""
+    march = _MARCH_PT
+
+    def _ap(img):
+        n = sum(1 for c in handle.clicks if c == march)
+        last = None
+        for c in handle.clicks:
+            if c in (march, (1638, 120)):
+                last = c
+        res.matched = last == march and n <= reappear_until
+        return res
+
+    return _ap
+
+
+def test_launch_refills_ap_repeatedly_until_march_goes_out():
+    # 2026-10-04 实机 ×3：补一次体力后点行军**又**弹「行动力不足」（AP 仍
+    # 不够），原实现直接抛 `行动力补充后 march_btn 点击失败`，全靠 runner
+    # 退避重试才恢复。现在应自己再补再点，直到行军真正发出去。
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("rally_launched", lambda p: events.append(p))
+    sm, handle = _make_sm()
+    sm._bus = bus
+    _unique_march_point(sm)
+    res = sm._rec["ap_refill"].recognize.return_value
+    # 前两次行军点击都弹窗，第三次才发出去 → 需要补两轮体力
+    sm._rec["ap_refill"].recognize.side_effect = _ap_popup_by_march_click(
+        handle, res, reappear_until=2)
+    steps = 0
+    while not sm.is_terminal() and steps < 60:
+        sm.step()
+        steps += 1
+    assert events != []                                  # 最终发出去了
+    assert handle.clicks.count(_MARCH_PT) == 3           # 行军点了 3 次
+    assert handle.clicks.count((1448, 379)) == 2         # 补了 2 轮体力（每日领取）
+
+
+def test_launch_gives_up_after_ap_refill_cap():
+    # 体力真耗尽（补不动）时不能无限补：补满 _AP_REFILL_MAX 次仍点不出行军
+    # → 放弃本轮（交给 runner 连续失败计数停机），而不是死循环
+    import rok_assistant.workers.leader_sm as leader_sm
+    sm, handle = _make_sm()
+    _unique_march_point(sm)
+    res = sm._rec["ap_refill"].recognize.return_value
+    # 弹窗永远复现：怎么补都不够
+    sm._rec["ap_refill"].recognize.side_effect = _ap_popup_by_march_click(
+        handle, res, reappear_until=99)
+    with pytest.raises(RuntimeError, match="行动力补充 3 次后 march_btn 仍点不出去"):
+        sm._launch({})
+    # 行军点到上限就放弃（不死循环）；第 1 轮入口无残留弹窗 → 少补一次
+    assert handle.clicks.count(_MARCH_PT) == leader_sm._AP_REFILL_MAX
+    assert handle.clicks.count((1448, 379)) == leader_sm._AP_REFILL_MAX - 1
 
 
 # ---- 预设槽选中态确认（2026-09-27）-----------------------------------------
@@ -512,6 +586,77 @@ def test_select_preset_keeps_blind_click_without_verifier(monkeypatch):
     assert handle.clicks == [(50, 50)]
 
 
+# ---- 预设列基准自校准（2026-10-03 实机）-----------------------------------
+# 实机：面板整体上移 42px（槽心 474 -> 432），march_btn/form_title 分毫未动，
+# 写死的基准读不到高亮 -> 每轮 3 次确认全失败 -> worker 连错 6 次收工。
+# 修法：用 preset_N 模板命中的位置反推基准。
+
+def test_calibrate_preset_column_derives_the_base_from_the_template_hit():
+    """命中位置就是槽 N 的槽心 -> 槽 1 基准 = y_hit，槽 2 基准 = y_hit-82。"""
+    sm, _handle = _make_sm()
+    hit = MagicMock()
+    hit.bbox.center.return_value = (1655, 430)
+
+    sm._calibrate_preset_column(hit, 1)
+    assert sm._preset_base == 430
+
+    sm._calibrate_preset_column(hit, 2)
+    assert sm._preset_base == 430 - 82
+
+
+def test_calibrate_preset_column_ignores_hits_outside_the_column():
+    """列外的命中不是预设图标（manifest roi 是 x 1600..1712），别拿它定基准。"""
+    sm, _handle = _make_sm()
+    hit = MagicMock()
+    hit.bbox.center.return_value = (50, 50)
+
+    sm._calibrate_preset_column(hit, 1)
+
+    assert sm._preset_base == PRESET_TOP
+
+
+def test_calibrate_preset_column_pushes_the_base_into_the_judge():
+    """校准必须传到判据上——否则点击按新基准、确认还按旧基准取样。"""
+    sm, _handle = _make_sm()
+    rec = MagicMock()
+    sm._rec["selected_preset_1"] = rec
+    hit = MagicMock()
+    hit.bbox.center.return_value = (1655, 430)
+
+    sm._calibrate_preset_column(hit, 1)
+
+    rec.calibrate.assert_called_once_with(430)
+
+
+def test_select_preset_self_calibrates_on_a_moved_panel():
+    """实机回归：面板上移 42px 时，走真判据也必须确认通过。
+
+    合成帧里槽 1 高亮在 cy=432（写死 474 的旧实现读不到，会抛异常），
+    模板命中也在 432 -> 自校准 -> 确认通过。
+    """
+    from rok_assistant.core.recognizers.pixel_stat import (
+        PRESET_HALF, PresetSlotJudge, build_preset_recognizers, slot_center)
+
+    img = np.full((1080, 1920, 3), 30, np.uint8)
+    cx, cy = slot_center(1, top=432.0)
+    img[int(cy) - PRESET_HALF:int(cy) + PRESET_HALF,
+        int(cx) - PRESET_HALF:int(cx) + PRESET_HALF] = 255
+
+    handle = MockHandleSource(screenshot=img)
+    recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    recs["preset_1"] = _mock_rec(center=(1655, 432))
+    recs.update(build_preset_recognizers(["selected_preset_1"],
+                                         PresetSlotJudge()))
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
+                            march_troop_types=["cavalry"], event_bus=None,
+                            wait_members_seconds=0.0)
+
+    sm._select_preset()
+
+    assert sm._preset_base == 432
+    assert handle.clicks == [(1655, 432)], "确认通过时不该多点"
+
+
 def test_form_troop_verifies_the_preset_before_troop_types(monkeypatch):
     """端到端：_form_troop 里确认失败会抛出，且**不会**继续点兵种。"""
     sm, handle, _rec = _sm_with_verifier("never", monkeypatch)
@@ -523,3 +668,83 @@ def test_form_troop_verifies_the_preset_before_troop_types(monkeypatch):
     # 多出来的就是 troop_* 点击——那意味着确认失败后还继续点兵种了。
     assert len(handle.clicks) == 6, \
         f"确认失败后不该继续点 troop_*（实得 {len(handle.clicks)} 次点击）"
+
+
+# ---- 多等级搜索（2026-10-04）：某级搜不到就换列表里的下一个 ----
+
+def _no_result_sm(levels, found_when=None):
+    """造一个「搜不到」的车头。
+
+    found_when 是判据回调，入参是共享 ctx；返回 True 才算搜到。默认永远
+    搜不到。**不能按 recognize 调用次数判定**：每次 CHECK_RESULT 失败时
+    _wait_for 会按 interval 重试 9 次（timeout 8.0 / interval 1.0），
+    调用次数与「搜了几次」不是一回事。
+    """
+    sm, handle = _make_sm(target_levels=levels)
+
+    def _recognize(_img):
+        m = MagicMock()
+        m.matched = bool(found_when and found_when(sm._ctx))
+        m.bbox = MagicMock(center=lambda: (50, 50))
+        return m
+
+    sm._rec["red_rally"].recognize.side_effect = _recognize
+    return sm, handle
+
+
+def test_max_no_result_is_five():
+    from rok_assistant.workers.leader_sm import _MAX_NO_RESULT
+    assert _MAX_NO_RESULT == 5
+
+
+def test_switch_to_next_level_resets_counter():
+    """第一级搜满 5 次 → 换第二级，且计数清零（5 是每级额度，不是整轮）。"""
+    sm, _handle = _no_result_sm([7, 5])
+    steps = 0
+    while sm.current != "END" and steps < 200:
+        sm.step()
+        steps += 1
+        if sm._ctx.get("level_index") == 1:
+            break
+    assert sm._ctx.get("level_index") == 1
+    assert sm._ctx.get("no_result_count") == 0
+    assert not sm.is_terminal()
+
+
+def test_full_cycle_over_three_levels_gives_up():
+    """三个等级各 5 次 → 共 15 次搜索后放弃本轮（绕完一圈）。"""
+    sm, _handle = _no_result_sm([6, 4, 5])
+    steps = 0
+    while not sm.is_terminal() and steps < 400:
+        sm.step()
+        steps += 1
+    assert sm.is_terminal()
+    assert sm.history.count("CHECK_RESULT") == 15
+    assert sm._ctx.get("fail_reason") == "no_fortress_found"
+
+
+def test_switch_order_follows_config_not_sorted():
+    """顺序完全按配置：6→4→5 这种非降序也必须照走（用户明确要求）。"""
+    from rok_assistant.workers.leader_sm import _LEVEL_CACHE
+    sm, handle = _no_result_sm([6, 4, 5])
+    seen = []
+    steps = 0
+    while not sm.is_terminal() and steps < 400:
+        before = sm._ctx.get("level_index", 0)
+        sm.step()
+        steps += 1
+        if sm._ctx.get("level_index", 0) != before:
+            # 刚发生降级：_switch_level 里已调过 _select_level，缓存即当前级
+            seen.append(_LEVEL_CACHE.get(handle))
+    assert seen == [4, 5], f"降级顺序应为 4→5（实得 {seen}）"
+
+
+def test_found_after_switch_launches_that_level():
+    """降级后搜到城寨 → 发起的集结用的是**降级后**那一级。"""
+    sm, _handle = _no_result_sm([7, 5], found_when=lambda ctx: ctx.get("level_index", 0) >= 1)
+    steps = 0
+    while not sm.is_terminal() and steps < 200:
+        sm.step()
+        steps += 1
+    assert sm._ctx.get("level_index") == 1
+    assert sm.last_rally_event["fortress_level"] == 5

@@ -26,7 +26,8 @@ instances:
       - id: boss
         name: 车头
         role: leader
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
 """, encoding="utf-8")
@@ -75,7 +76,8 @@ instances:
       - id: boss
         name: 新车头
         role: leader
-        target_level: 7
+        target_levels:
+        - 7
         march_preset: 1
         march_troop_types: [cavalry]
 """, encoding="utf-8")

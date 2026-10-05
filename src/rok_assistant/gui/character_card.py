@@ -3,6 +3,8 @@ from PyQt6.QtWidgets import QFrame, QVBoxLayout, QLabel, QSizePolicy
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
+from .labels import role_label, state_label
+
 class CharacterCard(QFrame):
     def __init__(self, name: str, role: str, status: str = "idle"):
         super().__init__()
@@ -13,8 +15,10 @@ class CharacterCard(QFrame):
 
     def _build(self, name, role, status):
         layout = QVBoxLayout(self)
-        self.title_label = QLabel(f"{name} ({role})")
-        self.status_label = QLabel(status)
+        # 分工/状态都翻中文：配置页写「车头」，主界面卡片却写「leader」
+        # 是同一个人在两处看到两个词（2026-10-05 用户反馈）
+        self.title_label = QLabel(f"{name}（{role_label(role)}）")
+        self.status_label = QLabel(state_label(status))
         self.thumbnail = QLabel()
         self.thumbnail.setFixedSize(200, 150)
         self.thumbnail.setStyleSheet("background: #222;")
@@ -39,4 +43,4 @@ class CharacterCard(QFrame):
         self.setStyleSheet("background: #500;")
 
     def set_status(self, status: str) -> None:
-        self.status_label.setText(status)
+        self.status_label.setText(state_label(status))

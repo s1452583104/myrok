@@ -32,7 +32,7 @@ def test_leader_launch_writes_troops_out_and_rally_ts():
     handle = MockHandleSource(screenshot=_img())
     recs = {k: _rec() for k in ("march_btn", "queue_badge")}
     led = ActionLedger()
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], ledger=led,
                             publisher_id="c1")
     sm._launch({})
@@ -47,7 +47,7 @@ def test_leader_rejected_launch_does_not_write_ledger():
     recs = {k: _rec() for k in ("march_btn", "queue_badge")}
     recs["queue_badge"] = _rec(matched=False)
     led = ActionLedger()
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], ledger=led,
                             publisher_id="c1")
     ctx = {}
@@ -87,7 +87,7 @@ def test_leader_launch_without_queue_badge_does_not_write_ledger():
     handle = MockHandleSource(screenshot=_img())
     recs = {k: _rec() for k in ("march_btn",)}   # 无 queue_badge
     led = ActionLedger()
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], ledger=led,
                             publisher_id="c1")
     sm._launch({})
@@ -100,7 +100,7 @@ def test_no_ledger_is_a_no_op():
     handle = MockHandleSource(screenshot=_img())
     recs = {k: _rec() for k in ("march_btn", "queue_badge")}
     led = ActionLedger()   # 见证对象：未注入 SM，必须分毫未动
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], publisher_id="c1")
     sm._launch({})   # 不得抛异常
     assert sm._ledger is None

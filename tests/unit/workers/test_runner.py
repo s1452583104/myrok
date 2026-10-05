@@ -166,7 +166,7 @@ def test_runner_rebuilds_after_either_leader_give_up(monkeypatch):
                                  "march_btn")}
         recs["red_rally"] = _mock_rec()  # 独立 mock，避免连带共享 rec
         sm = EitherStateMachine(handle_source=handle, recognizers=recs,
-                                target_level=8, march_preset=1,
+                                target_levels=[8], march_preset=1,
                                 march_troop_types=["infantry"],
                                 fill_target_leaders=[])
         sm._leader._rec["red_rally"].recognize.return_value.matched = False  # 永搜无果

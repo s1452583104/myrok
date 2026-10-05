@@ -8,6 +8,7 @@ import cv2
 
 from ..core.template_registry import TemplateRegistry
 from ..core.handle_source import create_handle_source
+from ..infra.app_paths import resolve_asset, user_dir
 from ..infra.config import RootConfig, RoleEnum, find_level_collisions
 from ..infra.anti_detection import JitteringHandleSource
 from ..infra.logger import get_logger
@@ -81,9 +82,10 @@ class RuntimeCoordinator:
                  template_dir: Path | None = None):
         self._config = config
         self._bus = event_bus or EventBus()
-        # 默认用配置里的模板目录；测试可注入临时目录
+        # 默认用配置里的模板目录；测试可注入临时目录。配置里写的是相对路径，
+        # 按 resource_dir() 解开——冻结后它是 _internal，不是 CWD。
         self._template_dir = Path(template_dir) if template_dir \
-            else Path(self._config.app.template_dir)
+            else resolve_asset(self._config.app.template_dir)
         self.runners: dict[str, WorkerRunner] = {}
         # runner_key -> rally_launched 路由处理器（stop 时统一退订）
         self._routes: dict[str, Callable] = {}
@@ -107,15 +109,33 @@ class RuntimeCoordinator:
         try:
             recognizers = TemplateRegistry.load(
                 self._template_dir / "manifest.yaml").build_recognizers(
-                yolo_model=self._config.app.yolo_model,
+                yolo_model=(resolve_asset(self._config.app.yolo_model)
+                            if self._config.app.yolo_model else None),
                 ocr_fallback=self._config.app.ocr_name_fallback)
             for inst in self._config.instances:
-                handle = create_handle_source(
-                    mumu_index=inst.mumu_index,
-                    mumu_manager_path=self._config.app.mumu_manager_path,
-                    adb_address=inst.adb_address,
-                    adb_path=self._config.app.adb_path,
-                    window_title_pattern=inst.window_title_pattern)
+                try:
+                    handle = create_handle_source(
+                        mumu_index=inst.mumu_index,
+                        mumu_manager_path=self._config.app.mumu_manager_path,
+                        adb_address=inst.adb_address,
+                        adb_path=self._config.app.adb_path,
+                        window_title_pattern=inst.window_title_pattern)
+                except Exception as e:
+                    # **报错必须点名是哪一台。** 2026-10-05 用户报「只连上一个，
+                    # 另一个成员实例报错」——配了两台时，裸异常里只有
+                    # 「模拟器 1 可能没有启动」这种编号，界面又只弹一个泛泛的
+                    # 「启动失败」，用户根本不知道说的是哪台、该去开哪个。
+                    #
+                    # 这段**整个落在日志之外**：worker 还没起来，运行日志里一个字
+                    # 都没有（用户的 logs/ 里那次就是 0 字节），事后查不出来。
+                    # 所以这里既点名又写日志，别指望下一个人能从别处还原现场。
+                    where = f"MuMu 编号 {inst.mumu_index}" if inst.mumu_index is not None \
+                        else (f"adb {inst.adb_address}" if inst.adb_address
+                              else f"窗口 {inst.window_title_pattern!r}")
+                    logger.error("模拟器「%s」（%s，%s）连接失败：%s",
+                                 inst.name, inst.id, where, e)
+                    raise RuntimeError(
+                        f"模拟器「{inst.name}」（{inst.id}，{where}）连不上：{e}") from e
                 handle = JitteringHandleSource(handle, self._config.app.anti_detection)
                 for char in inst.characters[:1]:
                     self._spawn(inst, char, handle, recognizers)
@@ -142,6 +162,9 @@ class RuntimeCoordinator:
                                                     self._bus, self._rally_tracker,
                                                     ledger=self.ledger),
             handle_source=handle, event_bus=self._bus,
+            # 显式给失败截图目录：冻结后 CWD 可能是任意位置，runner 的
+            # 默认 Path("recordings") 会把截图写到用户找不到的地方。
+            screenshot_dir=user_dir() / "recordings",
             max_rounds=self._config.app.max_rounds,
             max_consecutive_failures=self._config.app.max_consecutive_failures)
         self.runners[key] = runner

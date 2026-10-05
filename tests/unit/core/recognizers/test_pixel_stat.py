@@ -182,6 +182,49 @@ def test_bbox_is_present_even_when_not_matched():
     assert r.bbox.center() == (1655, 802)
 
 
+# --- 运行时基准自校准（2026-10-03 实机）------------------------------------
+# 实机面板整体上移 42px（槽心 474 -> 432），march_btn/form_title 分毫未动。
+# 基准不能只写死，运行时要能从帧里校准。
+
+def _moved_frame(top: float, slot: int) -> np.ndarray:
+    """把「槽 N 高亮」画在基准 top 上（而不是实测的 474）。"""
+    img = np.full((1080, 1920, 3), 30, np.uint8)
+    cx, cy = slot_center(slot, top=top)
+    img[int(cy) - PRESET_HALF:int(cy) + PRESET_HALF,
+        int(cx) - PRESET_HALF:int(cx) + PRESET_HALF] = 255
+    return img
+
+
+def test_panel_verdict_accepts_a_calibrated_base():
+    img = _moved_frame(432.0, 1)
+
+    assert panel_verdict(img).slot is None, "写死 474 的默认基准本该读不到"
+    assert panel_verdict(img, top=432.0).slot == 1
+
+
+def test_calibrate_moves_the_recognizers_with_the_base():
+    img = _moved_frame(432.0, 1)
+    judge = PresetSlotJudge()
+    recs = build_preset_recognizers(ALL_IDS, judge)
+    assert _matched(recs, img) == set()
+
+    judge.calibrate(432.0)
+
+    assert _matched(recs, img) == {"selected_preset_1"}
+
+
+def test_calibrate_invalidates_the_cached_frame():
+    """同一帧先按旧基准出结论，校准后必须重算，不能吃旧缓存。"""
+    img = _frame(bright=(2,))
+    judge = PresetSlotJudge()
+    recs = build_preset_recognizers(ALL_IDS, judge)
+    assert _matched(recs, img) == {"selected_preset_2"}
+
+    judge.calibrate(432.0)   # 基准挪走：同一帧的结论必须跟着变
+
+    assert _matched(recs, img) == set()
+
+
 # --- 缓存 -----------------------------------------------------------------
 
 def test_verdict_is_computed_once_per_frame(monkeypatch):
@@ -189,9 +232,9 @@ def test_verdict_is_computed_once_per_frame(monkeypatch):
     calls = []
     real = panel_verdict
 
-    def counting(img):
+    def counting(img, top=PRESET_TOP):
         calls.append(1)
-        return real(img)
+        return real(img, top)
 
     monkeypatch.setattr("rok_assistant.core.recognizers.pixel_stat.panel_verdict",
                         counting)

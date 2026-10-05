@@ -43,6 +43,15 @@ tmp_pytest/
 # User config (example is committed)
 config.yaml
 
+# PyInstaller 产物（rok-assistant.spec 本身要入库，别忽略 *.spec）
+dist/
+build/
+
+# 导出的 ONNX 检测权重：体积 12MB，由 tools/export_onnx.py 从 runs/ 里的 .pt 现导。
+# 打包前必须先跑一次导出（tools/build_package.py 会检查）。
+models/*.onnx
+!models/.gitkeep
+
 # IDE
 .idea/
 .vscode/

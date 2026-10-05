@@ -10,6 +10,10 @@ templates:
 - id: alliance_btn
   file: alliance_btn.png
   threshold: 0.9
+  # 2026-10-04 定标：这个类 YOLO 两头都不可用——GT 有它的 3 帧上 conf 全 0.000
+  # （完全漏检），而真无它的帧上误报 0.480。它又是**要点击**的（member_sm
+  # 135/145/187/193），假阳性 = 点错位置。故显式关掉 YOLO 腿，回到模板单腿。
+  yolo_threshold: 1.01
   roi:
   - 1650
   - 800
@@ -232,12 +236,15 @@ templates:
 # leader_sm._form_troop 是直接点匹配位置（`self._click(f"preset_{N}")`），
 # 点错槽 = 派错兵。
 # 新配置实测：正确 394 条 / 串位 0 条 / 无标注帧误报 0 条。
-# 副作用（有意）：YOLO 兜底腿共用 spec.threshold（见 build_recognizers），
-# 0.97 等于对 preset_* 关掉兜底。图标在 640 输入下约 15px，模型读不出数字，
-# 兜底只会点错槽——宁可让模板失配（_click 空操作）也不点错。
+# YOLO 腿（2026-10-04 起与模板阈值解耦，单独用 yolo_threshold）：**显式关闭**。
+# 定标实测 preset_1..6 在 val 的 5~6 个正样本帧上 YOLO conf 最小 0.000
+# （640 输入下图标约 15px，模型读不出槽位数字），而模板给 0.44~0.93。让它
+# 先行只会点错槽 = 派错兵——宁可让模板失配（_click 空操作）也不点错。
+# 1.01 是「任何 conf 都够不到」的哨兵值。
 - id: preset_1
   file: preset_1.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -246,6 +253,7 @@ templates:
 - id: preset_2
   file: preset_2.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -254,6 +262,7 @@ templates:
 - id: preset_3
   file: preset_3.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -262,6 +271,7 @@ templates:
 - id: preset_4
   file: preset_4.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -270,6 +280,7 @@ templates:
 - id: preset_5
   file: preset_5.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -278,6 +289,7 @@ templates:
 - id: preset_6
   file: preset_6.png
   threshold: 0.97
+  yolo_threshold: 1.01    # YOLO 腿关闭，理由见上方 preset 段注释
   roi:
   - 1600
   - 350
@@ -353,6 +365,10 @@ templates:
 - id: queue_march_icon    # 绿色脚印=行军中（战斗队列，阻塞搜索-集结）
   file: queue_march_icon.png    # 2026-09-16 纯圆重裁（去头像背景角落），负 <=0.47，阈值 0.85
   threshold: 0.85
+  # 2026-10-04 定标：val 上唯一「有正样本且假阳性地板 > 0.5」的类——
+  # 真无它的帧上 YOLO 给 0.689，有它的帧给 0.876，间隙只有 0.19。全局默认
+  # 0.5 会让它误报，故单独抬回模板阈值。样本仅 1 帧，保守取值。
+  yolo_threshold: 0.85
   roi:
   - 1700
   - 150

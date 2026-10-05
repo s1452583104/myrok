@@ -11,23 +11,25 @@ from pathlib import Path
 import uuid
 
 import yaml
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
-    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+    QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from pydantic import ValidationError
 
 from rok_assistant.core.handle_source import create_handle_source
-from rok_assistant.infra.config import RootConfig, load_config
-
-ROLE_LABELS = {"leader": "车头", "member": "成员", "either": "车头或成员"}
-LABEL_ROLES = {v: k for k, v in ROLE_LABELS.items()}
-TROOP_LABELS = {"infantry": "步兵", "cavalry": "骑兵", "archer": "弓兵"}
+from rok_assistant.infra.config import MAX_TARGET_LEVELS, RootConfig, load_config
+from rok_assistant.infra.mumu import (
+    MumuLocatorError, MumuNotRunningError, list_instances,
+)
+from rok_assistant.gui.labels import (
+    LABEL_ROLES, ROLE_LABELS, TROOP_LABELS, humanize_loc,
+)
 
 ERR_STYLE = "border: 1px solid red;"
 
@@ -44,7 +46,21 @@ class ConfigDialog(QDialog):
         self._mode_combos: dict[int, QComboBox] = {}
         self._status_labels: dict[int, QLabel] = {}
         self._preview_labels: dict[int, QLabel] = {}
+        self._instance_lists: dict[int, QListWidget] = {}
+        # 记下「这个显示名是我们自动填的」，按实例 id（不是下标——增删会移位）。
+        # 用户点几行看看再定下来是常态，只有认得出哪个名字是我们写的，
+        # 才能在换选时改掉它，同时绝不覆盖用户自己输入的名字。
+        self._autofilled_names: dict[str, str] = {}
+        # 扫描结果按对话框缓存（实机 info -v all 约 255ms，不该每次切页都扫）。
+        # None = 还没扫过；[] = 扫过但一个模拟器都没有。
+        self._scanned: list[dict] | None = None
+        self._scan_error: str | None = None
         self._build_ui()
+        # 打开就扫一次：用户一进来就该看见自己的「如愿」，而不是先猜该点哪个按钮。
+        # 用 singleShot 排到事件循环下一拍，让窗口先画出来——扫描是同步调用
+        # 外部程序（实机 255ms，超时上限 6s），在构造函数里等会让对话框迟迟
+        # 不出现，用户会以为程序没反应。
+        QTimer.singleShot(0, self._rescan)
 
     # ---------------- UI 骨架 ----------------
     def _build_ui(self):
@@ -86,6 +102,11 @@ class ConfigDialog(QDialog):
         self._mode_combos.clear()
         self._status_labels.clear()
         self._preview_labels.clear()
+        self._instance_lists.clear()
+        # 删掉已不存在的实例的记录，别让它在增删几次后越积越多
+        alive = {i["id"] for i in self._data["instances"]}
+        self._autofilled_names = {k: v for k, v in self._autofilled_names.items()
+                                  if k in alive}
 
         g = QTreeWidgetItem(["全局设置"])
         g.setData(0, Qt.ItemDataRole.UserRole, ("page", "global"))
@@ -101,7 +122,7 @@ class ConfigDialog(QDialog):
 
         for idx, inst in enumerate(self._data["instances"]):
             label = inst.get("name") or inst["id"]
-            item = QTreeWidgetItem([f"实例  {label}"])
+            item = QTreeWidgetItem([f"模拟器  {label}"])
             item.setData(0, Qt.ItemDataRole.UserRole, ("page", idx))
             self._tree.addTopLevelItem(item)
             self._stack.addWidget(self._make_instance_page(idx))
@@ -198,6 +219,13 @@ class ConfigDialog(QDialog):
         adb_row.addWidget(adb, 1)
         adb_row.addWidget(adb_btn)
         form.addRow("adb 路径", self._wrap(adb_row))
+
+        # 首启探测没命中时的手动重试（装了 MuMu 但装在非常规目录、
+        # 或者先装了模拟器后解压绿色包）。探测逻辑与首启同一份实现。
+        self._mumu_line, self._adb_line = mumu, adb
+        autodetect_btn = QPushButton("自动检测 MuMu/adb 路径")
+        autodetect_btn.clicked.connect(self._autodetect_mumu_paths)
+        form.addRow("", autodetect_btn)
         outer.addLayout(form)
 
         anti = self._data["app"]["anti_detection"]
@@ -221,7 +249,7 @@ class ConfigDialog(QDialog):
         self._bind(("app", "anti_detection", "debug_no_jitter"), dbg)
         af.addRow(dbg)
         outer.addWidget(group)
-        detect_btn = QPushButton("检测全部实例")
+        detect_btn = QPushButton("检测全部模拟器")
         detect_btn.clicked.connect(self._detect_all_instances)
         outer.addWidget(detect_btn)
         self._detect_output = QPlainTextEdit()
@@ -241,29 +269,48 @@ class ConfigDialog(QDialog):
         self._yaml_view.setPlainText(
             yaml.safe_dump(self._data, allow_unicode=True, sort_keys=False))
 
-    # ---------------- 实例页 ----------------
+    # ---------------- 模拟器页 ----------------
     def _make_instance_page(self, idx: int) -> QWidget:
         inst = self._data["instances"][idx]
         page = QWidget()
         outer = QVBoxLayout(page)
         form = QFormLayout()
 
-        outer.addWidget(QLabel(f"实例 ID：{inst['id']}"))
+        outer.addWidget(QLabel(f"模拟器 ID：{inst['id']}"))
         name = self._line(("instances", idx, "name"), inst.get("name", ""))
         form.addRow("显示名", name)
 
         mode = QComboBox()
-        mode.addItems(["MuMu 实例号", "手动 adb 地址"])
+        mode.addItems(["按模拟器选择", "手动填 adb 地址"])
         self._mode_combos[idx] = mode
         stack = QStackedWidget()
-        spin = QSpinBox()
-        spin.setRange(0, 64)
-        spin.setValue(inst.get("mumu_index") or 0)
-        spin.valueChanged.connect(lambda v, i=idx: self._set_mumu_index(i, int(v)))
-        self._bind(("instances", idx, "mumu_index"), spin)
+
+        # --- 方式一：从扫描结果里按 MuMu 里的名字选 ---
+        # 为什么不再让人填编号：MuMu 自己的界面只显示名字（「如愿」「如愿-2」），
+        # 从不显示 0/1/2，让人填「实例号」等于让人猜（2026-10-05 用户反馈）。
+        picker = QWidget()
+        pv = QVBoxLayout(picker)
+        pv.setContentsMargins(0, 0, 0, 0)
+        lst = QListWidget()
+        lst.setMaximumHeight(110)
+        lst.itemSelectionChanged.connect(lambda i=idx: self._on_instance_pick(i))
+        self._instance_lists[idx] = lst
+        self._bind(("instances", idx, "mumu_index"), lst)
+        pv.addWidget(lst)
+        scan_row = QHBoxLayout()
+        scan_btn = QPushButton("扫描模拟器")
+        scan_btn.clicked.connect(self._rescan)
+        scan_hint = QLabel("（先启动模拟器，再点扫描）")
+        scan_row.addWidget(scan_btn)
+        scan_row.addWidget(scan_hint)
+        scan_row.addStretch(1)
+        pv.addLayout(scan_row)
+        stack.addWidget(picker)
+
+        # --- 方式二：直接填 adb 地址（非 MuMu 的模拟器走这里） ---
         addr = self._line(("instances", idx, "adb_address"), inst.get("adb_address", ""))
-        stack.addWidget(spin)
         stack.addWidget(addr)
+
         is_manual = inst.get("mumu_index") is None
         mode.setCurrentIndex(1 if is_manual else 0)
         stack.setCurrentIndex(1 if is_manual else 0)
@@ -271,17 +318,18 @@ class ConfigDialog(QDialog):
         def _on_mode(i, i2=idx):
             inst2 = self._data["instances"][i2]
             if i == 0:
-                inst2["mumu_index"] = int(spin.value())
                 inst2["adb_address"] = ""
                 addr.clear()
+                self._on_instance_pick(i2)   # 列表没选中就保持 mumu_index=None
             else:
                 inst2["mumu_index"] = None
                 inst2["adb_address"] = addr.text()
         mode.currentIndexChanged.connect(_on_mode)
         mode.currentIndexChanged.connect(stack.setCurrentIndex)
         form.addRow("接入方式", mode)
-        form.addRow("MuMu 实例号", stack)
+        form.addRow("选择模拟器", stack)
         outer.addLayout(form)
+        self._fill_instance_list(idx)
 
         outer.addWidget(QLabel("角色阵容（双击行编辑）"))
         table = QTableWidget(0, 5)
@@ -299,9 +347,9 @@ class ConfigDialog(QDialog):
         add_btn.clicked.connect(lambda _c, i=idx, t=table: self._edit_character(i, -1))
         del_btn = QPushButton("删除选中角色")
         del_btn.clicked.connect(lambda _c, i=idx, t=table: self._delete_character(i, t.currentRow()))
-        add_inst_btn = QPushButton("＋ 添加实例")
+        add_inst_btn = QPushButton("＋ 添加模拟器")
         add_inst_btn.clicked.connect(lambda _c: self._add_instance())
-        del_inst_btn = QPushButton("删除本实例")
+        del_inst_btn = QPushButton("删除本模拟器")
         del_inst_btn.clicked.connect(lambda _c, i=idx: self._delete_instance(i))
         test_btn = QPushButton("测试连接")
         test_btn.clicked.connect(lambda _c, i=idx: self._test_connection(i))
@@ -323,8 +371,9 @@ class ConfigDialog(QDialog):
         fills = ", ".join(f"{f['instance']}/{f['name']}" for f in c.get("fill_target_leaders", []))
         troops = "、".join(TROOP_LABELS[t] for t in c["march_troop_types"])
         summary = troops + (f" ｜ 填: {fills}" if fills else "")
+        levels = "→".join(str(v) for v in c["target_levels"])
         for col, text in enumerate([c["name"], ROLE_LABELS[c["role"]],
-                                    str(c["target_level"]), str(c["march_preset"]), summary]):
+                                    levels, str(c["march_preset"]), summary]):
             table.setItem(row, col, QTableWidgetItem(text))
 
     def _leader_candidates(self, exclude=None) -> list[dict]:
@@ -371,34 +420,123 @@ class ConfigDialog(QDialog):
     def _add_instance(self):
         used = {i["id"] for i in self._data["instances"]}
         n = 0
-        while f"inst{n}" in used:
+        # 与首启模板（config.example.yaml）用同一套前缀，免得用户在界面上
+        # 看到模板里叫 mumu0、自己新加的却叫 inst1，以为是什么不同的东西。
+        while f"mumu{n}" in used:
             n += 1
         self._data["instances"].append({
-            "id": f"inst{n}", "name": f"实例{n}", "mumu_index": None,
+            "id": f"mumu{n}", "name": f"模拟器{n}", "mumu_index": None,
             "adb_address": "", "window_title_pattern": "", "characters": []})
         self._reload_tree()
 
     def _delete_instance(self, idx: int):
         inst = self._data["instances"][idx]
         answer = QMessageBox.question(
-            self, "删除实例",
-            f"确定删除实例 {inst.get('name') or inst['id']} 及其全部角色？")
+            self, "删除模拟器",
+            f"确定删除模拟器 {inst.get('name') or inst['id']} 及其全部角色？")
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._data["instances"].pop(idx)
         self._reload_tree()
 
-    def _set_mumu_index(self, idx: int, value: int):
-        self._data_set(("instances", idx, "mumu_index"), value)
+    # ---- 扫描模拟器 / 按名字选中 ----
+
+    def _rescan(self):
+        """跑一次 MuMuManager 列出所有模拟器，填进各模拟器页的列表。
+
+        打开对话框时自动调一次（实机 255ms），结果缓存在 self._scanned，
+        所有模拟器页共用——不该每切一页就重扫一遍。
+        """
+        manager = self._data["app"].get("mumu_manager_path", "")
+        self._scan_error = None
+        if not manager:
+            self._scanned = None
+            self._scan_error = "还没填 MuMuManager 路径，请先到「全局设置」自动检测或手动指定"
+        else:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                self._scanned = list_instances(manager)
+            except MumuLocatorError as e:
+                self._scanned = None
+                self._scan_error = str(e)
+            finally:
+                QApplication.restoreOverrideCursor()
+        for idx in list(self._instance_lists):
+            self._fill_instance_list(idx)
+
+    def _fill_instance_list(self, idx: int):
+        """把缓存里的扫描结果渲染成列表行；失败时显示一行提示让人重试。"""
+        lst = self._instance_lists.get(idx)
+        if lst is None:
+            return
+        lst.blockSignals(True)     # 重建期间别触发 itemSelectionChanged
+        try:
+            lst.clear()
+            if self._scanned is None:
+                hint = self._scan_error or "还没扫描，点「扫描模拟器」试试"
+                item = QListWidgetItem(f"（{hint}）")
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+                lst.addItem(item)
+                return
+            if not self._scanned:
+                item = QListWidgetItem("（MuMu 里还没有任何模拟器）")
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+                lst.addItem(item)
+                return
+            wanted = self._data["instances"][idx].get("mumu_index")
+            for e in self._scanned:
+                mark = "●" if e["running"] else "○"
+                state = "运行中" if e["running"] else "未启动"
+                item = QListWidgetItem(f"{mark} {e['name']} · {state}")
+                item.setData(Qt.ItemDataRole.UserRole, e["index"])
+                if not e["running"]:
+                    # 置灰但仍可选中：用户可能想先配好、等会儿再启动
+                    item.setForeground(Qt.GlobalColor.gray)
+                lst.addItem(item)
+                if wanted == e["index"]:
+                    lst.setCurrentItem(item)
+        finally:
+            lst.blockSignals(False)
+
+    def _on_instance_pick(self, idx: int):
+        """列表选中某台模拟器 → 记下它的编号（按名字选，不再手填数字）。"""
+        lst = self._instance_lists.get(idx)
+        if lst is None:
+            return
+        item = lst.currentItem()
+        if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
+            return
+        self._data_set(("instances", idx, "mumu_index"),
+                       int(item.data(Qt.ItemDataRole.UserRole)))
+        # 显示名留空时顺手填上模拟器名字，省得用户再想一个。
+        # 只在「空着」或「还是我们上次填的那个」时才动它：用户点几行比较一下
+        # 是常态，若不跟着换，最后会留下「选的是如愿、名字却是 15634025219」；
+        # 而用户自己敲的名字则绝不覆盖。
+        inst = self._data["instances"][idx]
+        name = (inst.get("name") or "").strip()
+        if not name or name == self._autofilled_names.get(inst["id"]):
+            picked = self._instance_name(inst["mumu_index"])
+            if picked:
+                inst["name"] = picked
+                self._autofilled_names[inst["id"]] = picked
+                w = self._widgets.get(("instances", idx, "name"))
+                if isinstance(w, QLineEdit):
+                    w.setText(picked)
+
+    def _instance_name(self, index) -> str:
+        for e in (self._scanned or []):
+            if e["index"] == index:
+                return e["name"]
+        return ""
 
     # ---------------- 连接测试 / 在线检测 ----------------
     def _test_connection(self, idx: int):
-        """spec §5：查实例在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
+        """spec §5：查模拟器在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
         import cv2
         inst = self._data["instances"][idx]
         if inst.get("mumu_index") is None and not inst.get("adb_address"):
             self._status_labels[idx].setText(
-                "○ 未配置：请先选择接入方式（MuMu 实例号或 adb 地址）")
+                "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
             return
         self._status_labels[idx].setText("● 测试中…")
         QApplication.processEvents()
@@ -411,14 +549,7 @@ class ConfigDialog(QDialog):
                 adb_path=self._data["app"].get("adb_path", "adb"))
             img = handle.capture()
         except Exception as e:  # 连不上/截图失败都要给非程序员能读懂的提示
-            msg = f"○ 连接失败：{e}"
-            stderr = getattr(e, "stderr", None)
-            if stderr:  # CalledProcessError 等会带 stderr，取最后一行帮助定位
-                lines = [ln for ln in stderr.decode(errors="replace").splitlines()
-                         if ln.strip()]
-                if lines:
-                    msg += f"\n{lines[-1]}"
-            self._status_labels[idx].setText(msg)
+            self._status_labels[idx].setText(f"○ {self._explain_connect_error(inst, e)}")
             self._preview_labels[idx].clear()
             return
         finally:
@@ -431,23 +562,89 @@ class ConfigDialog(QDialog):
         self._preview_labels[idx].setPixmap(QPixmap.fromImage(qimg).scaled(
             320, 180, Qt.AspectRatioMode.KeepAspectRatio))
 
+    def _explain_connect_error(self, inst: dict, e: Exception) -> str:
+        """把底层异常翻成「下一步该做什么」。
+
+        新用户最容易踩的两个坑：模拟器没启动（MuMu 界面里它只是没点开）、
+        以及 MuMu 路径没探测到。其余原样带出，并附上 stderr 最后一行。
+        """
+        index = inst.get("mumu_index")
+        if isinstance(e, MumuNotRunningError) or (
+                isinstance(e, MumuLocatorError) and "adb 端口" in str(e)):
+            name = self._instance_name(index) or f"编号 {index}"
+            return f"模拟器「{name}」没有启动，请先在 MuMu 里启动它，再点「测试连接」"
+        if isinstance(e, MumuLocatorError) and "无法运行 MuMuManager" in str(e):
+            return ("找不到 MuMuManager，请到「全局设置」点「自动检测 MuMu/adb 路径」，"
+                    "或手动指定 MuMuManager.exe 和 adb.exe")
+        if isinstance(e, MumuLocatorError) and "没有响应" in str(e):
+            # 超时不是配置问题，别让人去改路径（2026-10-05 有用户被误导过）
+            return ("MuMu 没有响应（模拟器可能正忙或刚启动）。等十几秒再点一次"
+                    "「测试连接」；一直如此就重启 MuMu 和本程序")
+        msg = f"连接失败：{e}"
+        stderr = getattr(e, "stderr", None)
+        if stderr:  # CalledProcessError 等会带 stderr，取最后一行帮助定位
+            lines = [ln for ln in stderr.decode(errors="replace").splitlines()
+                     if ln.strip()]
+            if lines:
+                msg += f"\n{lines[-1]}"
+        return msg
+
+    def _autodetect_mumu_paths(self):
+        """扫常见安装位置填 MuMuManager/adb 路径。
+
+        复用 infra.mumu.detect_mumu_paths（与首启生成 config.yaml 时同一份
+        实现），探测不到就明确告知，不静默留空。会**覆盖**已有值——这是用户
+        主动点的按钮，意图就是重新探一次。
+        """
+        from rok_assistant.infra.mumu import detect_mumu_paths
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            found = detect_mumu_paths()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        filled = []
+        for key, widget in (("mumu_manager_path", self._mumu_line),
+                            ("adb_path", self._adb_line)):
+            value = found.get(key)
+            if value:
+                widget.setText(value)   # textChanged 负责写回 self._data
+                filled.append(f"{key} = {value}")
+        if filled:
+            QMessageBox.information(self, "自动检测", "已填入：\n" + "\n".join(filled))
+        else:
+            QMessageBox.warning(
+                self, "自动检测",
+                "没找到 MuMu 安装位置。请手动指定 MuMu 安装目录下的\n"
+                "MuMuManager.exe 和 adb.exe（点「浏览…」选择）。")
+
     def _detect_all_instances(self):
-        """spec §5：全局页「检测全部实例」，列出各实例在线状态。"""
-        from rok_assistant.infra.mumu import MumuLocator
+        """spec §5：全局页「检测全部模拟器」，列出各模拟器在线状态。
+
+        一次 `info -v all` 拿全，不再逐台 `is_running`（N 台省 N 次子进程）。
+        输出用模拟器的**名字**，不再暴露 `inst0 (mumu2)` 这种内部 id。
+        """
+        self._rescan()          # 顺便刷新各页的列表，保证和这里的结论一致
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             lines = []
             for inst in self._data["instances"]:
-                if inst.get("mumu_index") is not None:
-                    loc = MumuLocator(self._data["app"].get("mumu_manager_path", ""),
-                                      self._data["app"].get("adb_path", "adb"))
-                    state = "● 在线" if loc.is_running(inst["mumu_index"]) else "○ 离线/未启动"
-                    lines.append(f"{inst['id']} (mumu{inst['mumu_index']}): {state}")
+                index = inst.get("mumu_index")
+                shown = inst.get("name") or inst["id"]
+                if index is None:
+                    lines.append(f"{shown}：手动 adb 模式，用模拟器页「测试连接」检查")
+                    continue
+                info = next((e for e in (self._scanned or []) if e["index"] == index), None)
+                if info is None:
+                    lines.append(f"{shown}：在 MuMu 里没找到编号 {index} 的模拟器")
                 else:
-                    lines.append(f"{inst['id']}: 手动 adb 模式，用实例页「测试连接」检查")
+                    state = "● 运行中" if info["running"] else "○ 未启动"
+                    lines.append(f"模拟器 {index} · {info['name']}：{state}")
+            if self._scan_error:
+                lines.append(f"（扫描失败：{self._scan_error}）")
         finally:
             QApplication.restoreOverrideCursor()
-        self._detect_output.setPlainText("\n".join(lines) or "尚无实例")
+        self._detect_output.setPlainText("\n".join(lines) or "尚无模拟器")
 
     # ---------------- 保存 ----------------
     def _on_save(self):
@@ -477,7 +674,9 @@ class ConfigDialog(QDialog):
         lines = ["以下字段校验未通过（个别技术性原因为英文，可截图反馈给开发者）："]
         for err in e.errors():
             loc = tuple(err["loc"])
-            lines.append(" / ".join(str(x) for x in loc) + f": {err['msg']}")
+            # loc 为空 = 跨字段校验，落到整个配置上；不写「整体配置」的话
+            # 这行会以冒号开头，看着像程序出了 bug
+            lines.append((humanize_loc(loc) or "整体配置") + f": {err['msg']}")
             if not loc:
                 continue  # 根级错误无对应控件
             for path in self._widgets:
@@ -509,10 +708,31 @@ class CharacterEditDialog(QDialog):
             self.role_combo.setCurrentText(ROLE_LABELS[character["role"]])
         form.addRow("分工", self.role_combo)
 
-        self.level_spin = QSpinBox()
-        self.level_spin.setRange(1, 10)
-        self.level_spin.setValue((character or {}).get("target_level", 7))
-        form.addRow("目标城寨等级", self.level_spin)
+        # 目标城寨等级（2026-10-04 用户要求）：1–10 复选框，最多勾 3 个。
+        # 勾选**顺序即搜索顺序**（用户明确要求完全自由，例如 6→4→5），
+        # 而复选框本身表达不了顺序，故下面挂一个标签实时显示结果；用户
+        # 想调整顺序就取消重勾（新勾的排到最后）。
+        self._level_order: list[int] = list((character or {}).get("target_levels", [7]))
+        self.level_checks: dict[int, QCheckBox] = {}
+        level_grid = QGridLayout()
+        level_grid.setContentsMargins(0, 0, 0, 0)
+        for i, lv in enumerate(range(1, 11)):
+            cb = QCheckBox(str(lv))
+            cb.setChecked(lv in self._level_order)
+            self.level_checks[lv] = cb
+            level_grid.addWidget(cb, i // 5, i % 5)
+        # 信号在 setChecked 之后再接：否则初始化会把 _level_order 重排成
+        # 勾选回调的顺序（配置里存的顺序就丢了）
+        for lv, cb in self.level_checks.items():
+            cb.toggled.connect(lambda on, v=lv: self._on_level_toggle(v, on))
+        self.level_order_label = QLabel()
+        level_box = QVBoxLayout()
+        level_box.setContentsMargins(0, 0, 0, 0)
+        level_box.addLayout(level_grid)
+        level_box.addWidget(self.level_order_label)
+        form.addRow(f"目标城寨等级（≤{MAX_TARGET_LEVELS}）",
+                    ConfigDialog._wrap(level_box))
+        self._refresh_level_order()
 
         self.preset_spin = QSpinBox()
         self.preset_spin.setRange(1, 5)
@@ -570,6 +790,34 @@ class CharacterEditDialog(QDialog):
                 self.role_combo.currentText() != ROLE_LABELS["leader"]))
         self.sel_list.setEnabled(self.role_combo.currentText() != ROLE_LABELS["leader"])
 
+    def _on_level_toggle(self, level: int, checked: bool) -> None:
+        if checked:
+            if level in self._level_order:
+                return
+            if len(self._level_order) >= MAX_TARGET_LEVELS:
+                # 超上限：撤销这次勾选。比弹窗打断轻，且状态立刻回到合法
+                self.level_checks[level].setChecked(False)
+                return
+            self._level_order.append(level)
+        elif level in self._level_order:
+            self._level_order.remove(level)
+        self._refresh_level_order()
+
+    def _refresh_level_order(self) -> None:
+        """把当前顺序写到标签上，并锁住「已选满 3 个时未选中的框」。
+
+        顺序是隐性状态（只存在于点击先后里），不显式显示的话用户无法
+        确认 6→4→5 有没有生效。
+        """
+        if self._level_order:
+            self.level_order_label.setText(
+                "搜索顺序：" + " → ".join(str(v) for v in self._level_order))
+        else:
+            self.level_order_label.setText("搜索顺序：（至少勾一个等级）")
+        full = len(self._level_order) >= MAX_TARGET_LEVELS
+        for lv, cb in self.level_checks.items():
+            cb.setEnabled(cb.isChecked() or not full)
+
     def _move_to_selected(self):
         for item in self.cand_list.selectedItems():
             self.cand_list.takeItem(self.cand_list.row(item))
@@ -591,6 +839,8 @@ class CharacterEditDialog(QDialog):
         """返回错误说明；None 表示可保存。"""
         if not self.name_edit.text().strip():
             return "角色名不能为空"
+        if not self._level_order:
+            return f"至少勾选一个目标城寨等级（最多 {MAX_TARGET_LEVELS} 个）"
         troops = [k for k, cb in self.troop_checks.items() if cb.isChecked()]
         if not troops:
             return "至少选择一个兵种"
@@ -612,7 +862,7 @@ class CharacterEditDialog(QDialog):
             "id": (self._character or {}).get("id") or f"char-{uuid.uuid4().hex[:8]}",
             "name": self.name_edit.text().strip(),
             "role": role,
-            "target_level": self.level_spin.value(),
+            "target_levels": list(self._level_order),
             "march_preset": self.preset_spin.value(),
             "march_troop_types": [k for k, cb in self.troop_checks.items() if cb.isChecked()],
             "fill_target_leaders": [] if role == "leader" else self._selected_fills(),

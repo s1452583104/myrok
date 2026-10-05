@@ -37,7 +37,7 @@ def _leader(monkeypatch, view, search_icon_matched=False):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     recs = {k: _rec(matched=False) for k in _RESIDUAL_IDS}
     recs["search_icon"] = _rec(matched=search_icon_matched)
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], publisher_id="c1")
     _probe_stub(monkeypatch, sm, view)
     return sm
@@ -84,7 +84,7 @@ def test_form_troop_failure_names_the_view(monkeypatch):
     recs = {k: _rec(matched=False) for k in _RESIDUAL_IDS}
     recs["search_icon"] = _rec(matched=False)
     recs["march_btn"] = _rec(matched=False)
-    sm = LeaderStateMachine(handle, recs, target_level=7, march_preset=1,
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], march_preset=1,
                             march_troop_types=["infantry"], publisher_id="c1")
     _probe_stub(monkeypatch, sm, View.MODAL)
     with pytest.raises(RuntimeError, match=r"卡在\[弹窗遮罩\]视图"):
