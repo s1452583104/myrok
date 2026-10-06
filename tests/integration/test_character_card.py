@@ -28,3 +28,25 @@ def test_card_set_error_makes_red(qapp):
     card = CharacterCard(name="M1", role="member", status="idle")
     card.set_error("something broke")
     assert "error" in card.status_label.text().lower() or card.error_state
+
+
+def test_card_has_log_view_and_appends(qapp):
+    from rok_assistant.gui.character_card import CharacterCard
+    card = CharacterCard(name="Hero", role="leader", status="idle")
+    card.append_log("12:00:01 发起集结")
+    card.append_log("12:03:10 已回城")
+    text = card.log_view.toPlainText()
+    assert "发起集结" in text and "已回城" in text
+    assert card.log_view.isReadOnly()
+
+
+def test_card_log_view_is_ring_buffered(qapp):
+    """只保留最近 200 行，防止长跑把内存吃光。"""
+    from rok_assistant.gui.character_card import CharacterCard
+    card = CharacterCard(name="Hero", role="leader", status="idle")
+    for i in range(250):
+        card.append_log(f"line {i}")
+    text = card.log_view.toPlainText()
+    assert "line 249" in text
+    assert "line 0\n" not in text
+    assert card.log_view.blockCount() <= 200

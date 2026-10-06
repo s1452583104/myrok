@@ -4,12 +4,17 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
 from .labels import role_label, state_label
+from .log_panel import LogPanel
+
+_LOG_MAX_LINES = 200
+
 
 class CharacterCard(QFrame):
     def __init__(self, name: str, role: str, status: str = "idle"):
         super().__init__()
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFixedSize(220, 280)
+        # 比原来的 220x280 高出一截，给日志区让位
+        self.setFixedSize(220, 430)
         self.error_state = False
         self._build(name, role, status)
 
@@ -24,10 +29,20 @@ class CharacterCard(QFrame):
         self.thumbnail.setStyleSheet("background: #222;")
         self.thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail.setText("(no image)")
+        # 复用既有的 LogPanel（只读 + 环形裁剪 + 时间戳），不另造一个同款。
+        # 归属由 MainWindow 按线程名解析后投递（见 gui/log_handler.py）。
+        self.log_view = LogPanel(max_lines=_LOG_MAX_LINES)
+        self.log_view.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                    QSizePolicy.Policy.Expanding)
         layout.addWidget(self.title_label)
         layout.addWidget(self.status_label)
         layout.addWidget(self.thumbnail)
-        layout.addStretch()
+        layout.addWidget(self.log_view)
+
+    def append_log(self, text: str) -> None:
+        self.log_view.append_message(text)
+        bar = self.log_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def set_thumbnail(self, img_bytes: bytes) -> None:
         pix = QPixmap()
