@@ -1,5 +1,7 @@
+import random
 import numpy as np
 from unittest.mock import MagicMock
+from rok_assistant.infra.anti_detection import AntiDetectionConfig, HumanProfile
 from rok_assistant.workers.member_sm import MemberStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
 
@@ -497,3 +499,46 @@ def test_normalize_closes_warning_panel(monkeypatch):
     assert sm.current == "OPEN_WAR"
     # 关面板点 X + OPEN_WAR 点联盟旗帜（地图视图，map_btn 不点）
     assert handle.clicks == [(1671, 64), (50, 50)]
+
+
+def _member(human):
+    return MemberStateMachine(MagicMock(), {}, [], char_id="m1", human=human)
+
+
+def test_rally_response_is_delayed():
+    """收到集结事件后不能立刻推进 —— 要等够 profile 给的延迟。"""
+    p = HumanProfile(AntiDetectionConfig(member_response_delay_min=10.0,
+                                         member_response_delay_max=60.0),
+                     rng=random.Random(0))
+    sm = _member(p)
+    sm.on_rally_launched({"leader": "boss"})
+    assert sm._respond_at > 0
+    sm.step()                                  # 消费事件 -> WAIT_LAUNCH_EVENT
+    assert sm.current == "WAIT_LAUNCH_EVENT"
+    sm.step()                                  # 延迟没到 -> 原地不动
+    assert sm.current == "WAIT_LAUNCH_EVENT"
+
+
+def test_rally_response_proceeds_after_delay(monkeypatch):
+    p = HumanProfile(AntiDetectionConfig(member_response_delay_min=10.0,
+                                         member_response_delay_max=10.0))
+    sm = _member(p)
+    sm.on_rally_launched({"leader": "boss"})
+    sm.step()
+    assert sm.current == "WAIT_LAUNCH_EVENT"
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time.time",
+                        lambda: sm._respond_at + 1)
+    sm.step()
+    assert sm.current == "SWITCH_TO_SELF"
+
+
+def test_default_profile_has_no_response_delay():
+    """默认关闭：既有测试与不注入 profile 的调用方行为不变。"""
+    sm = _member(HumanProfile(AntiDetectionConfig(debug_no_jitter=True)))
+    sm.on_rally_launched({"leader": "boss"})
+    # 默认 profile 不贡献延迟（_respond_at = time.time() + 0.0 仍是正数，
+    # 断言「延迟量为 0」而非「_respond_at == 0」）
+    assert sm._human.member_response_delay() == 0.0
+    sm.step()
+    sm.step()
+    assert sm.current == "SWITCH_TO_SELF"

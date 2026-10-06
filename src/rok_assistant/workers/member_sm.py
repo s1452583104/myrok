@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 from .state_machine import StateMachine
 from ..core.recognizers.view_probe import View, ViewProbe
 from ..infra.logger import get_logger
@@ -71,6 +72,9 @@ class MemberStateMachine(StateMachine):
         self._view_probe = ViewProbe(recognizers)
         self._pending_event = None
         self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
+        # 集结响应延迟：破「一台开集结、另一台 N 秒内必填」的 lockstep 关联。
+        # 0 = 立即响应（默认，见 AntiDetectionConfig 的默认值）。
+        self._respond_at = 0.0
         super().__init__(initial="IDLE", human=human)
 
     @staticmethod
@@ -80,7 +84,8 @@ class MemberStateMachine(StateMachine):
     def _setup(self):
         self.add_transition("IDLE", "WAIT_LAUNCH_EVENT", self._consume_event,
                             guard=lambda ctx: self._pending_event is not None)
-        self.add_transition("WAIT_LAUNCH_EVENT", "SWITCH_TO_SELF", self._switch_to_self)
+        self.add_transition("WAIT_LAUNCH_EVENT", "SWITCH_TO_SELF", self._switch_to_self,
+                            guard=lambda ctx: time.time() >= self._respond_at)
         self.add_transition("SWITCH_TO_SELF", "NORMALIZE", self._normalize_view)
         self.add_transition("NORMALIZE", "OPEN_WAR", self._open_war)
         # 耗尽出口必须注册在对应重试边之前：StateMachine.step 按注册顺序
@@ -117,6 +122,9 @@ class MemberStateMachine(StateMachine):
 
     def on_rally_launched(self, event: dict) -> None:
         self._pending_event = event
+        # 延迟必须在**成员自己的线程**里等：EventBus.publish 是同步的
+        # （event_bus.py:20-27），在 router 里 sleep 会阻塞车头线程。
+        self._respond_at = time.time() + self._human.member_response_delay()
 
     def _consume_event(self, ctx):
         self.last_event = self._pending_event
