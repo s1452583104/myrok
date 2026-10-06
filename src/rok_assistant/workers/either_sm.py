@@ -68,7 +68,7 @@ class EitherStateMachine:
     def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
                  march_preset: int, march_troop_types: list,
                  fill_target_leaders, event_bus=None, char_id: str = "?",
-                 rally_tracker=None, ledger=None):
+                 rally_tracker=None, ledger=None, human=None):
         self._bus = event_bus
         self._char_id = char_id
         # 进程级动作账本（runtime 注入）：转交两个子状态机，发车/填兵确认
@@ -91,14 +91,14 @@ class EitherStateMachine:
                                           march_preset, march_troop_types, event_bus,
                                           wait_members_seconds=0.0,
                                           publisher_id=self._char_id,
-                                          ledger=self._ledger)
+                                          ledger=self._ledger, human=human)
         # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数。
         # char_id 必须传：成员填兵确认后要按本账号 id 写账本，缺省 "?" 会把
         # 事实记到错误（共享）名下
         self._member = MemberStateMachine(handle_source, recognizers,
                                           fill_target_leaders,
                                           char_id=self._char_id,
-                                          ledger=self._ledger)
+                                          ledger=self._ledger, human=human)
         self._phase = "leader"
         self.current = "LEADER:IDLE"
         self.history: list[str] = [self.current]

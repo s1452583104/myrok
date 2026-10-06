@@ -69,7 +69,7 @@ class LeaderStateMachine(StateMachine):
                  march_preset: int, march_troop_types: list, event_bus=None,
                  wait_members_seconds: float = 330.0,
                  publisher_id: str | None = None,
-                 ledger=None, queue_gate=None):
+                 ledger=None, queue_gate=None, human=None):
         self._handle = handle_source
         self._rec = recognizers
         # 有序搜索列表（2026-10-04）：本轮从第 0 个开始，每级连搜
@@ -102,7 +102,7 @@ class LeaderStateMachine(StateMachine):
         self._queue_gate = queue_gate
         self._gate_next_log = 0.0
         self._gate_last_msg = ""
-        super().__init__(initial="IDLE")
+        super().__init__(initial="IDLE", human=human)
 
     def step(self, context: dict | None = None) -> None:
         """集结前置门槛（见 __init__ 的 _queue_gate）。
@@ -535,7 +535,7 @@ class LeaderStateMachine(StateMachine):
                     return
             # 模板失配（点击是空操作）或点完没确认（点偏/被挡）→ 按槽心几何
             # 补点一次。串位也走这条路：确认失败 → 几何点正确槽 → 确认通过
-            self._click_xy(*slot_center(n, self._preset_base))
+            self._click_xy(*slot_center(n, self._preset_base), anchor="preset_slot")
             if self._wait_for(rec_id, timeout=_PRESET_CONFIRM_TIMEOUT,
                               interval=_PRESET_CONFIRM_INTERVAL):
                 logger.info("[车头] 预设槽 %s 已确认（几何补点，第 %s 轮）",

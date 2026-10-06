@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Union
 from ..core.recognizer import RecognizeResult
+from ..infra.anti_detection import AntiDetectionConfig, HumanProfile
 from dataclasses import dataclass, field
 
 @dataclass
@@ -16,12 +17,17 @@ class Transition:
     guard: Callable | None = None
 
 class StateMachine:
-    def __init__(self, initial: str):
+    def __init__(self, initial: str, human: HumanProfile | None = None):
         self._transitions: list[Transition] = []
         self.current = initial
         self.history: list[str] = [initial]
         self._ctx: dict = {}
         self.last_image = None  # last captured frame; kept for failure screenshots
+        # 默认 profile 是确定性的（debug_no_jitter）：直接构造状态机
+        # （测试、库用法）时行为与改动前逐字相同；生产路径由 runtime 注入
+        # 配置驱动的 profile。
+        self._human = human if human is not None else HumanProfile(
+            AntiDetectionConfig(debug_no_jitter=True))
         self._setup()
 
     def _setup(self) -> None:
@@ -67,17 +73,17 @@ class StateMachine:
 
     def _click_result(self, r: RecognizeResult) -> bool:
         x, y = r.bbox.center()
-        self._handle.click(x, y)
+        self._handle.click(x, y, anchor=r.recognizer_id)
         return True
 
-    def _click_xy(self, x: float, y: float) -> bool:
+    def _click_xy(self, x: float, y: float, anchor: str | None = None) -> bool:
         """按绝对像素点一点（反检测抖动仍走 handle.click）。
 
         用于「实测钉死的固定位置」——预设槽列就是这种：44 帧逐像素实测
         `cy=474+82*(N-1)`、`cx=1655` 零漂移。模板腿失配（_click 空操作）时
-        用它兜底，比让整轮空过强。
+        用它兜底，比让整轮空过强。`anchor` 让散布 σ 能按目标收紧。
         """
-        self._handle.click(int(x), int(y))
+        self._handle.click(int(x), int(y), anchor=anchor)
         return True
 
     def _click(self, rec_id: str) -> bool:
@@ -86,24 +92,30 @@ class StateMachine:
             return False
         return self._click_result(r)
 
+    def _pause(self, base: float | None) -> float:
+        """轮询间隔：调用方给了基准就抖动基准，没给就用 profile 的轮询节奏。"""
+        return self._human.poll_interval() if base is None else self._human.jitter(base)
+
     def _find_retry(self, rec_id: str, attempts: int = 3,
-                    interval: float = 1.0) -> RecognizeResult | None:
+                    interval: float | None = None) -> RecognizeResult | None:
+        attempts = self._human.retry_attempts(attempts)
         for i in range(attempts):
             r = self._find(rec_id)
             if r is not None:
                 return r
-            if i < attempts - 1 and interval > 0:
-                time.sleep(interval)
+            if i < attempts - 1:
+                time.sleep(self._pause(interval))
         return None
 
-    def _click_retry(self, rec_id: str, attempts: int = 3, interval: float = 1.0) -> bool:
+    def _click_retry(self, rec_id: str, attempts: int = 3,
+                     interval: float | None = None) -> bool:
         r = self._find_retry(rec_id, attempts=attempts, interval=interval)
         if r is None:
             return False
         return self._click_result(r)
 
     def _wait_for_result(self, rec_id: str, timeout: float = 10.0,
-                         interval: float = 1.0) -> RecognizeResult | None:
+                         interval: float | None = None) -> RecognizeResult | None:
         deadline = time.time() + timeout
         while True:
             r = self._find(rec_id)
@@ -111,13 +123,16 @@ class StateMachine:
                 return r
             if time.time() >= deadline:
                 return None
-            if interval > 0:
-                time.sleep(min(interval, max(0.0, deadline - time.time())))
+            pause = self._pause(interval)
+            if pause > 0:
+                time.sleep(min(pause, max(0.0, deadline - time.time())))
 
-    def _wait_for(self, rec_id: str, timeout: float = 10.0, interval: float = 1.0) -> bool:
+    def _wait_for(self, rec_id: str, timeout: float = 10.0,
+                  interval: float | None = None) -> bool:
         return self._wait_for_result(rec_id, timeout=timeout, interval=interval) is not None
 
-    def _wait_click(self, rec_id: str, timeout: float = 15.0, interval: float = 1.0) -> bool:
+    def _wait_click(self, rec_id: str, timeout: float = 15.0,
+                    interval: float | None = None) -> bool:
         r = self._wait_for_result(rec_id, timeout=timeout, interval=interval)
         if r is None:
             return False
@@ -139,10 +154,10 @@ class StateMachine:
         if self._find("ap_refill") is None:
             return False
         self._handle.click(*self._AP_CLAIM_DAILY)
-        time.sleep(1.5)
+        time.sleep(self._human.jitter(1.5))
         if self._find("ap_refill") is not None:
             self._handle.click(*self._AP_USE_ROW2)
-            time.sleep(1.5)
+            time.sleep(self._human.jitter(1.5))
         return self._close_ap_dialog()
 
     def _close_ap_dialog(self) -> bool:
@@ -153,5 +168,5 @@ class StateMachine:
             if self._find("ap_refill") is None:
                 return True
             self._handle.click(*self._AP_DIALOG_X)
-            time.sleep(1.2)
+            time.sleep(self._human.jitter(1.2))
         return self._find("ap_refill") is None

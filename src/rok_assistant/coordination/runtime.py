@@ -136,9 +136,10 @@ class RuntimeCoordinator:
                                  inst.name, inst.id, where, e)
                     raise RuntimeError(
                         f"模拟器「{inst.name}」（{inst.id}，{where}）连不上：{e}") from e
-                handle = JitteringHandleSource(handle, HumanProfile(self._config.app.anti_detection))
+                profile = HumanProfile(self._config.app.anti_detection)
+                handle = JitteringHandleSource(handle, profile)
                 for char in inst.characters[:1]:
-                    self._spawn(inst, char, handle, recognizers)
+                    self._spawn(inst, char, handle, recognizers, profile)
         except Exception:
             logger.exception("运行时启动失败，回滚已创建的 worker")
             self._rollback()
@@ -154,13 +155,14 @@ class RuntimeCoordinator:
         self._routes.clear()
         self._running = False
 
-    def _spawn(self, inst, char, handle, recognizers) -> None:
+    def _spawn(self, inst, char, handle, recognizers, profile) -> None:
         key = f"{inst.id}:{char.id}"
         runner = WorkerRunner(
             instance_id=inst.id, char_id=char.id, char_name=char.name,
             sm_factory=lambda: create_state_machine(char, handle, recognizers,
                                                     self._bus, self._rally_tracker,
-                                                    ledger=self.ledger),
+                                                    ledger=self.ledger,
+                                                    human=profile),
             handle_source=handle, event_bus=self._bus,
             # 显式给失败截图目录：冻结后 CWD 可能是任意位置，runner 的
             # 默认 Path("recordings") 会把截图写到用户找不到的地方。

@@ -48,7 +48,7 @@ class MemberStateMachine(StateMachine):
     """
 
     def __init__(self, handle_source, recognizers: dict, fill_target_leaders,
-                 char_id: str = "?", ledger=None):
+                 char_id: str = "?", ledger=None, human=None):
         self._handle = handle_source
         self._rec = recognizers
         # 归一化：config 侧是 FillLeader pydantic 对象，测试/事件侧是 dict
@@ -71,7 +71,7 @@ class MemberStateMachine(StateMachine):
         self._view_probe = ViewProbe(recognizers)
         self._pending_event = None
         self.last_event = None  # 消费后的 launch 事件留存（供调用方/测试断言）
-        super().__init__(initial="IDLE")
+        super().__init__(initial="IDLE", human=human)
 
     @staticmethod
     def _target_rec_id(target: dict) -> str:
@@ -225,7 +225,7 @@ class MemberStateMachine(StateMachine):
         # 实机 run8：面板关闭后 60 次轮询全在地图上空找，烧完整个加入
         # 窗口）——每拍先确认战争列表还开着，没了就重开再找
         if not self._find("war_title"):
-            if not self._click_retry("alliance_btn", attempts=2, interval=1.0):
+            if not self._click_retry("alliance_btn", attempts=2):
                 logger.info("成员·战争列表被关闭且联盟旗帜不可见，下拍重试")
                 ctx["join_found"] = False
                 return
@@ -262,7 +262,7 @@ class MemberStateMachine(StateMachine):
         # 「创建部队」引导气泡（2026-09-12 实机连拍实锤）：真正的创建部队
         # 表单要点气泡里的蓝色「创建部队」按钮才出现，之后才能点行军。
         # 气泡不在（游戏某些入口直接给表单）就只浪费 ~2s 重试，不影响。
-        if self._click_retry("join_create_btn", attempts=2, interval=1.0):
+        if self._click_retry("join_create_btn", attempts=2):
             logger.info("成员·点击「创建部队」气泡按钮")
         # 只等待创建部队弹窗的行军按钮出现；不点预设槽位、不点兵种
         # 图标 —— 使用游戏默认兵队（用户要求 2026-09-09）
