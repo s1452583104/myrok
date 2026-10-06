@@ -16,8 +16,12 @@ class HandleSource(Protocol):
     def capture(self) -> np.ndarray:
         """Return current screen as BGR numpy array."""
         ...
-    def click(self, x: int, y: int) -> None:
-        """Click at (x, y) in window-local pixel coordinates."""
+    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+        """Click at (x, y) in window-local pixel coordinates.
+
+        `anchor` 是可选的目标名（模板 id），只用于让反检测层按目标选择
+        散布 σ；实现类可以完全忽略它。
+        """
         ...
     def is_alive(self) -> bool:
         """True if the underlying window is still present."""
@@ -35,7 +39,7 @@ class MockHandleSource:
     def capture(self) -> np.ndarray:
         return self._screenshot.copy()
 
-    def click(self, x: int, y: int) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None) -> None:
         self.clicks.append((x, y))
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
@@ -135,7 +139,7 @@ class AdbHandleSource:
             raise RuntimeError(f"screencap returned undecodable data from {self._address}")
         return img
 
-    def click(self, x: int, y: int) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None) -> None:
         self._run_checked([self._adb_path, *self._serial_args(),
                            "shell", "input", "tap", str(int(x)), str(int(y))])
 
@@ -221,7 +225,7 @@ class Win32HandleSource:
         img = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-    def click(self, x: int, y: int) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None) -> None:
         hwnd = self._resolve_hwnd()
         if hwnd is None:
             raise RuntimeError(f"No window matching: {self._pattern}")

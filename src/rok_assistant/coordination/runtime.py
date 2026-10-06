@@ -10,7 +10,7 @@ from ..core.template_registry import TemplateRegistry
 from ..core.handle_source import create_handle_source
 from ..infra.app_paths import resolve_asset, user_dir
 from ..infra.config import RootConfig, RoleEnum, find_level_collisions
-from ..infra.anti_detection import JitteringHandleSource
+from ..infra.anti_detection import HumanProfile, JitteringHandleSource
 from ..infra.logger import get_logger
 from ..workers.factory import create_state_machine
 from ..workers.runner import WorkerRunner
@@ -136,7 +136,7 @@ class RuntimeCoordinator:
                                  inst.name, inst.id, where, e)
                     raise RuntimeError(
                         f"模拟器「{inst.name}」（{inst.id}，{where}）连不上：{e}") from e
-                handle = JitteringHandleSource(handle, self._config.app.anti_detection)
+                handle = JitteringHandleSource(handle, HumanProfile(self._config.app.anti_detection))
                 for char in inst.characters[:1]:
                     self._spawn(inst, char, handle, recognizers)
         except Exception:

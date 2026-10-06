@@ -132,26 +132,31 @@ class HumanProfile:
                                  cfg.member_response_delay_max)
 
 class JitteringHandleSource:
-    """Wraps a HandleSource: random click offset + random delay before each click.
+    """Wraps a HandleSource: 每次点击前随机延迟 + 坐标散布（含 swipe）。
 
-    With debug_no_jitter=True, coordinates and delays become deterministic
-    (offset 0, delay = midpoint of min/max), but clicks are still delayed.
+    `anchor` 只用于挑选散布 σ（见 HumanProfile.disperse），**不往下传** ——
+    下游 MockHandleSource.clicks 仍记 (x, y)。
     """
 
-    def __init__(self, inner: "HandleSource", cfg: AntiDetectionConfig):
+    def __init__(self, inner: "HandleSource", profile: HumanProfile):
         self._inner = inner
-        self._cfg = cfg
+        self._profile = profile
 
     def capture(self):
         return self._inner.capture()
 
-    def click(self, x: int, y: int) -> None:
-        time.sleep(self._cfg.random_action_delay())
-        jx, jy = jitter_offset(int(x), int(y), self._cfg)
+    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+        time.sleep(self._profile.click_delay())
+        jx, jy = self._profile.disperse(int(x), int(y), anchor)
         self._inner.click(jx, jy)
 
-    def swipe(self, *args, **kwargs):
-        return self._inner.swipe(*args, **kwargs)
+    def swipe(self, x1, y1, x2, y2, duration_ms=300):
+        # 原实现是直通转发，零抖动 —— 滑动端点与时长都该抖
+        time.sleep(self._profile.click_delay())
+        jx1, jy1 = self._profile.disperse(int(x1), int(y1), "swipe_start")
+        jx2, jy2 = self._profile.disperse(int(x2), int(y2), "swipe_end")
+        self._inner.swipe(jx1, jy1, jx2, jy2,
+                          int(self._profile.jitter(duration_ms)))
 
     def is_alive(self) -> bool:
         return self._inner.is_alive()

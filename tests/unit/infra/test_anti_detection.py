@@ -46,23 +46,25 @@ def test_jittering_handle_source_delegates_and_jitters():
     inner = MagicMock()
     cfg = AntiDetectionConfig(click_offset_px=0, action_delay_min=0.0,
                               action_delay_max=0.0, debug_no_jitter=False)
-    src = JitteringHandleSource(inner, cfg)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(0)))
     src.click(100, 200)
     inner.click.assert_called_once_with(100, 200)  # offset 0 -> exact coords
     assert src.is_alive() is inner.is_alive.return_value
     assert src.capture() is inner.capture.return_value
     src.swipe(1, 2, 3, 4, duration_ms=5)
-    inner.swipe.assert_called_once_with(1, 2, 3, 4, duration_ms=5)
+    args = inner.swipe.call_args.args
+    assert args[:4] == (1, 2, 3, 4)          # offset 0 -> 端点不变
+    assert 3 <= args[4] <= 7                 # 5 ± 30%
 
 def test_jittering_handle_source_offset_bounds():
     inner = MagicMock()
     cfg = AntiDetectionConfig(click_offset_px=8, action_delay_min=0.0,
                               action_delay_max=0.0, debug_no_jitter=False)
-    src = JitteringHandleSource(inner, cfg)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(7)))
     for _ in range(50):
         src.click(100, 100)
-        jx, jy = inner.click.call_args.args
-        assert 92 <= jx <= 108 and 92 <= jy <= 108
+        jx, jy = inner.click.call_args.args[:2]
+        assert 76 <= jx <= 124 and 76 <= jy <= 124      # ±3σ
 
 def test_jittering_handle_source_sleeps_before_click(monkeypatch):
     import rok_assistant.infra.anti_detection as ad_mod
@@ -72,7 +74,7 @@ def test_jittering_handle_source_sleeps_before_click(monkeypatch):
     inner.click.side_effect = lambda x, y: calls.append(("click", x, y))
     cfg = AntiDetectionConfig(click_offset_px=0, action_delay_min=0.01,
                               action_delay_max=0.02, debug_no_jitter=False)
-    src = JitteringHandleSource(inner, cfg)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(0)))
     src.click(100, 200)
     assert len(calls) == 2
     assert calls[0][0] == "sleep"
@@ -83,7 +85,7 @@ def test_jittering_handle_source_debug_no_jitter_exact_coords():
     inner = MagicMock()
     cfg = AntiDetectionConfig(click_offset_px=8, action_delay_min=0.0,
                               action_delay_max=0.0, debug_no_jitter=True)
-    src = JitteringHandleSource(inner, cfg)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(0)))
     src.click(100, 200)
     inner.click.assert_called_once_with(100, 200)
 
@@ -222,3 +224,32 @@ def test_member_response_delay_debug_is_midpoint():
     p = _profile(member_response_delay_min=10.0, member_response_delay_max=60.0,
                  debug_no_jitter=True)
     assert p.member_response_delay() == 35.0
+
+
+def test_jittering_handle_source_passes_anchor_to_profile():
+    inner = MagicMock()
+    cfg = AntiDetectionConfig(click_offset_px=20,
+                              anchor_sigma={"preset_slot": 0},
+                              action_delay_min=0.0, action_delay_max=0.0)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(3)))
+    for _ in range(30):
+        src.click(100, 200, anchor="preset_slot")
+        assert inner.click.call_args.args[:2] == (100, 200)   # σ=0 -> 精确
+
+
+def test_jittering_handle_source_does_not_forward_anchor():
+    """anchor 只用于选 σ，不往下传 —— MockHandleSource.clicks 仍是 (x, y)。"""
+    inner = MagicMock()
+    cfg = AntiDetectionConfig(click_offset_px=0, action_delay_min=0.0,
+                              action_delay_max=0.0)
+    src = JitteringHandleSource(inner, HumanProfile(cfg, rng=random.Random(1)))
+    src.click(100, 200, anchor="march_btn")
+    inner.click.assert_called_once_with(100, 200)
+
+
+def test_mock_handle_source_accepts_anchor_and_records_xy():
+    from rok_assistant.core.handle_source import MockHandleSource
+    import numpy as np
+    h = MockHandleSource(np.zeros((2, 2, 3), np.uint8))
+    h.click(1, 2, anchor="march_btn")
+    assert h.clicks == [(1, 2)]
