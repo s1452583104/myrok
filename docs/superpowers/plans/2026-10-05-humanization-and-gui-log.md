@@ -14,7 +14,7 @@
 
 - 解释器一律用 `.venv/Scripts/python.exe`，**不要**用系统 `python`（那是 torch+cpu，会静默降级）。
 - 控制台输出含中文/`✓` 时加 `-X utf8`（控制台是 GBK）。
-- 测试默认只跑相关子集（`pytest tests/unit/xxx.py -q`）；**每个 Task 结束时**跑该 Task 的相关子集，**Task B8** 跑一次全套。
+- 测试默认只跑相关子集（`pytest tests/unit/xxx.py -q`）；**每个 Task 结束时**跑该 Task 的相关子集，**Task 11** 跑一次全套。
 - 本计划**不新增任何第三方依赖**。
 - 配置字段：`AntiDetectionConfig` 现有 7 个字段**全部保留原名**，不得重命名或删除。
 - 兼容性硬要求：`debug_no_jitter: true` 必须让**所有**随机化方法返回确定性值。
@@ -33,7 +33,7 @@
 
 # Part A — 每实例日志区
 
-### Task A1: 线程名 → char_id 的纯解析函数
+### Task 1: 线程名 → char_id 的纯解析函数
 
 **Files:**
 - Create: `src/rok_assistant/gui/log_handler.py`
@@ -123,7 +123,7 @@ git commit -m "feat: 新增日志归属解析（线程名 -> char_id）"
 
 ---
 
-### Task A2: QtLogHandler + MainWindow 接线
+### Task 2: QtLogHandler + MainWindow 接线
 
 **Files:**
 - Modify: `src/rok_assistant/gui/log_handler.py`
@@ -131,7 +131,7 @@ git commit -m "feat: 新增日志归属解析（线程名 -> char_id）"
 - Test: `tests/unit/gui/test_log_handler.py`（追加）、`tests/integration/test_gui_smoke.py`（追加）
 
 **Interfaces:**
-- Consumes: `char_id_from_thread_name`（Task A1）
+- Consumes: `char_id_from_thread_name`（Task 1）
 - Produces: `QtLogHandler(logging.Handler)` —— `QObject`，信号 `record_emitted = pyqtSignal(str, str)`（`char_id`, 已格式化的行文本）；`char_id` 为空串表示"非 worker 线程"。
 - Produces: `MainWindow._on_log_line(char_id: str, text: str) -> None`
 
@@ -310,7 +310,7 @@ git commit -m "feat: 日志按线程名归属投递到实例卡片"
 
 ---
 
-### Task A3: CharacterCard 内嵌日志区
+### Task 3: CharacterCard 内嵌日志区
 
 **Files:**
 - Modify: `src/rok_assistant/gui/character_card.py`
@@ -440,7 +440,7 @@ git commit -m "feat: 角色卡片内嵌日志区（环形缓冲 200 行）"
 
 # Part B — HumanProfile 人性化层
 
-### Task B1: HumanProfile 骨架 + 延迟采样 + 坐标散布
+### Task 4: HumanProfile 骨架 + 延迟采样 + 坐标散布
 
 **Files:**
 - Modify: `src/rok_assistant/infra/anti_detection.py`
@@ -644,7 +644,7 @@ git commit -m "feat: HumanProfile 延迟分布（Beta + 突发）与高斯坐标
 
 ---
 
-### Task B2: HumanProfile 节奏方法
+### Task 5: HumanProfile 节奏方法
 
 **Files:**
 - Modify: `src/rok_assistant/infra/anti_detection.py`
@@ -788,7 +788,7 @@ git commit -m "feat: HumanProfile 节奏方法（轮询/抖动/重试/两号解�
 
 ---
 
-### Task B3: HandleSource.click 加 anchor；JitteringHandleSource 改吃 profile；swipe 补抖动
+### Task 6: HandleSource.click 加 anchor；JitteringHandleSource 改吃 profile；swipe 补抖动
 
 **Files:**
 - Modify: `src/rok_assistant/core/handle_source.py`（Protocol `:19`、`MockHandleSource:38`、`AdbHandleSource:138`、`Win32HandleSource:224`）
@@ -797,7 +797,7 @@ git commit -m "feat: HumanProfile 节奏方法（轮询/抖动/重试/两号解�
 - Test: `tests/unit/infra/test_anti_detection.py`（改既有 3 条 + 追加）
 
 **Interfaces:**
-- Consumes: `HumanProfile`（Task B1/B2）
+- Consumes: `HumanProfile`（Task 4/B2）
 - Produces: `HandleSource.click(x: int, y: int, anchor: str | None = None) -> None`
 - Produces: `JitteringHandleSource(inner: HandleSource, profile: HumanProfile)`
 
@@ -942,7 +942,7 @@ git commit -m "feat: click 增加 anchor 形参；swipe 补抖动；JitteringHan
 
 ---
 
-### Task B4: 配置字段与样例文件同步
+### Task 7: 配置字段与样例文件同步
 
 **Files:**
 - Modify: `config.yaml:18-25`
@@ -951,7 +951,7 @@ git commit -m "feat: click 增加 anchor 形参；swipe 补抖动；JitteringHan
 - Test: `tests/unit/gui/test_labels.py`（追加）
 
 **Interfaces:**
-- Consumes: Task B1/B2 新增的 6 个配置字段
+- Consumes: Task 4/B2 新增的 6 个配置字段
 - Produces: 无新代码接口；`LOC_LABELS` 覆盖全部新字段
 
 - [ ] **Step 1: Write the failing test**
@@ -1058,7 +1058,7 @@ git commit -m "feat: 配置新增人性化字段；同步 config.yaml / 示例 /
 
 ---
 
-### Task B5: 状态机接线 + factory/runtime 注入
+### Task 8: 状态机接线 + factory/runtime 注入
 
 **Files:**
 - Modify: `src/rok_assistant/workers/state_machine.py`（`__init__:19`、`_click_result:68`、`_click_xy:73`、`_find_retry:89`、`_wait_for_result:105`、`_wait_for:117`、`_wait_click:120`、`_refill_ap:142,145`、`_close_ap_dialog:156`）
@@ -1317,7 +1317,7 @@ git commit -m "feat: 状态机接入 HumanProfile（轮询节奏/固定 sleep/an
 
 ---
 
-### Task B6: runner 与 either_sm 的固定间隔抖动
+### Task 9: runner 与 either_sm 的固定间隔抖动
 
 **Files:**
 - Modify: `src/rok_assistant/workers/runner.py`（`_run:167,193`、`_set_status` 附近的 `_cooldown`/`_poll`）
@@ -1367,7 +1367,7 @@ def test_wait_return_poll_is_jittered():
     assert all(21.0 <= v <= 39.0 for v in seen)
 ```
 
-> 这两条先立住"抖动函数本身可用"，下面 Step 3/4 的接线由 Task B8 的全套回归 + 实机观察兜底。
+> 这两条先立住"抖动函数本身可用"，下面 Step 3/4 的接线由 Task 11 的全套回归 + 实机观察兜底。
 > **不要**为了断言 `_next_check` 的精确值去 mock `time.time`——那会把测试绑死在实现细节上。
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1430,7 +1430,7 @@ git commit -m "feat: 冷却/轮询/返城检测间隔去规律化"
 
 ---
 
-### Task B7: 两号解耦（成员号延迟响应集结）
+### Task 10: 两号解耦（成员号延迟响应集结）
 
 **Files:**
 - Modify: `src/rok_assistant/workers/member_sm.py`（`__init__:50`、`_setup:81-83`、`on_rally_launched:118`）
@@ -1544,7 +1544,7 @@ git commit -m "feat: 成员号延迟响应集结，破两号 lockstep 关联"
 
 ---
 
-### Task B8: 全量回归 + 文档
+### Task 11: 全量回归 + 文档
 
 **Files:**
 - Modify: `docs/PROGRESS.md`
