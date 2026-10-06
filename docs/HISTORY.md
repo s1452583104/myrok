@@ -1408,7 +1408,7 @@ Win11 把控制台路由给 Windows Terminal，第一次按老类名找是找不
 
 接线点（均通过可选注入，不注入即旧行为）：`StateMachine.__init__(..., human=None)`、
 `_pause`（无基准走 `poll_interval()`，有基准走 `jitter(base)`）、`_find_retry`（`retry_attempts`）、
-`runner` 的冷却/返城检测间隔、`member_sm` 的集结响应、`either_sm` 透传、`runtime`/`factory` 的
+`runner` 的重启冷却与自身轮询、`either_sm` 的返城检测间隔、`member_sm` 的集结响应、`runtime`/`factory` 的
 `create_state_machine`/`WorkerRunner`。`JitteringHandleSource` 改吃 `HumanProfile`；
 `click` 增 `anchor` 形参（只用于选 σ，不往下传，`MockHandleSource` 仍记 `(x, y)`）；
 **`swipe` 原先是直通转发、零抖动**，现在端点与时长都抖。
@@ -1431,7 +1431,7 @@ Win11 把控制台路由给 Windows Terminal，第一次按老类名找是找不
 `poll_interval()` 在 `debug_no_jitter=True` 时返回 `state_delay_min/max` 的**中点**。
 取 `0.8/1.2` 时中点恰好是 **`1.0`**——正是本分支之前 `_wait_for_result` / `_find_retry`
 **硬编码的默认间隔**（旧签名 `interval: float = 1.0`）。于是**所有没有注入 `HumanProfile`
-的调用点，节奏与改动前逐位相同**，既有测试不改一行也是绿的。
+的调用点，节奏与改动前逐位相同**，既有测试无需改动一行。
 
 若默认取 `0.6/1.6`，中点会变成 `1.1`，每个未接线的调用点节奏都会漂移——
 这正是要避开的隐性回归。
