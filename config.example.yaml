@@ -24,7 +24,6 @@ app:
   max_rounds: 10                 # 每角色最多完成多少轮（开集结+填兵+返城）后自动收工
   max_consecutive_failures: 3    # 连续 N 轮失败（或 2N 次 step 异常，疑似体力耗尽）自动收工
   # 反检测随机化。目的：让点击的坐标/节奏不完全一致，不像脚本。
-  # 下面只有前三项真的生效（JitteringHandleSource 只包了点击这一条路径）：
   anti_detection:
     click_offset_px: 8      # 点击散布的默认 σ（高斯，裁剪到 ±3σ）；0 = 点得完全准
     action_delay_min: 0.1   # 每次点击前延迟的下限（秒）
