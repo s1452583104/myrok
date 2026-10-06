@@ -165,3 +165,60 @@ def test_disperse_debug_no_jitter_is_exact():
     p = _profile(click_offset_px=10, debug_no_jitter=True)
     assert p.disperse(500, 500) == (500, 500)
     assert p.disperse(500, 500, "march_btn") == (500, 500)
+
+
+def test_poll_interval_within_state_delay_bounds():
+    p = _profile(state_delay_min=0.5, state_delay_max=1.5)
+    samples = [p.poll_interval() for _ in range(200)]
+    assert all(0.5 <= s <= 1.5 for s in samples)
+    assert len(set(samples)) > 50        # 不是恒定值
+
+
+def test_poll_interval_debug_is_midpoint():
+    p = _profile(state_delay_min=0.8, state_delay_max=1.2,
+                 debug_no_jitter=True)
+    assert p.poll_interval() == 1.0      # 与改动前的固定 1.0s 一致
+
+
+def test_jitter_scales_base():
+    p = _profile(jitter_ratio=0.3)
+    for _ in range(200):
+        assert 0.7 <= p.jitter(1.0) <= 1.3
+
+
+def test_jitter_zero_base_is_zero():
+    assert _profile().jitter(0.0) == 0.0
+
+
+def test_jitter_debug_is_identity():
+    p = _profile(debug_no_jitter=True)
+    assert p.jitter(1.5) == 1.5
+
+
+def test_retry_attempts_varies_but_stays_positive():
+    p = _profile()
+    seen = {p.retry_attempts(3) for _ in range(200)}
+    assert seen <= {2, 3, 4}
+    assert len(seen) == 3
+    assert all(p.retry_attempts(1) >= 1 for _ in range(50))
+
+
+def test_retry_attempts_debug_is_identity():
+    assert _profile(debug_no_jitter=True).retry_attempts(3) == 3
+
+
+def test_member_response_delay_default_is_zero():
+    """默认关闭：不能凭空给成员号加一分钟延迟。"""
+    assert _profile().member_response_delay() == 0.0
+
+
+def test_member_response_delay_within_bounds():
+    p = _profile(member_response_delay_min=10.0, member_response_delay_max=60.0)
+    samples = [p.member_response_delay() for _ in range(200)]
+    assert all(10.0 <= s <= 60.0 for s in samples)
+
+
+def test_member_response_delay_debug_is_midpoint():
+    p = _profile(member_response_delay_min=10.0, member_response_delay_max=60.0,
+                 debug_no_jitter=True)
+    assert p.member_response_delay() == 35.0
