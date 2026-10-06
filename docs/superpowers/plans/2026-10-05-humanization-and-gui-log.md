@@ -162,7 +162,7 @@ def test_handler_emits_char_id_and_text(qapp):
     h.emit(rec)
     assert len(received) == 1
     cid, text = received[0]
-    assert cid == "MainThread" and False or cid == ""   # 主线程 -> 空串
+    assert cid == ""                     # 主线程 -> 空串，由调用方转状态栏
     assert "hello world" in text
 
 
@@ -180,8 +180,6 @@ def test_handler_uses_thread_name_for_attribution(qapp):
     t.join()
     assert received[0][0] == "阑珊"
 ```
-
-> 注：`test_handler_emits_char_id_and_text` 里那行 `assert cid == "MainThread" and False or cid == ""` 是笔误写法，**改成** `assert cid == ""` 再跑。
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -211,8 +209,9 @@ class QtLogHandler(logging.Handler, QObject):
     def __init__(self) -> None:
         logging.Handler.__init__(self)
         QObject.__init__(self)
-        self.setFormatter(logging.Formatter(
-            "%(asctime)s %(message)s", "%H:%M:%S"))
+        # 只输出正文：时间戳由卡片侧的 LogPanel.append_message 加，
+        # 两边都加会出双时间戳（预检裁定 7）。
+        self.setFormatter(logging.Formatter("%(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -278,12 +277,16 @@ from .log_handler import QtLogHandler
     def _install_log_handler(self):
         """挂到 root logger，把日志行投给对应卡片。
 
-        只装一次；`setup_logging` 有 `_initialized` 守卫且不碰这里，
-        所以无头驱动（`_run_goal.py`）完全走不到这条路径。
+        无头驱动（`_run_goal.py`）不构造 MainWindow，完全走不到这条路径。
+        先把同类型的旧 handler 摘掉：`test_gui_smoke.py` 每条用例都新建一个
+        MainWindow，否则 handler 会随测试条数线性累积（预检裁定 8）。
         """
+        root = logging.getLogger()
+        for old in [h for h in root.handlers if isinstance(h, QtLogHandler)]:
+            root.removeHandler(old)
         self._log_handler = QtLogHandler()
         self._log_handler.record_emitted.connect(self._on_log_line)
-        logging.getLogger().addHandler(self._log_handler)
+        root.addHandler(self._log_handler)
 
     def _on_log_line(self, char_id: str, text: str):
         if not char_id:
@@ -358,12 +361,12 @@ Expected: FAIL —— `AttributeError: 'CharacterCard' object has no attribute '
 
 ```python
 from __future__ import annotations
-from PyQt6.QtWidgets import (QFrame, QVBoxLayout, QLabel, QPlainTextEdit,
-                             QSizePolicy)
+from PyQt6.QtWidgets import QFrame, QVBoxLayout, QLabel, QSizePolicy
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
 from .labels import role_label, state_label
+from .log_panel import LogPanel
 
 _LOG_MAX_LINES = 200
 
@@ -388,11 +391,9 @@ class CharacterCard(QFrame):
         self.thumbnail.setStyleSheet("background: #222;")
         self.thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail.setText("(no image)")
-        # 日志区：只读 + 环形缓冲。归属由 MainWindow 按线程名解析后投递
-        # （见 gui/log_handler.py），这里只负责显示。
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(_LOG_MAX_LINES)
+        # 复用既有的 LogPanel（只读 + 环形裁剪 + 时间戳），不另造一个同款。
+        # 归属由 MainWindow 按线程名解析后投递（见 gui/log_handler.py）。
+        self.log_view = LogPanel(max_lines=_LOG_MAX_LINES)
         self.log_view.setSizePolicy(QSizePolicy.Policy.Preferred,
                                     QSizePolicy.Policy.Expanding)
         layout.addWidget(self.title_label)
@@ -401,9 +402,9 @@ class CharacterCard(QFrame):
         layout.addWidget(self.log_view)
 
     def append_log(self, text: str) -> None:
-        self.log_view.appendPlainText(text)
-        self.log_view.verticalScrollBar().setValue(
-            self.log_view.verticalScrollBar().maximum())
+        self.log_view.append_message(text)
+        bar = self.log_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def set_thumbnail(self, img_bytes: bytes) -> None:
         pix = QPixmap()
@@ -422,7 +423,11 @@ class CharacterCard(QFrame):
         self.status_label.setText(state_label(status))
 ```
 
-> 注意：原实现末尾有 `layout.addStretch()`，现在日志区占满剩余空间，**去掉 stretch**。
+> 两处偏离最初写法（预检裁定，理由见 ledger）：
+> 1. **复用 `gui/log_panel.py` 的 `LogPanel`**，而不是新建裸 `QPlainTextEdit`。它已经有只读、环形裁剪、`append_message` 时间戳，src 内零调用方，正是为这个场景写的。新造一个几乎相同的 widget 是重复实现。
+> 2. 因此 `append_log` 调 `append_message`，并**自己滚到底**（`LogPanel` 没有这个行为，也不去改它——它的 `test_log_panel_caps_lines` 锁定了现有语义）。
+>
+> 另外：原实现末尾有 `layout.addStretch()`，现在日志区占满剩余空间，**去掉 stretch**。
 
 - [ ] **Step 4: Run to verify it passes**
 
