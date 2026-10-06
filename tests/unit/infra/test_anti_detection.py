@@ -9,7 +9,7 @@ def test_default_config():
     assert cfg.click_offset_px == 8
     assert cfg.action_delay_min == 0.1
     assert cfg.action_delay_max == 0.5
-    assert cfg.state_delay_min == 0.3
+    assert cfg.state_delay_min == 0.8
     assert cfg.state_delay_max == 1.2
     assert cfg.jitter_ratio == 0.3
     assert cfg.debug_no_jitter is False
@@ -86,3 +86,82 @@ def test_jittering_handle_source_debug_no_jitter_exact_coords():
     src = JitteringHandleSource(inner, cfg)
     src.click(100, 200)
     inner.click.assert_called_once_with(100, 200)
+
+import random
+
+from rok_assistant.infra.anti_detection import HumanProfile
+
+
+def _profile(**kw):
+    return HumanProfile(AntiDetectionConfig(**kw), rng=random.Random(1234))
+
+
+def test_click_delay_within_bounds():
+    p = _profile(action_delay_min=1.0, action_delay_max=2.0, burst_prob=0.0)
+    for _ in range(200):
+        assert 1.0 <= p.click_delay() <= 2.0
+
+
+def test_click_delay_is_not_uniform():
+    """beta 形状应当偏短：均值明显低于区间中点。"""
+    p = _profile(action_delay_min=0.0, action_delay_max=1.0, burst_prob=0.0)
+    samples = [p.click_delay() for _ in range(400)]
+    mean = sum(samples) / len(samples)
+    assert mean < 0.40            # Beta(2,5) 均值 = 2/7 ≈ 0.286
+    assert mean > 0.15            # 但也不能退化到 0
+
+
+def test_click_delay_uniform_shape_is_centered():
+    """delay_shape=uniform 时均值回到区间中点附近（回退路径）。"""
+    p = _profile(action_delay_min=0.0, action_delay_max=1.0,
+                 burst_prob=0.0, delay_shape="uniform")
+    samples = [p.click_delay() for _ in range(400)]
+    mean = sum(samples) / len(samples)
+    assert 0.40 < mean < 0.60
+
+
+def test_burst_prob_one_always_short():
+    p = _profile(action_delay_min=1.0, action_delay_max=2.0,
+                 burst_prob=1.0, burst_scale=0.25)
+    for _ in range(200):
+        assert 1.0 <= p.click_delay() <= 1.25
+
+
+def test_click_delay_debug_no_jitter_is_midpoint():
+    p = _profile(action_delay_min=1.0, action_delay_max=3.0,
+                 debug_no_jitter=True)
+    assert p.click_delay() == 2.0
+
+
+def test_disperse_is_gaussian_around_target():
+    p = _profile(click_offset_px=10)
+    xs = [p.disperse(500, 500)[0] - 500 for _ in range(500)]
+    mean = sum(xs) / len(xs)
+    var = sum((x - mean) ** 2 for x in xs) / len(xs)
+    assert abs(mean) < 2.0
+    assert 8.0 < var ** 0.5 < 12.0      # 标准差 ≈ σ = 10
+
+
+def test_disperse_clipped_at_three_sigma():
+    p = _profile(click_offset_px=10)
+    for _ in range(500):
+        x, y = p.disperse(500, 500)
+        assert abs(x - 500) <= 30 and abs(y - 500) <= 30
+
+
+def test_disperse_anchor_sigma_overrides_default():
+    p = _profile(click_offset_px=20, anchor_sigma={"preset_slot": 2})
+    xs = [p.disperse(500, 500, "preset_slot")[0] - 500 for _ in range(300)]
+    assert all(abs(x) <= 6 for x in xs)          # 3 * σ(2)
+
+
+def test_disperse_unknown_anchor_falls_back_to_default():
+    p = _profile(click_offset_px=10, anchor_sigma={"preset_slot": 2})
+    xs = [p.disperse(500, 500, "march_btn")[0] - 500 for _ in range(300)]
+    assert max(abs(x) for x in xs) > 6           # 用的是 σ=10 而不是 2
+
+
+def test_disperse_debug_no_jitter_is_exact():
+    p = _profile(click_offset_px=10, debug_no_jitter=True)
+    assert p.disperse(500, 500) == (500, 500)
+    assert p.disperse(500, 500, "march_btn") == (500, 500)

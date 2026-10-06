@@ -1,6 +1,6 @@
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,10 +11,14 @@ class AntiDetectionConfig:
     click_offset_px: int = 8
     action_delay_min: float = 0.1
     action_delay_max: float = 0.5
-    state_delay_min: float = 0.3
+    state_delay_min: float = 0.8
     state_delay_max: float = 1.2
     jitter_ratio: float = 0.3
     debug_no_jitter: bool = False
+    delay_shape: str = "beta"          # beta | uniform（uniform = 回退旧行为）
+    burst_prob: float = 0.3            # 走「连点」短间隔的概率
+    burst_scale: float = 0.25          # 连点间隔 = min + (max-min)*U(0, scale)
+    anchor_sigma: dict = field(default_factory=dict)   # 模板 id -> σ 覆盖
 
     def random_action_delay(self) -> float:
         if self.debug_no_jitter:
@@ -39,6 +43,54 @@ def jitter_delay(base: float, cfg: AntiDetectionConfig) -> float:
         return base
     jitter = base * cfg.jitter_ratio
     return max(0.0, base + random.uniform(-jitter, jitter))
+
+# Beta(2, 5)：偏短、带长尾。真人点击是突发式的——短间隔为主，偶尔拖长，
+# 而不是均匀铺满整个区间。形状硬编码，不额外暴露 a/b 旋钮。
+_BETA_A, _BETA_B = 2.0, 5.0
+# 高斯散布裁剪到 ±3σ：截尾避免偶发的大偏移把点击甩出目标。
+_SIGMA_CLIP = 3.0
+
+
+class HumanProfile:
+    """一处集中全部「像人」的随机化：延迟分布、坐标散布、动作节奏。
+
+    注入 `random.Random` 后完全可复现（测试用）。`debug_no_jitter=True`
+    时**所有**方法返回确定性值 —— 这是调试逃生口，也是既有测试的依赖。
+    """
+
+    def __init__(self, cfg: "AntiDetectionConfig",
+                 rng: random.Random | None = None):
+        self._cfg = cfg
+        self._rng = rng if rng is not None else random.Random()
+
+    # ---- 点击前延迟 ----
+    def click_delay(self) -> float:
+        cfg = self._cfg
+        lo, hi = cfg.action_delay_min, cfg.action_delay_max
+        if cfg.debug_no_jitter:
+            return (lo + hi) / 2
+        if hi <= lo:
+            return lo
+        if cfg.burst_prob > 0 and self._rng.random() < cfg.burst_prob:
+            return lo + (hi - lo) * self._rng.uniform(0.0, cfg.burst_scale)
+        if cfg.delay_shape == "uniform":
+            return self._rng.uniform(lo, hi)
+        return lo + (hi - lo) * self._rng.betavariate(_BETA_A, _BETA_B)
+
+    # ---- 坐标散布 ----
+    def disperse(self, x: int, y: int, anchor: str | None = None) -> tuple[int, int]:
+        cfg = self._cfg
+        if cfg.debug_no_jitter:
+            return int(x), int(y)
+        sigma = cfg.click_offset_px
+        if anchor is not None:
+            sigma = cfg.anchor_sigma.get(anchor, sigma)
+        if sigma <= 0:
+            return int(x), int(y)
+        limit = _SIGMA_CLIP * sigma
+        dx = max(-limit, min(limit, self._rng.gauss(0.0, sigma)))
+        dy = max(-limit, min(limit, self._rng.gauss(0.0, sigma)))
+        return int(round(x + dx)), int(round(y + dy))
 
 class JitteringHandleSource:
     """Wraps a HandleSource: random click offset + random delay before each click.
