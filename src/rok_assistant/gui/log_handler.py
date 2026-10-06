@@ -54,11 +54,8 @@ class QtLogHandler(logging.Handler, QObject):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             text = self.format(record)
-            cid = char_id_from_thread_name(threading.current_thread().name)
-            self.record_emitted.emit(cid, text)
         except Exception:                      # noqa: BLE001 - 日志不能反过来炸
-            # 除了格式化错误，还要兜住「handler 的 C++ 对象已随窗口销毁」：
-            # root logger 上可能残留一个 Python 包装还活着、C++ 已删的死
-            # handler（测试反复建窗），此时信号 emit 抛 RuntimeError，
-            # 若不吞掉会从 logger.error 一路炸穿调用方。
             self.handleError(record)
+            return
+        cid = char_id_from_thread_name(threading.current_thread().name)
+        self.record_emitted.emit(cid, text)

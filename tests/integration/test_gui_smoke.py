@@ -141,3 +141,22 @@ def test_main_thread_log_line_goes_to_status_bar(qapp):
     w._on_log_line("", "配置加载失败")
     assert "配置加载失败" in w.statusBar().currentMessage()
     assert "配置加载失败" not in w._cards["worker"].log_view.toPlainText()
+
+
+def test_window_destruction_detaches_log_handler(qapp):
+    """窗口销毁后，它的 handler 必须从 root logger 上摘掉。
+
+    否则 root 上会残留一个「Python 包装还在、C++ 已删」的死 handler，
+    之后任何 logger.* 调用都会在 emit 里抛 RuntimeError（评审 Important）。
+    """
+    import logging
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from rok_assistant.gui.main_window import MainWindow
+    root = logging.getLogger()
+    w = MainWindow(controller=FakeController())
+    handler = w._log_handler
+    assert any(h is handler for h in root.handlers)
+    w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qapp.processEvents()
+    assert not any(h is handler for h in root.handlers)

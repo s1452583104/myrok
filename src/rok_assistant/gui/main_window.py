@@ -88,6 +88,17 @@ class MainWindow(QMainWindow):
         self._log_handler = QtLogHandler()
         self._log_handler.record_emitted.connect(self._on_log_line)
         root.addHandler(self._log_handler)
+        # handler 的存活期绑到窗口：窗口 C++ 销毁时立刻把它从 root logger
+        # 摘掉。否则 root 上会残留一个「Python 包装还在、C++ 已删」的死
+        # handler，之后任何 logger.* 调用都会在 emit 里抛 RuntimeError
+        # （2026-10-06 评审 Important）。
+        #
+        # 用 lambda 捕获 handler、不连 self 的绑定方法：PyQt 在 `destroyed`
+        # 发射时已把接收者 self 判为销毁中，绑定方法不会被调用（实测只有
+        # lambda/普通可调用会触发）；removeHandler 只动 Python 列表，
+        # 不碰已销毁的 C++ 对象。
+        handler = self._log_handler
+        self.destroyed.connect(lambda *_: root.removeHandler(handler))
 
     def _on_log_line(self, char_id: str, text: str):
         if not char_id:
