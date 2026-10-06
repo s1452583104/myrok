@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QComboBox, QScrollArea, QStatusBar, QMessageBox
@@ -8,6 +10,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from .character_card import CharacterCard
 from .controller import GuiController
+from .log_handler import QtLogHandler
 from ..infra.app_paths import config_path, ensure_user_files, user_dir
 from ..infra.logger import get_logger
 
@@ -25,6 +28,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._rebuild_cards()
         self._connect_controller()
+        self._install_log_handler()
         self._setup_refresh_timer()
 
     # ---------------- UI 骨架 ----------------
@@ -70,6 +74,28 @@ class MainWindow(QMainWindow):
         # worker 线程经信号跨线程送达（Qt 自动排队），槽内访问控件是主线程安全的
         self._controller.status_changed.connect(self._on_status_changed)
         self._controller.error_occurred.connect(self._on_error)
+
+    def _install_log_handler(self):
+        """挂到 root logger，把日志行投给对应卡片。
+
+        无头驱动（`_run_goal.py`）不构造 MainWindow，完全走不到这条路径。
+        先把同类型的旧 handler 摘掉：`test_gui_smoke.py` 每条用例都新建一个
+        MainWindow，否则 handler 会随测试条数线性累积（预检裁定 8）。
+        """
+        root = logging.getLogger()
+        for old in [h for h in root.handlers if isinstance(h, QtLogHandler)]:
+            root.removeHandler(old)
+        self._log_handler = QtLogHandler()
+        self._log_handler.record_emitted.connect(self._on_log_line)
+        root.addHandler(self._log_handler)
+
+    def _on_log_line(self, char_id: str, text: str):
+        if not char_id:
+            self.statusBar().showMessage(text)
+            return
+        card = self._cards.get(char_id)
+        if card is not None:
+            card.append_log(text)
 
     # ---------------- 角色卡片 ----------------
     def _rebuild_cards(self):

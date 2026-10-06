@@ -124,3 +124,20 @@ def test_timer_pulls_snapshots_into_cards(qapp):
     w = MainWindow(controller=fake)
     w._on_refresh()   # 直接调用，避免依赖真实定时器时序
     assert not w._cards["boss"].thumbnail.pixmap().isNull()
+
+
+def test_log_line_routes_to_matching_card(qapp):
+    """worker 线程的日志行进对应卡片；主线程的行进状态栏。"""
+    from rok_assistant.gui.main_window import MainWindow
+    w = MainWindow(controller=FakeController())
+    w._on_log_line("worker", "12:00:01 等待车头发车")
+    assert "等待车头发车" in w._cards["worker"].log_view.toPlainText()
+    assert "等待车头发车" not in w._cards["boss"].log_view.toPlainText()
+
+
+def test_main_thread_log_line_goes_to_status_bar(qapp):
+    from rok_assistant.gui.main_window import MainWindow
+    w = MainWindow(controller=FakeController())
+    w._on_log_line("", "配置加载失败")
+    assert "配置加载失败" in w.statusBar().currentMessage()
+    assert "配置加载失败" not in w._cards["worker"].log_view.toPlainText()

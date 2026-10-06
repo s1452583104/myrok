@@ -7,6 +7,11 @@
 """
 from __future__ import annotations
 
+import logging
+import threading
+
+from PyQt6.QtCore import QObject, pyqtSignal
+
 _WORKER_PREFIX = "worker:"
 
 
@@ -22,3 +27,38 @@ def char_id_from_thread_name(name: str) -> str:
     if len(parts) != 2 or not parts[1]:
         return ""
     return parts[1]
+
+
+class QtLogHandler(logging.Handler, QObject):
+    """把日志行经 Qt 信号送到主线程。
+
+    worker 线程里 `emit`，Qt 自动排队到主线程 —— 与 `controller.py:89`
+    的 status_changed 同一模式。`char_id` 为空串表示非 worker 线程。
+    """
+
+    record_emitted = pyqtSignal(str, str)
+
+    def __init__(self) -> None:
+        logging.Handler.__init__(self)
+        QObject.__init__(self)
+        # 只输出正文：时间戳由卡片侧的 LogPanel.append_message 加，
+        # 两边都加会出双时间戳（预检裁定 7）。
+        self.setFormatter(logging.Formatter("%(message)s"))
+        # 退出时 logging.shutdown 会对每个 handler 读 flushOnClose；此时
+        # QObject 的 C++ 对象已被 PyQt 先一步销毁，getattr 抛 RuntimeError，
+        # 而 shutdown 只吞 OSError/ValueError —— 异常会让它整个中断，后续
+        # handler 不再 flush/close。预置 Python 侧属性即可绕过（同
+        # logging.handlers.MemoryHandler 的做法），本 handler 无需 flush。
+        self.flushOnClose = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = self.format(record)
+            cid = char_id_from_thread_name(threading.current_thread().name)
+            self.record_emitted.emit(cid, text)
+        except Exception:                      # noqa: BLE001 - 日志不能反过来炸
+            # 除了格式化错误，还要兜住「handler 的 C++ 对象已随窗口销毁」：
+            # root logger 上可能残留一个 Python 包装还活着、C++ 已删的死
+            # handler（测试反复建窗），此时信号 emit 抛 RuntimeError，
+            # 若不吞掉会从 logger.error 一路炸穿调用方。
+            self.handleError(record)
