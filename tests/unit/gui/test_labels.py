@@ -55,3 +55,12 @@ def test_humanize_loc_empty_for_root_level_error():
 ])
 def test_known_config_keys_are_translated(key):
     assert humanize_loc((key,)) != key
+
+
+def test_all_anti_detection_fields_have_chinese_labels():
+    """配置校验报错会把 loc 翻中文；漏一个就露出英文键名。"""
+    from rok_assistant.infra.anti_detection import AntiDetectionConfig
+    from rok_assistant.gui.labels import LOC_LABELS
+    import dataclasses
+    for f in dataclasses.fields(AntiDetectionConfig):
+        assert f.name in LOC_LABELS, f"缺 {f.name} 的中文名"

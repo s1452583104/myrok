@@ -26,13 +26,21 @@ app:
   # 反检测随机化。目的：让点击的坐标/节奏不完全一致，不像脚本。
   # 下面只有前三项真的生效（JitteringHandleSource 只包了点击这一条路径）：
   anti_detection:
-    click_offset_px: 8      # 每次点击坐标在 ±N 像素内随机；0 = 点得完全准
-    action_delay_min: 0.1   # 每次点击前随机等待的秒数范围
-    action_delay_max: 0.5
-    state_delay_min: 0.3    # 【当前不生效】保留字段：没有任何调用方读它
-    state_delay_max: 1.2    # 【当前不生效】同上，改了不起作用也不报错
-    jitter_ratio: 0.3       # 【当前不生效】同上
+    click_offset_px: 8      # 点击散布的默认 σ（高斯，裁剪到 ±3σ）；0 = 点得完全准
+    action_delay_min: 0.1   # 每次点击前延迟的下限（秒）
+    action_delay_max: 0.5   # 上限。区间内按 delay_shape 采样，不是均匀铺满
+    state_delay_min: 0.6    # 轮询间隔下限（秒）。别低于 0.5：每次轮询要截一帧，
+    state_delay_max: 1.6    # 单次 adb 截图 150~300ms，太密会把 adb 队列打爆
+    jitter_ratio: 0.3       # 硬编码固定等待（如补体力后的 1.5s）的抖动比例
     debug_no_jitter: false  # 改 true = 关闭全部随机化（调试时看真实点击坐标）
+    delay_shape: beta       # beta = 偏短带长尾（像人）；uniform = 均匀（旧行为）
+    burst_prob: 0.3         # 走「连点」短间隔的概率
+    burst_scale: 0.25       # 连点间隔 = min + (max-min) * U(0, 此值)
+    anchor_sigma:           # 按目标覆盖散布 σ；缺省用 click_offset_px
+      preset_slot: 3
+    member_response_delay_min: 10.0   # 成员号收到集结事件后延迟多久响应（秒）。
+    member_response_delay_max: 60.0   # 两号同机、永远成对出现是强关联信号，错开它。
+                                      # 0/0 = 关闭（默认关闭）
 
 # 1 个「模拟器」= 1 个游戏账号 = 1 组角色（同一模拟器多账号切换暂不支持）
 # 接入方式二选一：按模拟器选择（推荐，在界面里点「扫描模拟器」按名字选）
