@@ -122,6 +122,27 @@ def test_click_delay_uniform_shape_is_centered():
     assert 0.40 < mean < 0.60
 
 
+def test_uniform_shape_short_circuits_burst():
+    """delay_shape=uniform 是独立回滚杠杆：burst_prob 非零也不得走突发分支。
+
+    判据：uniform 路径每次只消耗一个随机数（`rng.uniform(lo, hi)`），而突发
+    分支会**先**多抽一次 `rng.random()` 再抽样。用两枚同种子的 rng——一枚驱动
+    `click_delay()`，另一枚独立生成 `uniform(lo, hi)` 流——只要有一次进过突发
+    分支（或 beta 分支），两条流就会错位，逐位比较必然不等。
+    """
+    cfg = AntiDetectionConfig(action_delay_min=1.0, action_delay_max=2.0,
+                              burst_prob=0.5, burst_scale=0.25,
+                              delay_shape="uniform")
+    p = HumanProfile(cfg, rng=random.Random(2026))
+    ref = random.Random(2026)
+    expected = [ref.uniform(1.0, 2.0) for _ in range(200)]
+    got = [p.click_delay() for _ in range(200)]
+    # 值域佐证：突发路径永远 ≤ lo + burst_scale*(hi-lo) = 1.25。
+    assert max(got) > 1.5
+    # 逐位判据：整条流与纯 uniform 流完全相同 → 无任何一个样本来自突发路径。
+    assert got == expected
+
+
 def test_burst_prob_one_always_short():
     p = _profile(action_delay_min=1.0, action_delay_max=2.0,
                  burst_prob=1.0, burst_scale=0.25)

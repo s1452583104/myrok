@@ -73,10 +73,13 @@ class HumanProfile:
             return (lo + hi) / 2
         if hi <= lo:
             return lo
-        if cfg.burst_prob > 0 and self._rng.random() < cfg.burst_prob:
-            return lo + (hi - lo) * self._rng.uniform(0.0, cfg.burst_scale)
+        # uniform 先短路：spec §7 把它定为独立回滚杠杆（单独回退延迟分布），
+        # 必须与 burst_prob 无关地直接回到旧的均匀采样，绝不进突发分支。
         if cfg.delay_shape == "uniform":
             return self._rng.uniform(lo, hi)
+        # 突发分支先于 Beta 形状抽取：beta 路径的行为与顺序保持逐位不变。
+        if cfg.burst_prob > 0 and self._rng.random() < cfg.burst_prob:
+            return lo + (hi - lo) * self._rng.uniform(0.0, cfg.burst_scale)
         return lo + (hi - lo) * self._rng.betavariate(_BETA_A, _BETA_B)
 
     # ---- 坐标散布 ----
@@ -121,7 +124,13 @@ class HumanProfile:
         return max(1, base + self._rng.randint(-1, 1))
 
     def member_response_delay(self) -> float:
-        """成员号收到集结事件后延迟多久响应，破两号 lockstep 关联。"""
+        """成员号收到集结事件后延迟多久响应，破两号 lockstep 关联。
+
+        线程注意：`on_rally_launched` 在**车头** worker 线程上同步触发（EventBus
+        是同步的），会调到这里读 `self._rng`；而成员号自己的线程同时在用同一
+        `_rng` 抽点击 / 轮询样本。`random.Random` 未声明线程安全——最坏只是两次
+        抽取交错、随机流略乱，不会崩。影响不值得加锁，刻意不加。
+        """
         cfg = self._cfg
         if cfg.debug_no_jitter:
             return (cfg.member_response_delay_min
