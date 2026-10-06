@@ -21,11 +21,14 @@
 
 ## 当前状态（2026-10-05）
 
-- **测试 661 绿**（`pytest tests/ -q`，0 failed / 0 error）。
+- **全量回归待完成**：本分支新增了单测；上次完整全绿为 **661 条**（`pytest tests/ -q`，0 failed / 0 error）。
+  本次全量回归跑到约 **60%+（430+ 条，0 失败 0 错误）时被系统因内存不足杀掉**，**未跑完**——
+  **没有全绿结果**，总条数以重跑为准，别拿 661 当现值。
 - **已落地**（实现细节全在 HISTORY 同名一节，这里只留索引）：
 
   | 日期 | 改动 | 一句话 | 实机 |
   |---|---|---|---|
+  | 10-05 | **每实例日志区 + 人性化层** | 卡片内嵌日志（按线程名归属）；HumanProfile 分布化延迟/高斯散布/节奏去规律化/两号解耦 | 待实机 |
   | 10-05 | **启动失败点名 + 文案去噪** | 某台模拟器连不上时，报错写成「模拟器「阑珊填1」（mumu1，MuMu 编号 1）连不上：…」，不再是一句泛泛的「启动失败」；`MumuNotRunningError` 的原始 JSON 移进日志，不进用户可见文本。**语义不变**（仍是一台连不上就都不跑） | ✅ 冻结 |
   | 10-05 | **外部程序统一封装 `infra/subproc.py`** | 剥 `QT_*` + `CREATE_NO_WINDOW`；修掉「点 Start 后黑窗一闪一闪」（见已知问题 11）。所有 fork 外部程序的地方都走它，扫描测试盯着不许再有裸 `subprocess` | ✅ 冻结 |
   | 10-05 | **连接模拟器修好 + 配置说明** | `AdbHandleSource` 自动 `adb connect`（断线自动重连）；配置界面「扫描模拟器」按 MuMu 里的**名字**选（不再猜编号）；界面术语「实例」→「模拟器」，分工/状态/校验错误全中文；新增 `docs/配置说明.md`（随包分发） | ✅ |
@@ -79,11 +82,6 @@
    `adb devices` 为空，`capture()` 仍直接成功。注意重连后游戏可能瞬时不响应点击，
    必要时重启驱动。
 5. 体力耗尽无自动用道具功能（未要求）。
-   **`anti_detection` 有 3 个字段不生效**（10-05 查配置时发现）：`state_delay_min/max`
-   与 `jitter_ratio` 没有任何生产调用方——`JitteringHandleSource` 只包了 `click`
-   一条路径（用 `action_delay_*` + `click_offset_px` + `debug_no_jitter`）。
-   只有 `test_anti_detection.py` 在测它们。界面和 `config.example.yaml` 已注明
-   「当前不生效」，避免用户白调。要真生效需在状态机拍与拍之间接 `random_state_delay()`。
 6. leader 冷却重建窗口内 rally 事件会丢；错误截图无限速。
    ~~GUI 需 repo 根 CWD~~ **10-05 已修**：路径统一走 `infra/app_paths.py`
    （`resource_dir()` 只读资源 / `user_dir()` 可写数据），冻结后从任意目录启动都行。
@@ -151,6 +149,7 @@
 ## 接下来需要做的
 
 ### 待办
+- [ ] **人性化层实机观察**：跑 2~3 轮确认无卡顿、无点击落空。
 - [x] **绿色包冻结冒烟**（10-05）：`dist/rok-assistant/rok-assistant.exe --selftest` **9/9 通过**
       （cv2 解码往返、ONNX 单帧 30ms、59 个识别器、OCR 模型就位、config.yaml 生成并校验）；
       GUI 启动存活 12s、无 `startup_crash.log`。**首启自动探测到 MuMu 路径**

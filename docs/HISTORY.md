@@ -1364,3 +1364,103 @@ Win11 把控制台路由给 Windows Terminal，第一次按老类名找是找不
 用户的报错原文还是没拿到（他说记不清了）。如果重装后再撞上，
 `logs/selftest.log` 的「各模拟器连接」那一行 + 运行日志能定位。
 测试：**661 passed**（659 + 2）；冻结包 `--selftest` 11/11。
+
+## 2026-10-06 每实例日志区 + 人性化层
+
+两块改动一次落地：GUI 的**每实例日志区**，以及把随机化集中起来的**人性化层**（`HumanProfile`）。
+
+### 1. 每实例日志区（GUI）
+
+以前所有 worker 的日志混在同一个流里，分不清哪一行属于哪台模拟器/哪个角色。
+现在每个角色卡片内嵌一个 `LogPanel`（`gui/log_panel.py`，只读、环形缓冲、每行加
+`HH:MM:SS` 时间戳、超出上限裁头），卡片自己收自己角色的行。
+
+归属**靠 worker 线程名**，不靠调用点改代码：`runner.py` 把 worker 线程命名成
+`worker:<instance_id>:<char_id>`，`gui/log_handler.py:char_id_from_thread_name`
+只切前两段取出 `char_id`（char_id 自身含冒号也安全）。新增的 `QtLogHandler`
+在 worker 线程里 `emit`，Qt 自动排队到主线程追加到对应卡片——与既有的
+`status_changed` 同一模式。**解析不出归属的行**（主线程的配置加载、连不上实例等）
+返回空串，落到状态栏，不会错投给某张卡片。
+
+两个容易踩的点已经处理：
+
+- **只输出正文**：时间戳由卡片侧 `append_message` 加，handler 侧若再加会出双时间戳。
+- **退出时 `logging.shutdown` 会遍历所有 handler 读 `flushOnClose`**，而此时 PyQt 已先销毁
+  C++ 对象、`getattr` 抛 `RuntimeError`，`shutdown` 只吞 `OSError/ValueError`，
+  异常会让它整个中断、后续 handler 不再 flush/close。`QtLogHandler` 预置
+  `flushOnClose = False`（Python 侧属性）绕过；本 handler 无需 flush。
+  窗口销毁时也会摘除 handler（见 commit `3118e13`）。
+
+### 2. 人性化层：`HumanProfile`
+
+新增 `infra/anti_detection.py:HumanProfile`，把「像人」的随机化集中到一处，
+注入 `random.Random` 后可复现（测试用）；`debug_no_jitter=True` 时**所有**方法返回确定性值——
+既是调试逃生口，也是既有测试的依赖。方法表：
+
+| 方法 | 作用 | 机制 |
+|---|---|---|
+| `click_delay()` | 点击前延迟 | `Beta(2,5)` 形状（偏短、带长尾）+ 突发短间隔（`burst_prob`/`burst_scale`）；`delay_shape=uniform` 回退旧均匀行为 |
+| `disperse(x, y, anchor)` | 坐标散布 | 高斯 σ=`click_offset_px`，裁剪到 ±3σ；`anchor` 可按目标覆盖 σ（`anchor_sigma`） |
+| `poll_interval()` | 轮询节奏 | 在 `state_delay_min/max` 上均匀采样（**恒定轮询间隔是签名级机器特征**） |
+| `jitter(base)` | 固定 sleep 乘性抖动 | ±`jitter_ratio`，`0` 保持 `0` |
+| `retry_attempts(base)` | 重试次数 | ±1（下限 1），每轮路径形状也带随机 |
+| `member_response_delay()` | 成员号响应集结的延迟 | 在 `member_response_delay_min/max` 上均匀采样，破两号 lockstep |
+
+接线点（均通过可选注入，不注入即旧行为）：`StateMachine.__init__(..., human=None)`、
+`_pause`（无基准走 `poll_interval()`，有基准走 `jitter(base)`）、`_find_retry`（`retry_attempts`）、
+`runner` 的冷却/返城检测间隔、`member_sm` 的集结响应、`either_sm` 透传、`runtime`/`factory` 的
+`create_state_machine`/`WorkerRunner`。`JitteringHandleSource` 改吃 `HumanProfile`；
+`click` 增 `anchor` 形参（只用于选 σ，不往下传，`MockHandleSource` 仍记 `(x, y)`）；
+**`swipe` 原先是直通转发、零抖动**，现在端点与时长都抖。
+
+### 3. 复活的三个死字段
+
+10-05 查配置时发现 `state_delay_min/max` 与 `jitter_ratio` **没有任何生产调用方**——
+`JitteringHandleSource` 只包了 `click` 一条路径。本次接上：
+
+- `state_delay_*` → `poll_interval()`（状态机拍与拍之间的轮询节奏）。
+- `jitter_ratio` → `jitter()`（硬编码固定等待的乘性抖动）。
+
+`grep -rn "jitter_offset\|jitter_delay" src/` 现在只剩 `anti_detection.py` 里的两处**定义**
+（供既有单测使用）；`JitteringHandleSource` 已不再引用它们，死字段残留清干净。
+
+### 4. 为什么 `state_delay` 默认取 `0.8/1.2` 而不是 spec 原本写的 `0.6/1.6`
+
+这是一条**兼容不变量**，不是随便挑的数：
+
+`poll_interval()` 在 `debug_no_jitter=True` 时返回 `state_delay_min/max` 的**中点**。
+取 `0.8/1.2` 时中点恰好是 **`1.0`**——正是本分支之前 `_wait_for_result` / `_find_retry`
+**硬编码的默认间隔**（旧签名 `interval: float = 1.0`）。于是**所有没有注入 `HumanProfile`
+的调用点，节奏与改动前逐位相同**，既有测试不改一行也是绿的。
+
+若默认取 `0.6/1.6`，中点会变成 `1.1`，每个未接线的调用点节奏都会漂移——
+这正是要避开的隐性回归。
+
+注意 `config.example.yaml` 仍然发 `0.6/1.6`：**那才是用户实际跑的区间**（示例在首次启动时
+被复制成 `config.yaml`）。dataclass 里的 `0.8/1.2` 只是**键缺失时的兜底**，
+存在的意义就是保住上面这条不变量。
+
+### 5. 为什么 `member_response_delay` 默认关闭（`0.0/0.0`）
+
+同样是为了「不注入 profile 就行为不变」：默认区间是空区间，`member_response_delay()`
+返回 `0.0`，成员号收到集结事件立刻响应，与改动前逐字相同。两号解耦是**显式开启**的能力
+（示例配置里默认给了一个非零区间），而不是默认就改掉所有人的时序。
+这样这一层整体是**加法**：谁想用谁注入，不用的人一行不用改。
+
+### 6. 本设计治不了什么（诚实边界）
+
+时间/坐标的随机化能打散**机械式的规整**，但有几样**代码治不了**：
+
+- **玩法规律**：号还是按同一套顺序做同一串动作，时序抖了，行为模式没变。
+- **设备 / 账号指纹**：模拟器属性、机型、IP、账号元数据都不在这层能改的范围。
+- **永远跑同样的轮数**：循环还是固定次数，这种规律是策略选择，不是抖动改得了的。
+
+把这三条写下来，是为了不让人误以为「加了人性化层就等于不会被判定成脚本」。
+
+### 7. 回归状态
+
+- **全量回归未跑完**：`pytest tests/ -q` 跑到约 **60%+（430+ 条）**，**0 失败 0 错误**，
+  随后**被操作系统因内存不足杀掉**。**没有全绿结果**，总条数以重跑为准——
+  不要拿 661 当现值（本分支已新增测试）。
+- 死字段 grep 干净（见 §3）。
+
