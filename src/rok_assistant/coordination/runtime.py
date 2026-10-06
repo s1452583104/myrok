@@ -164,6 +164,7 @@ class RuntimeCoordinator:
                                                     ledger=self.ledger,
                                                     human=profile),
             handle_source=handle, event_bus=self._bus,
+            human=profile,
             # 显式给失败截图目录：冻结后 CWD 可能是任意位置，runner 的
             # 默认 Path("recordings") 会把截图写到用户找不到的地方。
             screenshot_dir=user_dir() / "recordings",

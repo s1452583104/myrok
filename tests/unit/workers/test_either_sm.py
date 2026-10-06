@@ -24,7 +24,7 @@ def _mock_rec():
     return rec
 
 
-def _make_sm(fill_targets=None, bus=None):
+def _make_sm(fill_targets=None, bus=None, human=None):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     rec = _mock_rec()
     # map_btn/search_icon: member 视图归一化需要（成员阶段先确认在地图视图）
@@ -38,7 +38,7 @@ def _make_sm(fill_targets=None, bus=None):
                             target_levels=[8], march_preset=1,
                             march_troop_types=["infantry"],
                             fill_target_leaders=fill_targets or [],
-                            event_bus=bus)
+                            event_bus=bus, human=human)
     # red_rally 独立 mock：give-up 测试只关掉详情弹窗的命中，
     # 不影响共享 rec 的其他识别器
     recs["red_rally"] = _mock_rec()
@@ -883,3 +883,49 @@ def test_member_short_circuits_on_foreign_skip(monkeypatch):
     # 成员流程被跳过：没进过填兵轮询（对方无集结可填）
     assert not any("FIND_JOIN" in h for h in sm.history)
     assert sm.fail_reason is None
+
+
+def test_either_sm_stores_injected_profile():
+    # EitherStateMachine 没有基类，human 参数不会经 super().__init__ 落到
+    # self._human —— 必须自行存储，否则返城检测拍的 self._human.jitter 会
+    # AttributeError（brief 原文在此处判断错误）。
+    from rok_assistant.infra.anti_detection import AntiDetectionConfig, HumanProfile
+    prof = HumanProfile(AntiDetectionConfig(debug_no_jitter=True))
+    sm = _make_sm(human=prof)
+    assert sm._human is prof
+
+
+def test_either_sm_wait_return_poll_goes_through_jitter(monkeypatch):
+    # 返城徽标检测间隔必须经 profile.jitter(_WAIT_RETURN_POLL)，而不是把
+    # 30.0 常量直接加到 _next_check —— 后者没有断言能察觉，去规律化落空。
+    from rok_assistant.infra.anti_detection import AntiDetectionConfig, HumanProfile
+    from rok_assistant.workers import either_sm as either_sm_mod
+
+    class _FakeTime:
+        t = 1000.0
+
+        @classmethod
+        def time(cls):
+            return cls.t
+
+        @classmethod
+        def sleep(cls, s):
+            cls.t += s
+
+    monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
+    seen = []
+    prof = HumanProfile(AntiDetectionConfig(debug_no_jitter=True))
+    prof.jitter = MagicMock(side_effect=lambda base: (seen.append(base), 0.0)[1])
+    sm = _make_sm(fill_targets=[], human=prof)
+    _badge_lights_on_launch(sm)   # 入口不可见，发射后点亮 → 可进返城等待
+    for _ in range(200):
+        sm.step()
+        if sm.current == "WAIT_RETURN":
+            break
+    assert sm.current == "WAIT_RETURN", f"未进入返城等待: {sm.history[-5:]}"
+    # 只保留「检测拍」这一次 step 里的 jitter 调用，排除进等待前子状态机的
+    # 其它抖动记录，断言更精确
+    seen.clear()
+    sm.step()   # 进入检测拍：_step_wait_return 走到 :260 的 _next_check 赋值
+    assert either_sm_mod._WAIT_RETURN_POLL in seen, \
+        f"返城检测间隔未经 jitter，记录={seen[:8]}"

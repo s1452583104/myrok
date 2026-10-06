@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..infra.logger import get_logger
+from ..infra.anti_detection import AntiDetectionConfig, HumanProfile
 
 logger = get_logger(__name__)
 
@@ -83,7 +84,8 @@ class WorkerRunner:
                  error_backoff: float = 10.0, pause_poll: float = 5.0,
                  screenshot_dir: Path | None = None,
                  max_rounds: int | None = None,
-                 max_consecutive_failures: int = 3):
+                 max_consecutive_failures: int = 3,
+                 human: HumanProfile | None = None):
         self.instance_id = instance_id
         self.char_id = char_id
         self.char_name = char_name
@@ -93,6 +95,10 @@ class WorkerRunner:
         self._bus = event_bus
         self._poll = poll_interval
         self._cooldown = restart_cooldown
+        # 冷却/轮询等待经此 profile 抖动（反检测：精确恒定的间隔是机器特征）。
+        # 未注入时用确定性 profile，行为与改动前逐字相同。
+        self._human = human if human is not None else HumanProfile(
+            AntiDetectionConfig(debug_no_jitter=True))
         self._error_backoff = error_backoff
         self._pause_poll = pause_poll
         self._screenshot_dir = Path(screenshot_dir) if screenshot_dir else Path("recordings")
@@ -164,7 +170,7 @@ class WorkerRunner:
                     if stop:
                         break
                     self._set_status("cooldown")
-                    self._stop_event.wait(self._cooldown)
+                    self._stop_event.wait(self._human.jitter(self._cooldown))
                     if self._stop_event.is_set():
                         break
                     self.sm = self._sm_factory()   # 冷却后重建，进入下一轮
@@ -190,7 +196,7 @@ class WorkerRunner:
                     break
                 self._stop_event.wait(self._error_backoff)
                 continue   # 退避即全部恢复延时，不再叠加 poll 等待
-            self._stop_event.wait(self._poll)
+            self._stop_event.wait(self._human.jitter(self._poll))
 
     def _check_stop_conditions(self) -> bool:
         """终态后的停止条件检查（2026-09-11 验收目标：跑满 N 轮或连续失败

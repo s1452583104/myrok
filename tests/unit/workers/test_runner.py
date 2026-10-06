@@ -244,6 +244,62 @@ def test_runner_stops_after_consecutive_failures(monkeypatch):
     assert r.status == "done"
 
 
+def _recording_profile(seen):
+    """确定性 HumanProfile，其 jitter 换成记录器：把入参追加进 seen 并返回
+    0.0（等待立即返回，测试不烧真实秒数，也不断言精确时长）。"""
+    from rok_assistant.infra.anti_detection import AntiDetectionConfig, HumanProfile
+    prof = HumanProfile(AntiDetectionConfig(debug_no_jitter=True))
+    prof.jitter = MagicMock(
+        side_effect=lambda base: (seen.append(base), 0.0)[1])
+    return prof
+
+
+def test_runner_cooldown_wait_goes_through_jitter():
+    # 冷却等待必须经注入 profile 的 jitter(30.0)（默认 restart_cooldown），
+    # 而不是把 30.0 常量直接交给 wait() —— 后者没有任何断言能察觉，
+    # 「去规律化」也就落空。记录器让 wait 瞬时返回，只验证调用值。
+    seen = []
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(), handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01,
+                     human=_recording_profile(seen))
+    r.sm.on_rally_launched({"rally_id": "r1"})   # 一轮走完 → 进冷却分支
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and 30.0 not in seen:
+        time.sleep(0.01)
+    r.stop()
+    assert 30.0 in seen, f"冷却等待未经 jitter(30.0)，记录={seen[:8]}"
+
+
+def test_runner_poll_wait_goes_through_jitter():
+    # SM 停在 IDLE（不喂 launch）时主循环每拍走 poll 等待分支：该等待同样
+    # 必须经 jitter(2.0)（默认 poll_interval），不能是硬编码常量。
+    seen = []
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(), handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, human=_recording_profile(seen))
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and 2.0 not in seen:
+        time.sleep(0.01)
+    r.stop()
+    assert 2.0 in seen, f"轮询等待未经 jitter(2.0)，记录={seen[:8]}"
+
+
+def test_runner_default_profile_keeps_deterministic_waits():
+    # 不注入 profile 的调用方（既有测试/库用法）必须保持改动前的确定性：
+    # 默认 profile 的 jitter 恒等返回 base —— 这是整条分支的兼容前提。
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(), handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.05)
+    assert r._human.jitter(30.0) == 30.0
+    assert r._human.jitter(2.0) == 2.0
+
+
 def test_runner_stops_after_consecutive_step_errors():
     # 体力耗尽的表现是 step 持续异常（blue_rally 点不动 RuntimeError），
     # 不走终态 —— 连续异常计数达上限同样要收工，不能无限截图循环

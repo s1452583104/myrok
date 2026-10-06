@@ -5,6 +5,7 @@ from .leader_sm import LeaderStateMachine
 from .member_sm import MemberStateMachine
 from .queue_gate import GateDecision, QueueGate
 from ..coordination.action_ledger import ActionLedger
+from ..infra.anti_detection import AntiDetectionConfig, HumanProfile
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +72,10 @@ class EitherStateMachine:
                  rally_tracker=None, ledger=None, human=None):
         self._bus = event_bus
         self._char_id = char_id
+        # 本类无基类：human 不会被 super().__init__ 落到 self._human，须自行
+        # 存储（返城检测间隔经它抖动）。未注入时确定性 profile，行为同旧版。
+        self._human = human if human is not None else HumanProfile(
+            AntiDetectionConfig(debug_no_jitter=True))
         # 进程级动作账本（runtime 注入）：转交两个子状态机，发车/填兵确认
         # 后由它们写「部队在外」。门槛判据读它（见下）。未注入时自建一本
         # （单账号/测试场景），保证判据逻辑一致
@@ -257,7 +262,7 @@ class EitherStateMachine:
             return
         if now < self._next_check:
             return   # 未到检测间隔：本次空转（维持 WAIT_RETURN 状态）
-        self._next_check = now + _WAIT_RETURN_POLL
+        self._next_check = now + self._human.jitter(_WAIT_RETURN_POLL)
         # 战争列表开着会盖住徽标区域（member VERIFY_JOINED 结束时重开了
         # 面板）：先关面板再读徽标 —— 2026-09-12 实机：行军后 2s 首查即
         # 误判「已回城」（面板开着徽标不可见），部队其实刚出发。刚点完
