@@ -57,6 +57,23 @@ def _make_sm():
     return sm, handle, rec_preset, rec_troop
 
 
+def test_missing_fill_recognizer_warns_about_the_ocr_switch(caplog):
+    """点名车头没有识别器时，warning 要指向真正的开关。
+
+    2026-10-06 起 runtime 会按配置给 manifest 里没有的车头补装 OCR 判据
+    （`fill_names` -> `_build_config_fill_recognizers`）。这条 warning 只在
+    补装也没发生时才有意义——最可能的原因就是 `app.ocr_name_fallback` 关了，
+    提示语必须指向它，而不是把用户引去改 manifest。
+    """
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    with caplog.at_level("WARNING"):
+        MemberStateMachine(handle_source=handle, recognizers={},
+                           fill_target_leaders=[{"instance": "i1",
+                                                 "name": "陌生人"}])
+    assert "陌生人" in caplog.text
+    assert "ocr_name_fallback" in caplog.text
+
+
 def test_member_receives_event_and_joins_without_preset(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, rec_preset, rec_troop = _make_sm()

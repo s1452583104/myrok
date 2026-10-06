@@ -111,6 +111,18 @@ def test_coordinator_builds_one_runner_per_first_character(tmp_path):
         assert set(coord.runners) == {"inst0:boss", "inst1:worker"}
 
 
+def test_member_fill_target_gets_recognizer_from_config_alone(tmp_path):
+    """配置点名的车头不依赖 manifest：空模板清单下也要装配出 fill_<名字>。
+
+    车头是账号/配置绑定的，manifest 是随包走的静态资源。旧行为下 runtime
+    只把 manifest 里的条目装进 recognizers，配置换了新车头就没人给它建
+    识别器——成员 SM 打一条 warning，然后每轮空转到 no_rally_found。
+    """
+    with _running_coordinator(tmp_path) as coord:
+        sm = coord.runners["inst1:worker"].sm
+        assert "fill_车头" in sm._rec
+
+
 def test_coordinator_routes_rally_to_member_runner(tmp_path):
     with _running_coordinator(tmp_path) as coord:
         member_sm = coord.runners["inst1:worker"].sm

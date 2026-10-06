@@ -61,8 +61,13 @@ class MemberStateMachine(StateMachine):
         missing = [t["name"] for t in self._fill_targets
                    if self._target_rec_id(t) not in recognizers]
         if missing:
-            logger.warning("成员·填兵目标缺少名字模板: %s "
-                           "（templates/manifest.yaml 需有 fill_<名字> 项）", missing)
+            # 正常情况下 runtime 会按配置给 manifest 里没有的车头补装 OCR
+            # 判据（TemplateRegistry.build_recognizers 的 fill_names），走到
+            # 这里说明补装也没发生——最可能是 app.ocr_name_fallback 关了，
+            # 或者 SM 是在 runtime 之外手工构造的。
+            logger.warning("成员·填兵目标没有识别器: %s "
+                           "（检查 app.ocr_name_fallback；runtime 会为配置点名的"
+                           "车头补装 OCR 判据，不需要改 manifest）", missing)
         self._char_id = char_id
         # 进程级动作账本（runtime 注入）：填兵确认后记「部队在外」+ 填兵
         # 时刻，供集结门槛的 L0 判据用。未注入 = 不记账 = 旧行为

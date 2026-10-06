@@ -1464,3 +1464,27 @@ Win11 把控制台路由给 Windows Terminal，第一次按老类名找是找不
   不要拿 661 当现值（本分支已新增测试）。
 - 死字段 grep 干净（见 §3）。
 
+
+### 2026-10-06 车头判据改由配置驱动（填兵目标不再绑死 manifest）
+
+**疑问（用户）**：填兵流程打开战争界面后，识别「向谁填兵」用的是模板匹配还是 OCR？配置能随时改吗？用模板是不是有问题？
+
+**确认**：两条腿，`RecognizerChain([模板, OCR], threshold=0.0)`——模板匹配（`TM_CCOEFF_NORMED`，阈值 0.9）是主判据，OCR（RapidOCR/PP-OCR ONNX）是兜底；名字列 ROI 由 manifest 里 `fill_*` 条目的 `roi` 给出。模板优先是因为 OCR 慢且受字体影响，不该抢在主判据前面。目标行定下来后按固定几何 `x=1335, cy+111` 点该行的「+」（`member_sm` 的实测常量 `_PLUS_X` / `_NAME_TO_PLUS_DY`）。
+
+**问题（两个，都是真的）**：
+
+1. **换车头 = 静默失效**。`_target_rec_id` 是 `f"fill_{target['name']}"`，配置一改名字，识别的 id 就变了；但 recognizers 字典只由 `manifest.yaml` 的 `templates:` 条目装配。配置点名了 manifest 里没有的车头时，`MemberStateMachine.__init__` 只打一条 warning，随后 `_find` 命中 `self._rec.get(id) is None` 静默返回 None → `_poll_join` 60 次轮询（~5-6 分钟）全部落空 → `no_rally_found` 终态。**用户以为改了配置就生效，实际整轮空转**。OCR 兜底本来就写着「名字取自 id，账号/配置改动不再失效」，但它也挂在 manifest 条目上，等于白写。
+
+2. **OCR 兜底被 yolo_model 二次门控**。`build_recognizers` 里 `fill_` 分支嵌在 `if shared_yolo is not None:` 内——纯模板模式（没配 `app.yolo_model`）下 `ocr_name_fallback: true` 静默失效，`fill_*` 退化成纯模板。而 `ocr_name_fallback` 的语义是独立开关，与 YOLO 无关（YOLO 本就不训角色名这类账号绑定文本）。
+
+**修复**：
+
+- `TemplateRegistry.build_recognizers(..., fill_names=...)`：新增 `_build_config_fill_recognizers`，给「配置点名、manifest 里没有」的车头就地生成 `OCRText(expected_text=名字)`。名字直接从配置来，账号无关。manifest 已有的条目**优先**，不动它们（仍是模板先行）。
+- `_fill_name_roi()`：ROI 优先沿用 manifest 里任一 `fill_*` 条目的 roi（单一真相），一条都没有时退回实测常量 `DEFAULT_FILL_NAME_ROI = (460,240,760,660)`。**刻意不退回全屏**——全屏 OCR 会把聊天框里的同名文本也认成目标行，`_poll_join` 随后按固定几何点到一片空地上。
+- `ocr_name_fallback` 与 yolo_model 解耦：`fill_` 分支移出 `if shared_yolo is not None`。原先钉住旧行为的 `test_fill_spec_ocr_only_without_model` 改写成 `test_fill_spec_gets_ocr_leg_without_yolo_model`（行为是**有意**改的）。
+- 多个 `fill_` id 共用**一个** `RapidOcrEngine`：原先 `_ocr_fallback_for` 每次调用各建一个，单帧缓存挂在后端上、等于同一帧被反复推理。现在 `build_recognizers` 顶部建一次。
+- `runtime.py` 从 `RootConfig` 收集所有 `fill_target_leaders` 名字传给 `fill_names`；`member_sm` 那条 warning 改成指向 `app.ocr_name_fallback`（manifest 不再是唯一补救手段，旧提示语会把人引错方向）。
+
+**验证**：真机战争列表帧（`logs/review/02_warlist__*.png`）上，manifest 有条目的 `fill_阑珊寨子号` 模板命中 1.00；凭空加的名字 `fill_凭空冒出的车头` 走 `@ocr` 腿、帧上无此行故不命中（链路通）。新增测试：registry 5 条（配置生成 / manifest 优先 / 开关关闭 / 无 yolo 也有 OCR 腿 / 共用一个后端）、runtime 1 条（空 manifest 下也要装出 `fill_车头`）、member_sm 1 条（warning 指向 ocr_name_fallback）。
+
+**已知限制（未修）**：OCR 兜底对含生僻标点的名字会漏。实测 `Jy丶阑珊` 在 `logs/review` 帧上被 OCR 读成 `Jy阑珊`（`丶` 丢了），子串匹配失败；该帧模板也只有 0.54（该行渲染与模板不同源）。模板腿在它自己的源帧上是 1.000，所以现网目标不受影响；但**新配一个名字里带 `丶`/`·` 的车头、又没有模板时，OCR 会认不出**。要修得让 `OCRText` 的比较忽略标点，属改匹配语义（有假阳风险），未擅自做。

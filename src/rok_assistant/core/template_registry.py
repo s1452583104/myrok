@@ -39,6 +39,10 @@ class ROI:
 # `yolo_threshold:` 覆盖（preset_* / alliance_btn 关闭、queue_march_icon 抬高）。
 DEFAULT_YOLO_THRESHOLD = 0.5
 
+# 战争列表里车头名字所在的一列（1920x1080 实机测量）。配置点名、manifest 里
+# 却没有条目的车头，OCR 判据就按这个 ROI 装——见 `_fill_name_roi`。
+DEFAULT_FILL_NAME_ROI = ROI(460, 240, 760, 660)
+
 
 @dataclass(frozen=True)
 class TemplateSpec:
@@ -75,7 +79,7 @@ class TemplateRegistry:
 
     def build_recognizers(self, yolo_model: Path | None = None,
                           ocr_fallback: bool = True, ocr_engine=None,
-                          yolo_shared=None) -> dict:
+                          yolo_shared=None, fill_names=None) -> dict:
         """Build {template_id: recognizer} for all loaded templates.
 
         2026-09-17 三识别栈融合，2026-10-04 调整先后：
@@ -89,6 +93,10 @@ class TemplateRegistry:
           仍**模板先行**——OCR 慢且受字体影响，不该抢在主判据前面。
         - type=yolo_detect：未配置 yolo_model 时与旧版一致抛 ValueError
           （回归测试锚定）；配置后构建 YoloClassAdapter。
+
+        `fill_names`（2026-10-06）：配置里 `fill_target_leaders` 点名的车头。
+        manifest 里没有 `fill_<名字>` 条目时**就地生成 OCR 判据**——车头是
+        账号/配置绑定的，不该要求用户改配置的同时还去动随包走的 manifest。
         """
         # local imports: deliberate, keeps module import light (cv2/recognizers
         # are only needed when recognizers are actually built)
@@ -103,6 +111,12 @@ class TemplateRegistry:
         # 类名集合（装配时取一次；顺带强制加载模型，尽早暴露权重问题）
         yolo_class_names = set(shared_yolo.names.values()) \
             if shared_yolo is not None else set()
+        # 名字类判据共用**一个** OCR 后端：RapidOCR 的模型是重资源，每个
+        # fill_ id 各建一个会让同一帧被反复推理（单帧缓存挂在后端上，见
+        # RapidOcrEngine docstring）。构造本身是懒的，不加载模型。
+        if ocr_fallback and ocr_engine is None:
+            from .recognizers.ocr_text import RapidOcrEngine
+            ocr_engine = RapidOcrEngine()
 
         out = {}
         for tid, spec in self._t.items():
@@ -116,22 +130,23 @@ class TemplateRegistry:
                                         name=tid)
                 aux = None            # 第二条腿；排第一还是第二由 yolo_first 决定
                 yolo_first = False
-                if shared_yolo is not None:
-                    if tid.startswith("fill_"):
-                        # 名字类：OCR 兜底，模板仍先行（见 docstring）
-                        aux = self._ocr_fallback_for(
-                            tid, roi, ocr_fallback, ocr_engine)
-                    elif tid in yolo_class_names:
-                        from .recognizers.yolo_detect import YoloClassAdapter
-                        yolo_thr = (DEFAULT_YOLO_THRESHOLD
-                                    if spec.yolo_threshold is None
-                                    else spec.yolo_threshold)
-                        aux = YoloClassAdapter(
-                            shared_yolo, class_name=tid, roi=roi,
-                            threshold=yolo_thr, name=f"{tid}@yolo")
-                        yolo_first = True
-                    # 类不在模型里（如 queue_recall_icon 被 YOLO 排除训练）：
-                    # 模板为主，不挂第二条腿 —— 挂了运行时 resolve 会 KeyError
+                if tid.startswith("fill_"):
+                    # 名字类：OCR 兜底，模板仍先行（见 docstring）。
+                    # **不受 yolo_model 影响**：YOLO 不训角色名这类账号绑定的
+                    # 文本，`ocr_name_fallback` 是独立开关，被「配没配 YOLO」
+                    # 二次门控时纯模板模式下会静默失效。
+                    aux = self._ocr_fallback_for(tid, roi, ocr_fallback, ocr_engine)
+                elif shared_yolo is not None and tid in yolo_class_names:
+                    from .recognizers.yolo_detect import YoloClassAdapter
+                    yolo_thr = (DEFAULT_YOLO_THRESHOLD
+                                if spec.yolo_threshold is None
+                                else spec.yolo_threshold)
+                    aux = YoloClassAdapter(
+                        shared_yolo, class_name=tid, roi=roi,
+                        threshold=yolo_thr, name=f"{tid}@yolo")
+                    yolo_first = True
+                # 类不在模型里（如 queue_recall_icon 被 YOLO 排除训练）：
+                # 模板为主，不挂第二条腿 —— 挂了运行时 resolve 会 KeyError
                 legs = ([aux, primary] if yolo_first else [primary, aux]) \
                     if aux is not None else None
                 out[tid] = RecognizerChain(legs, threshold=0.0) \
@@ -147,8 +162,48 @@ class TemplateRegistry:
                     roi=roi, threshold=spec.threshold, name=tid)
             else:
                 raise ValueError(f"unsupported template type for {tid}: {spec.type}")
+        out.update(self._build_config_fill_recognizers(
+            fill_names, ocr_fallback, ocr_engine))
         out.update(self._build_pixel_recognizers())
         return out
+
+    def _build_config_fill_recognizers(self, fill_names, ocr_fallback,
+                                       ocr_engine) -> dict:
+        """给配置点名、但 manifest 里没有条目的车头补一条 OCR 判据。
+
+        为什么必须由配置驱动：车头名是账号/配置绑定的，manifest 是随发行包
+        走的静态资源。用户改 `fill_target_leaders` 换车头时，manifest 不会
+        自动多出 `fill_<名字>` 条目——旧行为是 MemberStateMachine 只打一条
+        warning，随后 `_find` 永远返回 None、`_poll_join` 60 次轮询空转到
+        `no_rally_found`，改配置等于静默失效。
+
+        名字直接取自配置（`_ocr_fallback_for` 从 id 反推），所以生成的判据
+        与账号无关。manifest 里已有的条目优先，不动它们（模板先行）。
+        """
+        if not ocr_fallback or not fill_names:
+            return {}
+        from .recognizer import BBox
+        roi = self._fill_name_roi()
+        bbox = None if roi.is_full else BBox(roi.x1, roi.y1, roi.x2, roi.y2)
+        out = {}
+        for name in fill_names:
+            tid = f"fill_{name}"
+            if tid in self._t or tid in out:
+                continue
+            out[tid] = self._ocr_fallback_for(tid, bbox, True, ocr_engine)
+        return out
+
+    def _fill_name_roi(self) -> ROI:
+        """战争列表里车头名字所在的一列的 ROI。
+
+        优先沿用 manifest 里任一 `fill_*` 条目的 roi（实测基准，单一真相）；
+        一条都没有时退回实测常量。**绝不退回全屏**：全屏 OCR 会把聊天框里
+        的同名文本也认成目标行，`_poll_join` 随后按固定几何点到一片空地上。
+        """
+        for tid, spec in self._t.items():
+            if tid.startswith("fill_") and not spec.roi.is_full:
+                return spec.roi
+        return DEFAULT_FILL_NAME_ROI
 
     def _build_pixel_recognizers(self) -> dict:
         """装配 manifest 顶层 `pixel_stats:` 小节。

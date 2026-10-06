@@ -152,6 +152,17 @@ class _FakeSharedYolo:
     def detect(self, frame):
         return [_FakeResult(self._rows)]
 
+
+class _StubOcrEngine:
+    """Stub RapidOcrEngine：记录被喂进来的帧形状，返回固定几行文本。"""
+    def __init__(self, lines=()):
+        self.queries = []
+        self._lines = list(lines)
+    def detect_text(self, frame):
+        from rok_assistant.core.recognizer import BBox
+        self.queries.append(frame.shape)
+        return [(BBox(10, 10, 100, 30), text, conf) for text, conf in self._lines]
+
 def test_build_recognizers_yolo_fallback_chain(image_manifest):
     from rok_assistant.core.recognizer import RecognizerChain
     reg = TemplateRegistry.load(image_manifest)
@@ -301,16 +312,102 @@ def test_fill_spec_gets_ocr_fallback(image_manifest):
     assert "Jy丶阑珊" in r.data["text"]
     assert len(engine.queries) >= 1
 
-def test_fill_spec_ocr_only_without_model(image_manifest):
+def test_fill_spec_gets_ocr_leg_without_yolo_model(image_manifest):
+    """ocr_name_fallback 是独立开关：没配 yolo_model 也该给 fill_ 挂 OCR 腿。
+
+    旧行为把 OCR 腿嵌在 `if shared_yolo is not None` 里，纯模板模式下
+    `ocr_name_fallback: true` 静默失效——名字类判据本来就与 YOLO 无关
+    （YOLO 不训这类），不该被「配没配 YOLO」二次门控。
+    """
+    from rok_assistant.core.recognizers.ocr_text import OCRText
+    from rok_assistant.core.recognizers.template_match import TemplateMatch
     manifest = image_manifest.parent / "manifest.yaml"
     manifest.write_text(manifest.read_text(encoding="utf-8")
                         + "  - id: fill_某人\n    file: template_search.png\n"
                           "    roi: [460, 240, 760, 660]\n    threshold: 0.9\n",
                         encoding="utf-8")
-    from rok_assistant.core.recognizers.template_match import TemplateMatch
     reg = TemplateRegistry.load(manifest)
-    recs = reg.build_recognizers()   # 未配置 yolo_model：与旧版一致纯模板
-    assert isinstance(recs["fill_某人"], TemplateMatch)
+    recs = reg.build_recognizers(ocr_engine=_StubOcrEngine())   # 不传 yolo_model
+    legs = recs["fill_某人"]._recognizers
+    assert isinstance(legs[0], TemplateMatch)     # 模板仍先行
+    assert isinstance(legs[1], OCRText)
+
+
+# ---- 配置驱动的车头判据（2026-10-06）：换车头不该需要改 manifest ----
+
+def test_config_fill_name_without_manifest_gets_ocr_recognizer(image_manifest):
+    """配置点名的车头在 manifest 里没有条目时，就地生成 OCR 判据。
+
+    车头名是账号/配置绑定的，manifest 是随包走的静态资源：用户随时改
+    `fill_target_leaders` 换车头，manifest 不会自动多出一条。旧行为下
+    MemberStateMachine 只打一条 warning，然后 `_find` 永远 None、60 次
+    轮询空转到 no_rally_found——改配置等于静默失效。
+    """
+    from rok_assistant.core.recognizers.ocr_text import OCRText
+    engine = _StubOcrEngine(lines=[("某某 [482A]新車頭", 0.93)])
+    reg = TemplateRegistry.load(image_manifest)
+
+    recs = reg.build_recognizers(ocr_engine=engine, fill_names=["新車頭"])
+
+    assert "fill_新車頭" in recs
+    assert isinstance(recs["fill_新車頭"], OCRText)
+    img = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+    r = recs["fill_新車頭"].recognize(img)
+    assert r.matched and r.data["text"] == "某某 [482A]新車頭"
+    # 名字列 ROI 必须生效：全屏 OCR 会把聊天框里的同名文本也当成目标行，
+    # 然后按固定几何点到一片空地上。420x300 = 实测名字列 460,240,760,660
+    assert engine.queries == [(420, 300, 3)]
+
+
+def test_manifest_fill_entry_wins_over_config_generated(image_manifest):
+    """manifest 里已有的 fill_ 条目仍走「模板先行 + OCR 兜底」，不被顶掉。"""
+    from rok_assistant.core.recognizers.ocr_text import OCRText
+    from rok_assistant.core.recognizers.template_match import TemplateMatch
+    manifest = image_manifest.parent / "manifest.yaml"
+    manifest.write_text(image_manifest.read_text(encoding="utf-8")
+                        + "  - id: fill_阑珊寨子号\n    file: template_search.png\n"
+                          "    roi: [460, 240, 760, 660]\n    threshold: 0.9\n",
+                        encoding="utf-8")
+    reg = TemplateRegistry.load(manifest)
+
+    recs = reg.build_recognizers(ocr_engine=_StubOcrEngine(),
+                                 fill_names=["阑珊寨子号"])
+
+    legs = recs["fill_阑珊寨子号"]._recognizers
+    assert isinstance(legs[0], TemplateMatch)
+    assert isinstance(legs[1], OCRText)
+
+
+def test_config_fill_name_skipped_when_ocr_fallback_disabled(image_manifest):
+    """ocr_name_fallback: false 时不该凭空生成 OCR 判据。"""
+    reg = TemplateRegistry.load(image_manifest)
+
+    recs = reg.build_recognizers(ocr_engine=_StubOcrEngine(),
+                                 fill_names=["新車頭"], ocr_fallback=False)
+
+    assert "fill_新車頭" not in recs
+
+
+def test_fill_recognizers_share_a_single_ocr_engine(image_manifest, monkeypatch):
+    """RapidOCR 是重资源：一次装配只建一个后端，多个 fill_ id 共用。
+
+    每个 id 各建一个后端会让同一帧被反复推理（RapidOcrEngine 的单帧缓存
+    是挂在后端上的，见其 docstring）。
+    """
+    import rok_assistant.core.recognizers.ocr_text as ocr_mod
+    made = []
+
+    class _Counting(ocr_mod.RapidOcrEngine):
+        def __init__(self):
+            super().__init__()
+            made.append(self)
+
+    monkeypatch.setattr(ocr_mod, "RapidOcrEngine", _Counting)
+    reg = TemplateRegistry.load(image_manifest)
+
+    reg.build_recognizers(fill_names=["甲", "乙"])
+
+    assert len(made) == 1
 
 
 def test_build_recognizers_rejects_an_unknown_type(tmp_path):

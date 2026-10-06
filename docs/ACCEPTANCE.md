@@ -48,6 +48,7 @@
 5. **Win32 采集路线放弃**：2560×1600@150% DPI 下 PrintWindow 裁剪且无法保证 1920×1080；ADB 路线已完全替代（点击、截图实测可用）。✅ 已实现（`AdbHandleSource` 为默认路线）
 6. 搜索结果详情弹窗有 ⭐ 书签（与锁定无关，WIP 推测正确）；消失倒计时如 19:59:51 在弹窗左下。✅ 已证实（leader_sm `_verify_unlocked` 锁定判定只看 `rally_attack_popup`，与书签无关）
 7. **识别链顺序：YOLO 先行**（2026-10-04，用户要求）。`template_match` 条目装配成 `[YOLO, 模板]`，两条腿各有自己的阈值（YOLO 用 `yolo_threshold`，缺省 0.5；模板用 `threshold`）。`fill_*` 的兜底腿是 OCR，仍**模板先行**。`preset_1..6` 与 `alliance_btn` 显式关掉 YOLO 腿（定标实测漏检/误报）。细节见 `docs/PROGRESS.md` 阈值参考与 `docs/HISTORY.md` 10-04 一节。
+8. **车头判据由配置驱动**（2026-10-06）。`app.ocr_name_fallback` 是**独立开关**，不再被「配没配 yolo_model」二次门控；`fill_target_leaders` 点名的车头若 manifest 里没有 `fill_<名字>` 条目，runtime 会按名字就地生成 OCR 判据（ROI 取名字列实测基准），**换车头不需要改 manifest**。细节见 `docs/HISTORY.md` 10-06 一节。
 
 ---
 

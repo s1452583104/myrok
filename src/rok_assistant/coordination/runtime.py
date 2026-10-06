@@ -107,11 +107,20 @@ class RuntimeCoordinator:
         # 否则半启动的 runner 成孤儿、下次 start() 会在同一批模拟器上重复拉起
         self._running = True
         try:
+            # 配置点名的车头交给 registry 兜底装配：manifest 是随包静态资源，
+            # 用户改 fill_target_leaders 换车头时不会自动多出 fill_<名字> 条目
+            fill_names = sorted({
+                t.name
+                for inst in self._config.instances
+                for char in inst.characters
+                for t in char.fill_target_leaders
+            })
             recognizers = TemplateRegistry.load(
                 self._template_dir / "manifest.yaml").build_recognizers(
                 yolo_model=(resolve_asset(self._config.app.yolo_model)
                             if self._config.app.yolo_model else None),
-                ocr_fallback=self._config.app.ocr_name_fallback)
+                ocr_fallback=self._config.app.ocr_name_fallback,
+                fill_names=fill_names)
             for inst in self._config.instances:
                 try:
                     handle = create_handle_source(
