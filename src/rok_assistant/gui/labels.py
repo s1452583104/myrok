@@ -109,6 +109,8 @@ LOC_LABELS = {
     "delay_shape": "延迟分布形状",
     "burst_prob": "连点概率",
     "burst_scale": "连点间隔比例",
+    "rapid_click_min": "连点段间隔下限",
+    "rapid_click_max": "连点段间隔上限",
     "anchor_sigma": "按目标散布",
     "member_response_delay_min": "成员响应延迟下限",
     "member_response_delay_max": "成员响应延迟上限",
