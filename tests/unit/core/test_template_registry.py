@@ -476,3 +476,51 @@ def test_pixel_stats_rejects_an_unknown_kind(image_manifest):
     with pytest.raises(ValueError, match="unsupported pixel_stat kind for "
                                          "selected_preset_1: nonsense"):
         reg.build_recognizers()
+
+
+# ---- text_fields 小节（2026-10-07）：固定 ROI + OCR + 整块正则 ----
+
+_TEXT_FIELDS_MANIFEST = (
+    "templates: []\n"
+    "text_fields:\n"
+    "- id: fortress_level\n"
+    "  roi: [100, 470, 1040, 620]\n"
+    "  pattern: '^等级\\s*[：:]\\s*(\\d+)$'\n"
+)
+
+
+def test_loads_text_fields_and_builds_recognizer(tmp_path):
+    m = tmp_path / "manifest.yaml"
+    m.write_text(_TEXT_FIELDS_MANIFEST, encoding="utf-8")
+    reg = TemplateRegistry.load(m)
+    recs = reg.build_recognizers()          # 默认参数（ocr_fallback=True）
+    assert "fortress_level" in recs
+    assert recs["fortress_level"]._roi.x1 == 100
+
+
+def test_no_text_fields_section_builds_nothing_extra(tmp_path):
+    m = tmp_path / "manifest.yaml"
+    m.write_text("templates: []\n", encoding="utf-8")
+    reg = TemplateRegistry.load(m)
+    assert "fortress_level" not in reg.build_recognizers()
+
+
+def test_text_field_survives_ocr_name_fallback_off(tmp_path):
+    # 读面板数字**不该**被「车头名字要不要 OCR 兜底」这个开关门控。
+    # 这条与上一条的区别就是 ocr_fallback=False——不是重复用例。
+    m = tmp_path / "manifest.yaml"
+    m.write_text(_TEXT_FIELDS_MANIFEST, encoding="utf-8")
+    reg = TemplateRegistry.load(m)
+    assert "fortress_level" in reg.build_recognizers(ocr_fallback=False)
+
+
+def test_bad_text_field_roi_raises(tmp_path):
+    m = tmp_path / "manifest.yaml"
+    m.write_text(
+        "templates: []\n"
+        "text_fields:\n"
+        "- id: fortress_level\n"
+        "  roi: [1, 2, 3]\n"
+        "  pattern: 'x'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="text_field fortress_level"):
+        TemplateRegistry.load(m)

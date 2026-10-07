@@ -65,11 +65,25 @@ class PixelStatSpec:
     id: str
     kind: str  # "preset_slot"
 
+@dataclass(frozen=True)
+class TextFieldSpec:
+    """文本字段判据条目（manifest 顶层 `text_fields:` 小节）。
+
+    与 PixelStatSpec 分开的理由相同：没有模板图，放进 `templates:` 会让
+    `entry["file"]` KeyError，或被 auto_label_yolo / ingest_raw_imgs 逐个
+    cv2.imread 后注入垃圾框。
+    """
+    id: str
+    roi: ROI
+    pattern: str
+
 class TemplateRegistry:
     def __init__(self, templates: dict[str, TemplateSpec],
-                 pixel_stats: list[PixelStatSpec] | None = None):
+                 pixel_stats: list[PixelStatSpec] | None = None,
+                 text_fields: list[TextFieldSpec] | None = None):
         self._t = templates
         self._pixel = list(pixel_stats or [])
+        self._text = list(text_fields or [])
 
     def __contains__(self, k: str) -> bool:
         return k in self._t
@@ -165,6 +179,7 @@ class TemplateRegistry:
         out.update(self._build_config_fill_recognizers(
             fill_names, ocr_fallback, ocr_engine))
         out.update(self._build_pixel_recognizers())
+        out.update(self._build_text_field_recognizers(ocr_engine))
         return out
 
     def _build_config_fill_recognizers(self, fill_names, ocr_fallback,
@@ -225,6 +240,28 @@ class TemplateRegistry:
             out.update(build_preset_recognizers(preset_ids))
         return out
 
+    def _build_text_field_recognizers(self, ocr_engine) -> dict:
+        """装配 manifest 顶层 `text_fields:` 小节（spec §3）。
+
+        与 `ocr_name_fallback` **无关**：那个开关管的是「车头名字要不要 OCR
+        兜底」，不是「能不能读面板上的数字」。engine 为 None 时自建一个——
+        构造是懒的（不加载模型），且与名字判据共用实例时能吃到单帧缓存。
+        """
+        if not self._text:
+            return {}
+        from .recognizer import BBox
+        from .recognizers.ocr_text import RapidOcrEngine
+        from .recognizers.text_field import TextFieldRecognizer
+        if ocr_engine is None:
+            ocr_engine = RapidOcrEngine()
+        out = {}
+        for spec in self._text:
+            out[spec.id] = TextFieldRecognizer(
+                spec.id,
+                BBox(spec.roi.x1, spec.roi.y1, spec.roi.x2, spec.roi.y2),
+                spec.pattern, engine=ocr_engine)
+        return out
+
     @staticmethod
     def _ocr_fallback_for(tid, roi, ocr_fallback, ocr_engine):
         """fill_<名字> 的 OCR 兜底：名字取自 id，账号/配置改动不再失效。"""
@@ -265,4 +302,11 @@ class TemplateRegistry:
             PixelStatSpec(id=e["id"], kind=e.get("kind", "preset_slot"))
             for e in (raw.get("pixel_stats") or [])
         ]
-        return TemplateRegistry(templates, pixel_stats)
+        text_fields = []
+        for e in (raw.get("text_fields") or []):
+            roi_raw = e.get("roi")
+            if not (isinstance(roi_raw, list) and len(roi_raw) == 4):
+                raise ValueError(f"Bad ROI in text_field {e['id']}: {roi_raw}")
+            text_fields.append(TextFieldSpec(id=e["id"], roi=ROI(*roi_raw),
+                                             pattern=e["pattern"]))
+        return TemplateRegistry(templates, pixel_stats, text_fields)

@@ -517,3 +517,14 @@ pixel_stats:
   kind: preset_slot
 - id: selected_preset_6
   kind: preset_slot
+
+# 面板上的文本字段：固定 ROI + OCR + 整块正则（见 core/recognizers/text_field.py）。
+# 与 `templates:` / `pixel_stats:` 并列，不进 `templates:`——它没有模板图，
+# 进去会让 entry["file"] KeyError，或被标注工具 cv2.imread 后注入垃圾框。
+text_fields:
+- id: fortress_level
+  roi: [100, 470, 1040, 620]
+  # 必须整块匹配。面板里另有「推荐兵力：1,400,000等级4的战斗单位集结进攻」
+  # 这类含「等级」的长句，子串匹配会锚错对象——这正是那次标注污染的成因
+  # （见 tools/fix_zhaizi_level_labels.py 的 docstring）。
+  pattern: '^等级\s*[：:]\s*(\d+)$'
