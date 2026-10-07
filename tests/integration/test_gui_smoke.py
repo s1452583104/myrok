@@ -14,6 +14,7 @@ class FakeController(QObject):
     """MainWindow 注入替身：无信号时也能离屏构造、驱动按钮。"""
     status_changed = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
+    run_finished = pyqtSignal(dict)          # 新增：all_workers_done 转发的信号
 
     def __init__(self, chars=None):
         super().__init__()
@@ -160,3 +161,17 @@ def test_window_destruction_detaches_log_handler(qapp):
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     qapp.processEvents()
     assert not any(h is handler for h in root.handlers)
+
+
+def test_run_finished_resets_buttons(qapp):
+    from rok_assistant.gui.main_window import MainWindow
+    ctrl = FakeController()
+    w = MainWindow(controller=ctrl)
+    w.start_btn.setEnabled(False)
+    w.stop_btn.setEnabled(True)
+
+    ctrl.run_finished.emit({"reasons": {"inst0:boss": "已完成 10 轮，达到轮数上限"}})
+
+    assert w.start_btn.isEnabled() is True
+    assert w.stop_btn.isEnabled() is False
+    assert "已完成 10 轮" in w.statusBar().currentMessage()

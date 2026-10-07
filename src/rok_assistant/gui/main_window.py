@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         # worker 线程经信号跨线程送达（Qt 自动排队），槽内访问控件是主线程安全的
         self._controller.status_changed.connect(self._on_status_changed)
         self._controller.error_occurred.connect(self._on_error)
+        self._controller.run_finished.connect(self._on_run_finished)
 
     def _install_log_handler(self):
         """挂到 root logger，把日志行投给对应卡片。
@@ -164,6 +165,19 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, message: str):
         QMessageBox.critical(self, "错误", message)
+
+    def _on_run_finished(self, payload: dict):
+        """全部 worker 跑完（自然收工）：按钮复位到停止态。
+
+        用户点 Stop 走的不是这条路——runner 只在 stopped_reason 非 None
+        时上报 worker_finished。不弹模态框：跑完是正常结束，打断无人值守
+        场景反而添乱。
+        """
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        reasons = "；".join(f"{k}: {v}" for k, v
+                            in (payload.get("reasons") or {}).items())
+        self.statusBar().showMessage(f"已收工 —— {reasons}" if reasons else "已收工")
 
     def _setup_refresh_timer(self):
         self._timer = QTimer(self)

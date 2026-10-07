@@ -94,6 +94,10 @@ class RuntimeCoordinator:
         # 进程级动作账本：跨 SM 重建存活，集结门槛的 L0 判据与「谁在外」
         # 归因都读它
         self.ledger = ActionLedger()
+        # 自然收工的 worker 逐个上报；全部报过 → 通知 GUI 复位按钮。
+        # 用户点 Stop 的路径不上报（runner 只在 stopped_reason 非 None 时发）。
+        self._stopped: dict[str, str] = {}
+        self._bus.subscribe("worker_finished", self._on_worker_finished)
         self._running = False
 
     def start(self) -> None:
@@ -162,6 +166,23 @@ class RuntimeCoordinator:
         for handler in self._routes.values():
             self._bus.unsubscribe("rally_launched", handler)
         self._routes.clear()
+        self._stopped.clear()
+        self._running = False
+
+    def _on_worker_finished(self, payload: dict) -> None:
+        """一台 worker 自然收工。全部收工 → 发 all_workers_done（spec §6.2）。
+
+        只在 payload 里的 key 确实在 self.runners 里时才计入，否则
+        「上一次运行遗留的迟到事件」会凑数提前复位按钮。
+        """
+        key = f"{payload.get('instance_id')}:{payload.get('char_id')}"
+        if key not in self.runners:
+            return
+        self._stopped[key] = payload.get("stopped_reason", "")
+        if not set(self.runners) <= set(self._stopped):
+            return
+        logger.info("全部 worker 已收工：%s", self._stopped)
+        self._bus.publish("all_workers_done", {"reasons": dict(self._stopped)})
         self._running = False
 
     def _spawn(self, inst, char, handle, recognizers, profile) -> None:
@@ -209,6 +230,7 @@ class RuntimeCoordinator:
             self._bus.unsubscribe("rally_launched", handler)
         self._routes.clear()
         self.runners = leftover
+        self._stopped.clear()
         self._running = False
 
     @staticmethod

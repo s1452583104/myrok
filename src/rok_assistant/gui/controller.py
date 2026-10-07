@@ -19,6 +19,7 @@ class GuiController(QObject):
 
     status_changed = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
+    run_finished = pyqtSignal(dict)
 
     def __init__(self, config_path: Path | None = None,
                  coordinator_factory=RuntimeCoordinator, parent=None):
@@ -29,6 +30,7 @@ class GuiController(QObject):
         self._config: RootConfig | None = None
         self._bus = EventBus()
         self._bus.subscribe("status_update", self._on_bus_status)
+        self._bus.subscribe("all_workers_done", self._on_bus_all_done)
 
     # ---- 配置 ----
     @property
@@ -87,3 +89,7 @@ class GuiController(QObject):
     # ---- 内部 ----
     def _on_bus_status(self, payload: dict) -> None:
         self.status_changed.emit(payload)   # worker 线程 emit -> Qt 排队到主线程
+
+    def _on_bus_all_done(self, payload: dict) -> None:
+        """全部 worker 自然收工 → 通知界面复位（spec §6.2）。"""
+        self.run_finished.emit(payload)

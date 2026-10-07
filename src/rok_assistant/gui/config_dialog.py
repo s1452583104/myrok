@@ -228,6 +228,16 @@ class ConfigDialog(QDialog):
         form.addRow("", autodetect_btn)
         outer.addLayout(form)
 
+        # 运行参数：max_rounds / max_consecutive_failures 早就在配置模型里
+        # （infra/config.py），但界面上一直没暴露，只能手改 yaml。
+        run = QGroupBox("运行")
+        rf = QFormLayout(run)
+        rf.addRow("最多轮数", self._spin(("app", "max_rounds"),
+                                        app["max_rounds"], 1, 9999))
+        rf.addRow("连续失败上限", self._spin(("app", "max_consecutive_failures"),
+                                          app["max_consecutive_failures"], 1, 99))
+        outer.addWidget(run)
+
         anti = self._data["app"]["anti_detection"]
         group = QGroupBox("防检测参数")
         af = QFormLayout(group)

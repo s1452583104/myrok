@@ -198,6 +198,17 @@ class WorkerRunner:
                 continue   # 退避即全部恢复延时，不再叠加 poll 等待
             self._stop_event.wait(self._human.jitter(self._poll))
 
+        # 主循环退出（三个 break 出口统一走到这里）。stopped_reason 非 None
+        # 才算「自然收工」——用户点 Stop 时它保持 None，不能触发 GUI 复位。
+        if self.stopped_reason is not None and self._bus:
+            self._bus.publish("worker_finished", {
+                "instance_id": self.instance_id, "char_id": self.char_id,
+                "char_name": self.char_name,
+                "stopped_reason": self.stopped_reason,
+                "rounds_done": self.rounds_done,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+            })
+
     def _check_stop_conditions(self) -> bool:
         """终态后的停止条件检查（2026-09-11 验收目标：跑满 N 轮或连续失败
         即收工）。命中时置 stopped_reason、发 "done" 状态并让主循环退出。"""

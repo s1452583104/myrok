@@ -326,3 +326,46 @@ def test_runner_stops_after_consecutive_step_errors():
     assert r._error_streak == 4  # max_consecutive_failures * 2
     assert r.stopped_reason is not None and "step 异常" in r.stopped_reason
     assert r.status == "done"
+
+
+def test_runner_publishes_worker_finished_on_natural_stop():
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    got = []
+    bus.subscribe("worker_finished", got.append)
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(),
+                     handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=bus, poll_interval=0.01, restart_cooldown=0.05,
+                     max_rounds=1)
+    r.sm.on_rally_launched({"rally_id": "r1"})
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and not got:
+        time.sleep(0.02)
+    r.stop()
+    assert len(got) == 1
+    assert got[0]["instance_id"] == "i1" and got[0]["char_id"] == "c1"
+    assert "轮数上限" in got[0]["stopped_reason"]
+    assert got[0]["rounds_done"] == 1
+
+
+def test_runner_does_not_publish_worker_finished_on_user_stop():
+    # 用户点 Stop 时 stopped_reason 保持 None —— 不能触发界面复位
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    got = []
+    bus.subscribe("worker_finished", got.append)
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=_member_factory(),
+                     handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=bus, poll_interval=0.01, restart_cooldown=0.05,
+                     max_rounds=99)
+    r.sm.on_rally_launched({"rally_id": "r1"})
+    r.start()
+    time.sleep(0.05)          # 让主循环真的转起来再停
+    r.stop()
+    assert r.stopped_reason is None
+    assert got == []
