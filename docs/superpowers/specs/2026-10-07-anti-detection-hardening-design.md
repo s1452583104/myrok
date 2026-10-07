@@ -76,7 +76,7 @@
 | D1 | 判据缺失下的取向 | 消除机器签名（可变的步数 + 节奏） | 无判据可猜，只能按通用原则 |
 | D2 | 等级读法 | 固定 ROI + RapidOCR 数字提取 | 见 §3.2；YOLO 腿的「抗布局漂移」在本项目是伪收益 |
 | D3 | 读不出时 | 退回现有盲降路径（原样保留） | 最坏情况与现状**逐字相同**，OCR 抖动不烧轮次 |
-| D4 | `_LEVEL_CACHE` | **删除** | 它是盲进的补偿手段；有回读后是多余的跨轮可变状态 |
+| D4 | `_LEVEL_CACHE` | **保留，但降级为只服务盲降回退路径** | 回退路径就是今天的代码，逐字沿用才能兑现「最坏与现状相同」 |
 | D5 | 连点节奏 | 新增独立旋钮 `rapid_click_min/max` | 复用全局下限要么仍是 3.1s，要么得压低**每一处**点击 |
 | D6 | 坐标经验值缓存 | **不做** | 时间耗在 sleep 不在识别；且会把人性化层的高斯散布钉成常量，**加回「坐标重复」签名** |
 | D7 | 全局 `action_delay` | 不动 | 用户确认目标不是吞吐 |
@@ -152,13 +152,16 @@ _select_level(ctx):
     current = self._read_level()             # 最多 3 帧，见 4.2
     if current is None:
         logger.warning("[车头] 等级文本读不出（面板可能不在城寨页），退回盲降")
-        return self._blind_set_level(target) # 见 4.4：即今天「缓存为 None」那一支
+        return self._blind_set_level(target) # 见 4.4：今天 _select_level 的主体，逐字保留
+
     if current == target:
         logger.info("[车头] 面板等级已是 %s 级，跳过调整", target)
+        self._cache_level(target)            # 见 4.4：回读路径也要写缓存
         return
 
     self._set_level(target, current)         # 点 |delta| 次，走 §5 的连点节奏
-    self._verify_level(target)               # 回读校验，最多 2 轮修正
+    if self._verify_level(target):           # 回读校验，最多 2 轮修正；返回是否确认
+        self._cache_level(target)
 ```
 
 ### 4.2 常量
@@ -176,38 +179,49 @@ _select_level(ctx):
 ### 4.3 回读校验
 
 ```
-_verify_level(target):
+_verify_level(target) -> bool:           # True = 已确认面板在 target
     for round in range(_LEVEL_VERIFY_ROUNDS):
         read = self._read_level()
         if read is None:
-            break                       # 读不出就不再纠缠，交给 no_result 计数
+            return False                # 读不出就不再纠缠，交给 no_result 计数
         if read == target:
             logger.info("[车头] 等级回读确认 %s 级", target)
-            return
+            return True
         logger.warning("[车头] 等级回读 %s 级 ≠ 目标 %s 级，补点 %s 次",
                        read, target, abs(target - read))
         self._set_level(target, read)
     logger.warning("[车头] 等级回读仍未确认（目标 %s 级），继续本轮",
                    target)
+    return False
 ```
 
 最后一条**只记 warning 不抛错**：等级偏差会被后续 `no_result` 计数自然兜住
 （`_check_result` 的既有机制），不该为此直接烧掉一轮。
 
-### 4.4 删除 `_LEVEL_CACHE`，盲降固定为「全量降底」
+返回值同时决定要不要写 `_LEVEL_CACHE`（见 4.4）——只有确认过才写。
 
-**盲降路径只保留今天「缓存为 None」那一支**（`leader_sm.py:375-380`）：
-12 次 `level_minus` 降到底，再升到目标。这是刻意选的——它**不依赖任何跨轮状态**，
-所以删掉缓存后它仍然自洽，而且它就是今天首轮的行为，最坏情况与现状逐字相同。
-（今天那条「缓存命中则只点差量」的支线随缓存一起删除：回读接管了它的职责。）
+### 4.4 `_LEVEL_CACHE` 保留，降级为只服务盲降回退路径
 
-删除清单：`_LEVEL_CACHE` / `_LEVEL_CACHE_LOCK`（`leader_sm.py:29-30`）、
-`_select_level` 里的读写（`:370-371`、`:388-389`）、`_check_result` 里清缓存那段
-（`:411-412`）。
+`_LEVEL_CACHE` / `_LEVEL_CACHE_LOCK`（`leader_sm.py:29-30`）与 `_check_result`
+里清缓存那段（`:411-412`）**都保留**。它们不再参与主路径，只被 `_blind_set_level`
+使用。
 
-理由：缓存本来就是盲进的补偿手段，自己的注释都承认「若玩家在 GUI 运行期间手动改过
-面板等级，缓存会偏一轮」。有了回读它就是**多余的跨轮可变状态**，删掉是净简化——
-而且 `_check_result` 清缓存那个动作今天会强制一次 12 连点，回读之后不再需要。
+`_blind_set_level(target)` 就是今天 `_select_level` 的主体（`leader_sm.py:367-391`
+去掉开头那次 `tab_fortress` 点击），**逐字搬成独立方法**：读缓存 → 命中则只点差量、
+为 None 则 12 次 `level_minus` 降底 → 点差量 → 写回缓存。
+
+为什么不是「删掉缓存、盲降固定全量降底」——我最初就是这么设计的，但它**兑现不了
+本 spec 的承诺**。盲降只在 OCR 读不出时才走，而一旦读不出，删掉缓存就意味着第二轮
+起每轮都要 12 连点降底；现状下缓存命中时第二轮是**零点击**。那是实打实的回归，不是
+「最坏与现状相同」。
+
+保留缓存的代价是留着一个跨轮可变状态（它的注释自己承认「玩家手动改过面板等级，
+缓存会偏一轮」）。这个代价只落在**降级模式**里，而那个模式的步数本来就是固定的
+（12+N），所以对反检测没有损失。
+
+**回读路径也要写缓存**，否则混合场景（第一轮回读成功、第二轮回读失败）下缓存仍是
+空的，盲降又会退回全量降底。规则：`_verify_level` 返回是否确认成功，确认了才写
+`_LEVEL_CACHE[handle] = target`——「面板确实在 target」这件事我们已经验过了。
 
 `_blind_set_level` 的点击数（12 + 最多 9）**不受** `_LEVEL_MAX_CLICKS` 约束——
 那个上限只针对回读成功后的差量点击。
@@ -378,6 +392,7 @@ preflight(instances, app_config) -> dict[instance_id, HandleSource]
 | `_select_level` | ① 读到 == 目标 → **零点击**；② 读到 3、目标 6 → 恰好 3 次 `level_plus`；③ 读到 9、目标 4 → 5 次 `level_minus`；④ 读不出 → 退回盲降（12 次 minus）；⑤ 越界值（如 15）→ 视为读失败 |
 | 回读校验 | 首轮点击被「吞掉」（假 handle 只记部分点击）→ 第二轮补点后读数收敛；`_LEVEL_VERIFY_ROUNDS` 用尽 → 只 warning 不抛错 |
 | 连点节奏 | `rapid=True` 走 `rapid_click_delay` 区间、`rapid=False` 走 `click_delay` 区间（注入 `random.Random` 定种子断言） |
+| 缓存降级 | ① 回读确认成功 → `_LEVEL_CACHE[handle] == target`；② 回读失败/未确认 → **不**写缓存；③ 既有三个缓存测试（`reuses_cached_level` / `invalidates_..._on_retry` / `switch_order_follows_config`）**保持原样通过**——它们是盲降回退路径的回归护栏 |
 | 预检 | ① 两台全通 → 返回 2 个 handle；② 一台尝试 3 次后仍失败 → 抛错且文案含实例名；③ 尺寸非 1920×1080 → 抛错且文案含实际尺寸；④ 失败时**未**装配识别器 |
 | 自动复位 | ① `stopped_reason` 非 None → 发 `worker_finished`；② 用户 Stop（`stopped_reason is None`）→ **不**发；③ 全部报过 → 发 `all_workers_done`；④ `MainWindow` 收到后按钮复位 |
 
@@ -394,7 +409,7 @@ preflight(instances, app_config) -> dict[instance_id, HandleSource]
 | **ROI 锚到「野蛮人」页的等级** | 面板记住上次 Tab，野蛮人页**也有等级**。若 `tab_fortress` 那次点击失败而野蛮人页的等级行恰好落在同一 ROI，回读会读到一个**看似合法**的数字，且因为回读自洽而**不会被自纠机制发现** | **实机必须验**：在城寨页与野蛮人页各截一帧，确认该 ROI 只在城寨页读出「等级：N」。若两页都读得出，加一道守卫（见 §10）。**这是本设计唯一的实质性未知** |
 | 等级回读偶发读不出 | OCR 抖动 | D3 退回盲降，最坏与现状逐字相同 |
 | `rapid` 参数漏实现 | 某个 `HandleSource` 实现没收下关键字 → `TypeError` | 5 个实现类逐一改；可选加一条扫描测试（同 `tests/unit/infra/test_subproc.py` 的做法） |
-| 删除 `_LEVEL_CACHE` 影响既有单测 | 有测试直接引用它 | 随改动一并更新；这是刻意的简化，不是回归 |
+| 盲降回退路径被改坏 | 它是降级模式，只在 OCR 失败时才走到，容易长期不被发现 | 逐字保留今天的主体；既有的三个缓存测试（`test_select_level_reuses_cached_level` / `test_no_result_invalidates_level_cache_and_resyncs_on_retry` / `test_switch_order_follows_config_not_sorted`）**一行不改**即为护栏 |
 | `text_fields` 新键被 manifest 校验拒绝 | — | `load` 是 `raw.get(...)` 裸字典读取，未知键本就忽略；**实现时先确认** |
 | 连点下限过低丢点击 | 游戏丢点击 | 默认 `rapid_click_min=0.35` 有实测支撑；且回读校验会补 |
 
