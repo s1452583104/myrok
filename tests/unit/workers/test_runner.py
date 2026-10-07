@@ -365,7 +365,12 @@ def test_runner_does_not_publish_worker_finished_on_user_stop():
                      max_rounds=99)
     r.sm.on_rally_launched({"rally_id": "r1"})
     r.start()
-    time.sleep(0.05)          # 让主循环真的转起来再停
+    # 等主循环真的跑过至少一轮（有可观测进展）再停：只用固定 sleep 的话，
+    # 工作线程若在进主循环前就挂了，got == [] 仍会通过，用例形同虚设。
+    deadline = time.time() + 5
+    while time.time() < deadline and r.rounds_done < 1:
+        time.sleep(0.02)
+    assert r.rounds_done >= 1, "主循环没跑起来，用例前提不成立"
     r.stop()
     assert r.stopped_reason is None
     assert got == []

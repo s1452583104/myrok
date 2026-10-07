@@ -103,6 +103,16 @@ class RuntimeCoordinator:
     def start(self) -> None:
         if self._running:
             return
+        # worker_finished 的订阅与「运行」同寿：先撤后挂，保证恰好一份
+        # （__init__ 已挂一份；自然收工 / stop / 回滚 都会撤掉）。unsubscribe
+        # 幂等，重复撤订无副作用。
+        self._bus.unsubscribe("worker_finished", self._on_worker_finished)
+        self._bus.subscribe("worker_finished", self._on_worker_finished)
+        # 复用同一 coordinator（自然收工后没 stop 就再 start）时，runners 里
+        # 留的是已死线程的引用、_stopped 已满——不清的话第二轮第一台 worker
+        # 一收工就会满足「全部收工」提前触发，把运行中的 Stop 按钮禁掉。
+        self.runners.clear()
+        self._stopped.clear()
         # 只告警不拦启动：同等级且互为填兵目标的两号可能搜到同一寨子，
         # 撞车只会白烧一次搜索（已降级不计失败），不该阻断运行
         for msg in find_level_collisions(self._config):
@@ -166,6 +176,7 @@ class RuntimeCoordinator:
         for handler in self._routes.values():
             self._bus.unsubscribe("rally_launched", handler)
         self._routes.clear()
+        self._bus.unsubscribe("worker_finished", self._on_worker_finished)
         self._stopped.clear()
         self._running = False
 
@@ -184,6 +195,14 @@ class RuntimeCoordinator:
         logger.info("全部 worker 已收工：%s", self._stopped)
         self._bus.publish("all_workers_done", {"reasons": dict(self._stopped)})
         self._running = False
+        # 收工即退订：订阅与运行同寿。否则旧 coordinator 仍挂在同一根 bus 上，
+        # 下一次运行中途会被它凑满再发一次 all_workers_done（把 Stop 禁掉）。
+        # EventBus.publish 遍历的是 handler 列表副本，循环内退订安全。
+        self._bus.unsubscribe("worker_finished", self._on_worker_finished)
+        # 清掉陈旧状态：自然收工后 runners 里是已死线程的引用、_stopped 已满，
+        # 留着会让复用时下一轮第一次上报就提前凑满。
+        self._stopped.clear()
+        self.runners.clear()
 
     def _spawn(self, inst, char, handle, recognizers, profile) -> None:
         key = f"{inst.id}:{char.id}"
@@ -229,6 +248,7 @@ class RuntimeCoordinator:
         for handler in self._routes.values():
             self._bus.unsubscribe("rally_launched", handler)
         self._routes.clear()
+        self._bus.unsubscribe("worker_finished", self._on_worker_finished)
         self.runners = leftover
         self._stopped.clear()
         self._running = False

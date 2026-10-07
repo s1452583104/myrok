@@ -14,8 +14,12 @@ class EventBus:
         self._handlers[event].append(handler)
 
     def unsubscribe(self, event: str, handler: Callable) -> None:
-        if event in self._handlers:
-            self._handlers[event].remove(handler)
+        # 幂等：未订阅时静默返回。RuntimeCoordinator 需要「先撤后挂」来保证
+        # 恰好一份订阅，而它可能在自然收工/stop 后已自行退订过——重复撤订
+        # 不该抛 ValueError（list.remove 对缺失元素会抛）。
+        handlers = self._handlers.get(event)
+        if handlers and handler in handlers:
+            handlers.remove(handler)
 
     def publish(self, event: str, payload: dict) -> None:
         # 订阅者在 worker 线程内被调用（如 _set_status 的 except 路径），
