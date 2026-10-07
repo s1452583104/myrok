@@ -7,7 +7,6 @@ from typing import Callable
 import cv2
 
 from ..core.template_registry import TemplateRegistry
-from ..core.handle_source import create_handle_source
 from ..infra.app_paths import resolve_asset, user_dir
 from ..infra.config import RootConfig, RoleEnum, find_level_collisions
 from ..infra.anti_detection import HumanProfile, JitteringHandleSource
@@ -16,6 +15,7 @@ from ..workers.factory import create_state_machine
 from ..workers.runner import WorkerRunner
 from .action_ledger import ActionLedger
 from .event_bus import EventBus
+from .preflight import preflight
 
 logger = get_logger(__name__)
 
@@ -117,10 +117,15 @@ class RuntimeCoordinator:
         # 撞车只会白烧一次搜索（已降级不计失败），不该阻断运行
         for msg in find_level_collisions(self._config):
             logger.warning("%s", msg)
-        # 先置位再组装：若中途失败（如第 2 个实例连不上），必须走回滚，
-        # 否则半启动的 runner 成孤儿、下次 start() 会在同一批模拟器上重复拉起
+        # 先置位再组装：若中途失败（如识别器装配失败、第 2 台 worker 起不来），
+        # 必须走回滚，否则半启动的 runner 成孤儿、下次 start() 会重复拉起
+        # （连接失败已由上面的预检在 worker 诞生前拦下，不再走这条回滚）
         self._running = True
         try:
+            # 预检先行：在任何 worker 诞生之前确认每台模拟器都截得到
+            # screen_width×screen_height 的画面。放在装配识别器之前——
+            # 识别器要加载 ONNX，好几秒，连不上的时候不该白花（spec §7.3）。
+            handles = preflight(self._config.instances, self._config.app)
             # 配置点名的车头交给 registry 兜底装配：manifest 是随包静态资源，
             # 用户改 fill_target_leaders 换车头时不会自动多出 fill_<名字> 条目
             fill_names = sorted({
@@ -136,29 +141,8 @@ class RuntimeCoordinator:
                 ocr_fallback=self._config.app.ocr_name_fallback,
                 fill_names=fill_names)
             for inst in self._config.instances:
-                try:
-                    handle = create_handle_source(
-                        mumu_index=inst.mumu_index,
-                        mumu_manager_path=self._config.app.mumu_manager_path,
-                        adb_address=inst.adb_address,
-                        adb_path=self._config.app.adb_path,
-                        window_title_pattern=inst.window_title_pattern)
-                except Exception as e:
-                    # **报错必须点名是哪一台。** 2026-10-05 用户报「只连上一个，
-                    # 另一个成员实例报错」——配了两台时，裸异常里只有
-                    # 「模拟器 1 可能没有启动」这种编号，界面又只弹一个泛泛的
-                    # 「启动失败」，用户根本不知道说的是哪台、该去开哪个。
-                    #
-                    # 这段**整个落在日志之外**：worker 还没起来，运行日志里一个字
-                    # 都没有（用户的 logs/ 里那次就是 0 字节），事后查不出来。
-                    # 所以这里既点名又写日志，别指望下一个人能从别处还原现场。
-                    where = f"MuMu 编号 {inst.mumu_index}" if inst.mumu_index is not None \
-                        else (f"adb {inst.adb_address}" if inst.adb_address
-                              else f"窗口 {inst.window_title_pattern!r}")
-                    logger.error("模拟器「%s」（%s，%s）连接失败：%s",
-                                 inst.name, inst.id, where, e)
-                    raise RuntimeError(
-                        f"模拟器「{inst.name}」（{inst.id}，{where}）连不上：{e}") from e
+                # 预检已经建好并验过帧，这里直接复用——见 preflight 的 docstring
+                handle = handles[inst.id]
                 profile = HumanProfile(self._config.app.anti_detection)
                 handle = JitteringHandleSource(handle, profile)
                 for char in inst.characters[:1]:

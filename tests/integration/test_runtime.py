@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import patch
 
 from rok_assistant.coordination.runtime import RuntimeCoordinator
+from rok_assistant.coordination import preflight as PF
 from rok_assistant.coordination.event_bus import EventBus
 from rok_assistant.core.handle_source import MockHandleSource
 from rok_assistant.infra.config import load_config
@@ -83,6 +84,11 @@ instances:
 """
 
 
+def _fake_handle():
+    """预检会按 AppConfig 校验分辨率，假帧必须给足默认的 1920×1080。"""
+    return MockHandleSource(screenshot=np.zeros((1080, 1920, 3), dtype=np.uint8))
+
+
 def _write_config(tmp_path, text=VALID):
     p = tmp_path / "config.yaml"
     p.write_text(text, encoding="utf-8")
@@ -95,8 +101,8 @@ def _running_coordinator(tmp_path, config_text=VALID):
     cfg = _write_config(tmp_path, config_text)
     (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
     bus = EventBus()
-    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
-    with patch("rok_assistant.coordination.runtime.create_handle_source",
+    fake_handle = _fake_handle()
+    with patch("rok_assistant.coordination.preflight.create_handle_source",
                return_value=fake_handle):
         coord = RuntimeCoordinator(cfg, event_bus=bus, template_dir=tmp_path)
         coord.start()
@@ -223,14 +229,26 @@ class StuckRunner(FakeRunner):
         self.stopped = True   # 线程假装没听见
 
 
+class BoomRunner(FakeRunner):
+    """第 2 个实例构造时抛错：预检前置后连接失败不再产生半启动状态，但
+    _spawn 中途失败仍要走 _rollback —— 用这个替身钉住「已起的 runner 被收掉」。"""
+    made = 0
+
+    def __init__(self, **kw):
+        BoomRunner.made += 1
+        if BoomRunner.made == 2:
+            raise RuntimeError("inst1 连不上")
+        super().__init__(**kw)
+
+
 @contextmanager
 def _fake_runner_coordinator(tmp_path, runner_cls=FakeRunner):
     cfg = _write_config(tmp_path)
     (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
     bus = EventBus()
-    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    fake_handle = _fake_handle()
     FakeRunner.instances = []
-    with patch("rok_assistant.coordination.runtime.create_handle_source",
+    with patch("rok_assistant.coordination.preflight.create_handle_source",
                return_value=fake_handle), \
          patch("rok_assistant.coordination.runtime.WorkerRunner", runner_cls):
         coord = RuntimeCoordinator(cfg, event_bus=bus, template_dir=tmp_path)
@@ -269,11 +287,11 @@ def test_stop_unsubscribes_routes_and_restart_resubscribes_once(tmp_path):
 def test_partial_start_failure_rolls_back(tmp_path):
     cfg = _write_config(tmp_path)
     (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
-    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     FakeRunner.instances = []
-    with patch("rok_assistant.coordination.runtime.create_handle_source",
-               side_effect=[fake_handle, RuntimeError("inst1 连不上")]), \
-         patch("rok_assistant.coordination.runtime.WorkerRunner", FakeRunner):
+    BoomRunner.made = 0
+    with patch("rok_assistant.coordination.preflight.create_handle_source",
+               return_value=_fake_handle()), \
+         patch("rok_assistant.coordination.runtime.WorkerRunner", BoomRunner):
         coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
         with pytest.raises(RuntimeError):
             coord.start()
@@ -285,20 +303,26 @@ def test_partial_start_failure_rolls_back(tmp_path):
         assert FakeRunner.instances[0].stopped
 
 
-def test_start_error_names_the_emulator_that_failed(tmp_path):
-    """报错必须点名是哪一台，且保留原始原因。
+def test_start_error_names_the_emulator_that_failed(tmp_path, monkeypatch):
+    """报错必须点名是哪一台，且保留原始原因——现在由预检产出。
 
     2026-10-05 用户报「点 Start 后只连上一个，另一个成员实例报错」，但运行日志
-    里两个 worker 都正常——失败落在 `create_handle_source` 阶段，worker 还没起来，
-    **日志里一个字都没有**。配了两台时，裸异常里只有「模拟器 1 可能没有启动」
-    这种编号，界面上再包一层泛泛的「启动失败」，用户根本不知道说的是哪台。
+    里两个 worker 都正常——失败落在建句柄阶段，worker 还没起来，**日志里一个字
+    都没有**。配了两台时，裸异常里只有「模拟器 1 可能没有启动」这种编号，
+    界面上再包一层泛泛的「启动失败」，用户根本不知道说的是哪台。预检前置后这段
+    点名逻辑搬进 preflight（见其 _where），这里验证它确实透传到界面。
     """
     cfg = _write_config(tmp_path)
     (tmp_path / "manifest.yaml").write_text(EMPTY_MANIFEST, encoding="utf-8")
-    fake_handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     FakeRunner.instances = []
-    with patch("rok_assistant.coordination.runtime.create_handle_source",
-               side_effect=[fake_handle, RuntimeError("模拟器 1 可能没有启动")]), \
+    monkeypatch.setattr(PF.time, "sleep", lambda _s: None)   # 别让预检退避真睡 3 秒
+
+    def _factory(**kw):
+        if kw["adb_address"] == "127.0.0.1:5556":
+            raise RuntimeError("模拟器 1 可能没有启动")
+        return _fake_handle()
+
+    with patch("rok_assistant.coordination.preflight.create_handle_source", _factory), \
          patch("rok_assistant.coordination.runtime.WorkerRunner", FakeRunner):
         coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
         with pytest.raises(RuntimeError) as ei:
@@ -307,6 +331,7 @@ def test_start_error_names_the_emulator_that_failed(tmp_path):
     assert "b" in msg, f"没点名是哪台模拟器：{msg}"          # 第 2 个实例的 name
     assert "inst1" in msg, f"没带上实例 id：{msg}"
     assert "模拟器 1 可能没有启动" in msg, f"把原始原因吞了：{msg}"
+    assert "已试 3 次" in msg, f"没带上重试次数：{msg}"
 
 
 def test_stop_keeps_reference_to_stuck_runner(tmp_path):
