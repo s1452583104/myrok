@@ -33,7 +33,8 @@ class ReplayHandleSource:
         path = self._session.session_dir / self._session.frames[idx].file
         return cv2.imread(str(path))
 
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
         self.clicks.append((x, y))
 
     def is_alive(self) -> bool:

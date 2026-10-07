@@ -274,3 +274,52 @@ def test_mock_handle_source_accepts_anchor_and_records_xy():
     h = MockHandleSource(np.zeros((2, 2, 3), np.uint8))
     h.click(1, 2, anchor="march_btn")
     assert h.clicks == [(1, 2)]
+
+
+import numpy as np
+
+from rok_assistant.core.handle_source import MockHandleSource
+
+
+def test_rapid_click_delay_uses_its_own_range():
+    cfg = AntiDetectionConfig(action_delay_min=3.1, action_delay_max=5.5,
+                              rapid_click_min=0.35, rapid_click_max=0.8,
+                              delay_shape="uniform")
+    prof = HumanProfile(cfg, rng=random.Random(0))
+    vals = [prof.rapid_click_delay() for _ in range(300)]
+    assert min(vals) >= 0.35
+    assert max(vals) <= 0.8
+
+
+def test_click_delay_is_unaffected_by_rapid_range():
+    cfg = AntiDetectionConfig(action_delay_min=3.1, action_delay_max=5.5,
+                              rapid_click_min=0.35, rapid_click_max=0.8,
+                              delay_shape="uniform")
+    prof = HumanProfile(cfg, rng=random.Random(0))
+    vals = [prof.click_delay() for _ in range(300)]
+    assert min(vals) >= 3.1
+    assert max(vals) <= 5.5
+
+
+def test_jittering_handle_picks_delay_by_rapid_flag(monkeypatch):
+    slept = []
+    monkeypatch.setattr("rok_assistant.infra.anti_detection.time.sleep",
+                        lambda s: slept.append(s))
+    cfg = AntiDetectionConfig(action_delay_min=3.1, action_delay_max=5.5,
+                              rapid_click_min=0.35, rapid_click_max=0.8,
+                              debug_no_jitter=True)
+    inner = MockHandleSource(np.zeros((10, 10, 3), dtype=np.uint8))
+    h = JitteringHandleSource(inner, HumanProfile(cfg))
+
+    h.click(5, 5)
+    assert slept[-1] == (3.1 + 5.5) / 2
+
+    h.click(5, 5, rapid=True)
+    assert slept[-1] == (0.35 + 0.8) / 2
+
+
+def test_mock_handle_accepts_rapid_without_changing_recorded_clicks():
+    # 既有 66 处调用方断言的是 (x, y) 二元组，形状不能变
+    h = MockHandleSource(np.zeros((10, 10, 3), dtype=np.uint8))
+    h.click(5, 5, rapid=True)
+    assert h.clicks == [(5, 5)]

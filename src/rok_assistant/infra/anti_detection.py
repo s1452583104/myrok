@@ -18,6 +18,13 @@ class AntiDetectionConfig:
     delay_shape: str = "beta"          # beta | uniform（uniform = 回退旧行为）
     burst_prob: float = 0.3            # 走「连点」短间隔的概率
     burst_scale: float = 0.25          # 连点间隔 = min + (max-min)*U(0, scale)
+    # 连点段（同一控件上的连续点击，如等级 +/-）的间隔。人手调数字盘是连着
+    # 点好几下，不该套用跨动作延迟；而突发分支在 action_delay_min=3.1 下
+    # 算出来只有 3.1–3.7s，等于没有突发（spec §5.2）。
+    # 下限 0.35 有实测支撑：0.35s 间隔连点 19 次零丢失
+    #（原 leader_sm._LEVEL_CLICK_PACE 的值）。
+    rapid_click_min: float = 0.35
+    rapid_click_max: float = 0.8
     anchor_sigma: dict = field(default_factory=dict)   # 模板 id -> σ 覆盖
     member_response_delay_min: float = 0.0   # 默认关闭：见 Global Constraints
     member_response_delay_max: float = 0.0
@@ -66,21 +73,28 @@ class HumanProfile:
         self._rng = rng if rng is not None else random.Random()
 
     # ---- 点击前延迟 ----
-    def click_delay(self) -> float:
-        cfg = self._cfg
-        lo, hi = cfg.action_delay_min, cfg.action_delay_max
-        if cfg.debug_no_jitter:
-            return (lo + hi) / 2
+    def _shaped(self, lo: float, hi: float) -> float:
+        """同一套形状换一个区间（顺序即 spec §7 的回滚杠杆，别重排）。"""
         if hi <= lo:
             return lo
-        # uniform 先短路：spec §7 把它定为独立回滚杠杆（单独回退延迟分布），
-        # 必须与 burst_prob 无关地直接回到旧的均匀采样，绝不进突发分支。
-        if cfg.delay_shape == "uniform":
+        if self._cfg.delay_shape == "uniform":
             return self._rng.uniform(lo, hi)
-        # 突发分支先于 Beta 形状抽取：beta 路径的行为与顺序保持逐位不变。
-        if cfg.burst_prob > 0 and self._rng.random() < cfg.burst_prob:
-            return lo + (hi - lo) * self._rng.uniform(0.0, cfg.burst_scale)
+        if self._cfg.burst_prob > 0 and self._rng.random() < self._cfg.burst_prob:
+            return lo + (hi - lo) * self._rng.uniform(0.0, self._cfg.burst_scale)
         return lo + (hi - lo) * self._rng.betavariate(_BETA_A, _BETA_B)
+
+    def click_delay(self) -> float:
+        cfg = self._cfg
+        if cfg.debug_no_jitter:
+            return (cfg.action_delay_min + cfg.action_delay_max) / 2
+        return self._shaped(cfg.action_delay_min, cfg.action_delay_max)
+
+    def rapid_click_delay(self) -> float:
+        """连点段的间隔（见 AntiDetectionConfig.rapid_click_min）。"""
+        cfg = self._cfg
+        if cfg.debug_no_jitter:
+            return (cfg.rapid_click_min + cfg.rapid_click_max) / 2
+        return self._shaped(cfg.rapid_click_min, cfg.rapid_click_max)
 
     # ---- 坐标散布 ----
     def disperse(self, x: int, y: int, anchor: str | None = None) -> tuple[int, int]:
@@ -154,9 +168,14 @@ class JitteringHandleSource:
     def capture(self):
         return self._inner.capture()
 
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
-        time.sleep(self._profile.click_delay())
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
+        delay = (self._profile.rapid_click_delay() if rapid
+                 else self._profile.click_delay())
+        time.sleep(delay)
         jx, jy = self._profile.disperse(int(x), int(y), anchor)
+        # `anchor` 到此为止（既有约定，见类 docstring）；`rapid` 同理——
+        # 两者都只对本层有意义，不往下传
         self._inner.click(jx, jy)
 
     def swipe(self, x1, y1, x2, y2, duration_ms=300):

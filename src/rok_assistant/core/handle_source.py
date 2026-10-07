@@ -16,11 +16,16 @@ class HandleSource(Protocol):
     def capture(self) -> np.ndarray:
         """Return current screen as BGR numpy array."""
         ...
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
         """Click at (x, y) in window-local pixel coordinates.
 
         `anchor` 是可选的目标名（模板 id），只用于让反检测层按目标选择
         散布 σ；实现类可以完全忽略它。
+
+        `rapid=True` 表示这是**同一控件上的连续点击**（如等级 +/- 连点），
+        反检测层据此换用更短的间隔区间（rapid_click_min/max）。同样只对
+        反检测层有意义，实现类忽略即可。
         """
         ...
     def is_alive(self) -> bool:
@@ -39,7 +44,8 @@ class MockHandleSource:
     def capture(self) -> np.ndarray:
         return self._screenshot.copy()
 
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
         self.clicks.append((x, y))
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
@@ -139,7 +145,8 @@ class AdbHandleSource:
             raise RuntimeError(f"screencap returned undecodable data from {self._address}")
         return img
 
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
         self._run_checked([self._adb_path, *self._serial_args(),
                            "shell", "input", "tap", str(int(x)), str(int(y))])
 
@@ -225,7 +232,8 @@ class Win32HandleSource:
         img = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-    def click(self, x: int, y: int, anchor: str | None = None) -> None:
+    def click(self, x: int, y: int, anchor: str | None = None,
+              rapid: bool = False) -> None:
         hwnd = self._resolve_hwnd()
         if hwnd is None:
             raise RuntimeError(f"No window matching: {self._pattern}")
