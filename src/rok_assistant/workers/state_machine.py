@@ -71,9 +71,9 @@ class StateMachine:
         r = rec.recognize(img)
         return r if r.matched else None
 
-    def _click_result(self, r: RecognizeResult) -> bool:
+    def _click_result(self, r: RecognizeResult, rapid: bool = False) -> bool:
         x, y = r.bbox.center()
-        self._handle.click(x, y, anchor=r.recognizer_id)
+        self._handle.click(x, y, anchor=r.recognizer_id, rapid=rapid)
         return True
 
     def _click_xy(self, x: float, y: float, anchor: str | None = None) -> bool:
@@ -86,11 +86,11 @@ class StateMachine:
         self._handle.click(int(x), int(y), anchor=anchor)
         return True
 
-    def _click(self, rec_id: str) -> bool:
+    def _click(self, rec_id: str, rapid: bool = False) -> bool:
         r = self._find(rec_id)
         if r is None:
             return False
-        return self._click_result(r)
+        return self._click_result(r, rapid=rapid)
 
     def _pause(self, base: float | None) -> float:
         """轮询间隔：调用方给了基准就抖动基准，没给就用 profile 的轮询节奏。"""

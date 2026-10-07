@@ -1,17 +1,11 @@
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from rok_assistant.core.handle_source import MockHandleSource
 from rok_assistant.coordination.action_ledger import ActionLedger
 from rok_assistant.workers.leader_sm import LeaderStateMachine
 from rok_assistant.workers.member_sm import MemberStateMachine
-
-
-@pytest.fixture(autouse=True)
-def _no_pace(monkeypatch):
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
 
 
 def _rec(matched=True):

@@ -149,8 +149,6 @@ def test_runner_rebuilds_after_either_leader_give_up(monkeypatch):
     # runner 冷却后重建新 SM 重试：工厂必须被再次调用（第二个 SM 实例）
     from rok_assistant.workers.either_sm import EitherStateMachine
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
-    # leader 等级连点停顿置 0，免真实睡眠拖垮重建时限
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
     # 车头错峰抖动置 0：不烧真实睡眠（上限 45s 会吃掉 5s 重建时限）
     monkeypatch.setattr("rok_assistant.workers.either_sm.random.uniform",
                         lambda a, b: 0.0)

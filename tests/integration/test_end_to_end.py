@@ -46,8 +46,6 @@ def _recs(ids):
 
 
 def test_leader_launches_member_fills_and_runner_rebuilds(monkeypatch):
-    # 等级连点防丢停顿在 E2E 里置 0：mock 识别器下无需防丢，省 ~6s 真实睡眠
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
     bus = EventBus()
     img = np.zeros((100, 100, 3), dtype=np.uint8)
     handle = MockHandleSource(screenshot=img)

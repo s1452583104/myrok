@@ -13,11 +13,6 @@ _RESIDUAL_IDS = ("war_title", "queue_panel", "rally_attack_popup", "ap_refill",
                  "warning_panel", "search_back", "map_btn", "alliance_btn")
 
 
-@pytest.fixture(autouse=True)
-def _no_pace(monkeypatch):
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
-
-
 def _rec(matched=True):
     rec = MagicMock()
     rec.recognize.return_value.matched = matched

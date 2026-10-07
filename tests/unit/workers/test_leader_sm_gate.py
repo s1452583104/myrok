@@ -9,7 +9,6 @@ LeaderStateMachine（factory.py）。
 """
 
 import numpy as np
-import pytest
 from unittest.mock import MagicMock
 
 from rok_assistant.core.handle_source import MockHandleSource
@@ -18,11 +17,6 @@ from rok_assistant.infra.config import CharacterConfig, RoleEnum
 from rok_assistant.workers.factory import create_state_machine
 from rok_assistant.workers.leader_sm import LeaderStateMachine
 from rok_assistant.workers.queue_gate import QueueGate
-
-
-@pytest.fixture(autouse=True)
-def _no_pace(monkeypatch):
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
 
 
 def _mock_rec(matched=True, center=(50, 50)):

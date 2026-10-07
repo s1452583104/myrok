@@ -12,7 +12,6 @@ from rok_assistant.workers.queue_gate import GateDecision
 
 @pytest.fixture(autouse=True)
 def _no_pace(monkeypatch):
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
     monkeypatch.setattr("rok_assistant.workers.either_sm.random.uniform",
                         lambda a, b: 0.0)
 

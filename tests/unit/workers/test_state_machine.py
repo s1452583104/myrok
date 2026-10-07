@@ -155,7 +155,14 @@ def test_click_result_passes_recognizer_id_as_anchor():
     result.bbox = bbox
     result.recognizer_id = "march_btn"
     sm._click_result(result)
-    sm._handle.click.assert_called_once_with(10, 20, anchor="march_btn")
+    sm._handle.click.assert_called_once_with(10, 20, anchor="march_btn",
+                                             rapid=False)
+
+    # rapid=True 必须透传到 handle：等级连点段靠它换更短的节奏（Task 3/4）
+    sm._handle.click.reset_mock()
+    sm._click_result(result, rapid=True)
+    sm._handle.click.assert_called_once_with(10, 20, anchor="march_btn",
+                                             rapid=True)
 
 
 def test_click_xy_passes_anchor():

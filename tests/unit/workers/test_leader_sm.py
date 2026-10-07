@@ -1,4 +1,5 @@
 import logging
+import time
 
 import numpy as np
 import pytest
@@ -27,11 +28,28 @@ class _FakeTime:
         self.t += s
 
 
+class _NoSleepTime:
+    """只吞掉 sleep 的 time 替身。`time()` 保持真实——_launch 用它盖 rally_id。"""
+
+    def __init__(self, real):
+        self._real = real
+        self.sleeps = []
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+
+    def time(self):
+        return self._real.time()
+
+
 @pytest.fixture(autouse=True)
 def _fast_time(monkeypatch):
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
-    # 等级连点防丢的停顿在单测里置 0，免真实睡眠
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
+    # 等级回读的重读间隔在单测里置 0。连点节奏现由 anti_detection 持有，
+    # 而这里的 handle 是裸 MockHandleSource（不经过 JitteringHandleSource），
+    # 所以没有真实睡眠。
+    monkeypatch.setattr("rok_assistant.workers.leader_sm.time",
+                        _NoSleepTime(time))
 
 
 def _mock_rec(matched=True, center=(50, 50)):
@@ -748,3 +766,112 @@ def test_found_after_switch_launches_that_level():
         steps += 1
     assert sm._ctx.get("level_index") == 1
     assert sm.last_rally_event["fortress_level"] == 5
+
+
+# ---- 等级回读（2026-10-07）：读面板实际等级 → 点差量 → 回读校验 ----------
+# 主路径不再盲降到底再升，而是读 manifest 的 fortress_level（Task 1/2）后只
+# 点差量。读不出（旧配置 / OCR 失败 / 读到非 1..10）时逐字退回盲降。
+
+from rok_assistant.core.recognizer import BBox, RecognizeResult
+
+
+class _LevelStub:
+    """假等级识别器：按调用顺序依次返回 levels，用尽后重复最后一个。
+    None 表示读不出（matched=False）。"""
+
+    def __init__(self, levels):
+        self._levels = list(levels)
+        self._i = 0
+
+    def recognize(self, _img):
+        lv = self._levels[min(self._i, len(self._levels) - 1)]
+        self._i += 1
+        if lv is None:
+            return RecognizeResult(matched=False, bbox=None, confidence=0.0,
+                                   data={"text": ""},
+                                   recognizer_id="fortress_level")
+        return RecognizeResult(
+            matched=True, bbox=BBox(200, 520, 300, 545), confidence=0.9,
+            data={"text": f"等级：{lv}", "value": str(lv)},
+            recognizer_id="fortress_level")
+
+
+def _make_sm_with_level(levels, target_levels=(7,)):
+    """_make_sm + 注入 fortress_level 假识别器。"""
+    sm, handle = _make_sm(target_levels=target_levels)
+    sm._rec["fortress_level"] = _LevelStub(levels)
+    return sm, handle
+
+
+def _to_select_level(sm):
+    sm.step()   # IDLE -> NORMALIZE
+    sm.step()   # NORMALIZE -> SEARCH_FORTRESS
+    sm.step()   # SEARCH_FORTRESS -> SELECT_LEVEL（执行 _select_level）
+
+
+def test_select_level_skips_when_readback_equals_target():
+    sm, handle = _make_sm_with_level([7], target_levels=(7,))
+    _to_select_level(sm)
+    # search_icon 1 + tab_fortress 1；一次 level_plus/minus 都没有
+    assert len(handle.clicks) == 2
+
+
+def test_select_level_clicks_exact_delta_up():
+    # 读序 3 → 点 +3 → 回读 6：面板随点击变化，_LevelStub 按序返回
+    sm, handle = _make_sm_with_level([3, 6], target_levels=(6,))
+    _to_select_level(sm)
+    # search_icon 1 + tab 1 + plus 3 = 5（不是固定 12+N）
+    assert len(handle.clicks) == 5
+
+
+def test_select_level_clicks_exact_delta_down():
+    # 读序 9 → 点 -5 → 回读 4
+    sm, handle = _make_sm_with_level([9, 4], target_levels=(4,))
+    _to_select_level(sm)
+    assert len(handle.clicks) == 1 + 1 + 5
+
+
+def test_out_of_range_readback_falls_back_to_blind():
+    sm, handle = _make_sm_with_level([15, 15, 15], target_levels=(7,))
+    _to_select_level(sm)
+    assert len(handle.clicks) == 1 + 1 + 12 + 6
+
+
+def test_unreadable_level_falls_back_to_blind():
+    sm, handle = _make_sm_with_level([None, None, None], target_levels=(7,))
+    _to_select_level(sm)
+    assert len(handle.clicks) == 1 + 1 + 12 + 6
+
+
+def test_missing_recognizer_keeps_old_blind_behaviour():
+    # 老配置 / 未更新 manifest：没有 fortress_level → 与改动前逐字相同
+    sm, handle = _make_sm(target_levels=(7,))
+    assert "fortress_level" not in sm._rec
+    _to_select_level(sm)
+    assert len(handle.clicks) == 1 + 1 + 12 + 6
+
+
+def test_verify_corrects_a_lost_click():
+    # 读序：初读 3 → 校验仍 3（点击被吞）→ 再校验 6（补点生效）
+    sm, handle = _make_sm_with_level([3, 3, 6], target_levels=(6,))
+    _to_select_level(sm)
+    assert len(handle.clicks) == 1 + 1 + 3 + 3
+
+
+def test_verify_gives_up_after_bounded_rounds_without_raising():
+    sm, handle = _make_sm_with_level([3, 3, 3], target_levels=(6,))
+    _to_select_level(sm)
+    # 初读 3 + 两轮修正各 3 次，用尽 _LEVEL_VERIFY_ROUNDS 后只 warning
+    assert len(handle.clicks) == 1 + 1 + 3 + 3 + 3
+    assert not sm.is_terminal()
+
+
+def test_readback_writes_cache_only_after_confirmation():
+    from rok_assistant.workers.leader_sm import _LEVEL_CACHE
+    sm, handle = _make_sm_with_level([6], target_levels=(6,))
+    _to_select_level(sm)
+    assert _LEVEL_CACHE.get(handle) == 6
+
+    sm2, h2 = _make_sm_with_level([3, 3, 3], target_levels=(6,))
+    _to_select_level(sm2)
+    assert _LEVEL_CACHE.get(h2) is None      # 未确认 → 不写缓存

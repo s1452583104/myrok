@@ -9,8 +9,6 @@ from rok_assistant.core.handle_source import MockHandleSource
 
 @pytest.fixture(autouse=True)
 def _no_level_pace(monkeypatch):
-    # leader 等级连点停顿（防丢点击）在单测里置 0，免真实睡眠
-    monkeypatch.setattr("rok_assistant.workers.leader_sm._LEVEL_CLICK_PACE", 0.0)
     # 车头错峰抖动置 0：单测不烧真实睡眠；抖动专项测试自行覆盖
     monkeypatch.setattr("rok_assistant.workers.either_sm.random.uniform",
                         lambda a, b: 0.0)

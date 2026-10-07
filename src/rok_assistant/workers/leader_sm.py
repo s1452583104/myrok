@@ -20,11 +20,16 @@ _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
 # 实机验收 mumu1 卡死态）：点侧栏外空地收起侧栏与「创建部队」引导气泡。
 _QUEUE_SIDEBAR_DISMISS = (1550, 320)
 # 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
-# 0.4s 间隔实测 19 连点零丢失）。测试里置 0 免真实睡眠。
-_LEVEL_CLICK_PACE = 0.35
-# 搜索面板会记住上次等级：进程内按句柄缓存上次设置的等级，每轮只点差量
-# （2026-09-11 验收反馈：每轮 12 降 + N 升太慢）。弱引用键随句柄回收自动
-# 失效，避免 id 复用导致脏缓存；锁保护两个 worker 线程的并发读写。
+# 0.35s 间隔实测 19 连点零丢失）。节奏值现由 anti_detection.rapid_click_min
+# 持有（spec §5），这里不再有第二处硬编码 sleep。
+_LEVEL_BLIND_RESET = 12          # 读不出等级时的降底点击数（原 12 次 minus）
+_LEVEL_READ_ATTEMPTS = 3         # 读等级的重读次数
+_LEVEL_VERIFY_ROUNDS = 2         # 回读校验 + 修正的轮数上限
+# 搜索面板会记住上次等级。**2026-10-07 起本缓存只服务盲降回退路径**
+# （_blind_set_level）——主路径改为回读面板实际等级，不再需要它。
+# 保留而不是删除的原因：盲降就是改动前的代码，缓存命中时它只点差量；
+# 删掉会让「OCR 读不出」的每一轮都退回 12 连点降底，那是回归（spec §4.4）。
+# 弱引用键随句柄回收自动失效；锁保护两个 worker 线程的并发读写。
 # 已知限制：若玩家在 GUI 运行期间手动改过面板等级，缓存会偏一轮。
 _LEVEL_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _LEVEL_CACHE_LOCK = threading.Lock()
@@ -61,8 +66,13 @@ class LeaderStateMachine(StateMachine):
     march_btn 的 00:00:XX 是行军时长估计而非倒计时，点击即发（无自动发车风险），
     但必须在发布 rally_launched 前确认点击成功——点击失败不得唤醒成员。
 
-    v1 已知限制（接受，与 member_sm 同类）：等级设置盲进——level_minus ×12 /
-    level_plus ×N 不回读结果等级，模板误点无法被检测。
+    等级设置（2026-10-07 改）：优先**回读**面板上的「等级：N」文本
+    （manifest 的 text_fields.fortress_level），据此点差量并回读校验，
+    点击次数随当前等级自然变化。读不出时退回盲降（12 次 level_minus 降底
+    再升，见 _blind_set_level），此时仍是改动前的盲进行为。
+    已知限制：读出的等级可能来自非城寨页（面板会记住上次 Tab，而野蛮人页
+    也有等级）——同一 ROI 上若两页都能读出合法数字，回读自洽、不会被自纠
+    机制发现。待实机确认（spec §9）。
     """
 
     def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
@@ -359,36 +369,119 @@ class LeaderStateMachine(StateMachine):
         """
         return self._target_levels[ctx.get("level_index", 0)]
 
+    def _read_level(self) -> int | None:
+        """读搜索面板上的当前城寨等级；读不出返回 None。
+
+        manifest 没配 `fortress_level`（旧配置 / 未更新模板）时直接返回
+        None，调用方退回盲降——与改动前逐字相同的行为。
+        """
+        rec = self._rec.get("fortress_level")
+        if rec is None:
+            return None
+        for attempt in range(_LEVEL_READ_ATTEMPTS):
+            img = self._handle.capture()
+            self.last_image = img          # 失败截图要能看到当时读到的是什么
+            r = rec.recognize(img)
+            if r.matched:
+                raw = (r.data or {}).get("value", "")
+                try:
+                    lv = int(raw)
+                except (TypeError, ValueError):
+                    lv = None
+                if lv is not None and 1 <= lv <= 10:
+                    return lv
+                # 读出个不在 1..10 的东西：面板多半不在城寨页（tab 切换失败）。
+                # 不猜也不钳制——静默钳制会把「读错对象」伪装成「等级就是 10」，
+                # 正是最难查的那类问题。
+                logger.warning("[车头] 等级文本读出 %r（不在 1..10），视为读失败",
+                               raw)
+            if attempt < _LEVEL_READ_ATTEMPTS - 1:
+                time.sleep(self._pause(None))
+        return None
+
+    def _set_level(self, target: int, current: int) -> int:
+        """从 current 点差量到 target，返回实际点击次数（不写日志）。
+
+        不加次数上限：两个端点都落在 1..10（`_read_level` 校验读值，
+        `_current_level` 来自配置），差量天然有界。多一个上限只会让盲降
+        路径不再与改动前等价，而「最坏情况与现状相同」是本次设计的前提。
+        """
+        delta = target - current
+        btn = "level_plus" if delta > 0 else "level_minus"
+        for _ in range(abs(delta)):
+            self._click(btn, rapid=True)
+        return abs(delta)
+
+    def _cache_level(self, level: int) -> None:
+        with _LEVEL_CACHE_LOCK:
+            _LEVEL_CACHE[self._handle] = level
+
+    def _blind_set_level(self, target: int) -> None:
+        """等级读不出时的降级路径 = 改动前 _select_level 的主体，逐字保留。
+
+        spec §4.4：**不删缓存**。缓存命中就只点差量，否则 12 连点降底再升。
+        这条路径只在 OCR 失败时走到，保留缓存才能兑现「最坏情况与改动前相同」。
+        与原实现的唯一差别是：每点一下的停顿不再由这里 sleep，改由
+        JitteringHandleSource 按 `rapid=True` 用 rapid_click_min/max 承担
+        （spec §5.2）——点击次数与顺序逐字未变。
+        """
+        with _LEVEL_CACHE_LOCK:
+            cached = _LEVEL_CACHE.get(self._handle)
+        if cached == target:
+            logger.info("[车头] 面板等级已是 %s 级，跳过调整", target)
+            return
+        if cached is None:
+            logger.info("[车头] 面板等级未知，先降到底再升到 %s 级", target)
+            for _ in range(_LEVEL_BLIND_RESET):
+                self._click("level_minus", rapid=True)
+            start = 1
+        else:
+            start = cached
+        self._set_level(target, start)
+        self._cache_level(target)
+        logger.info("[车头] 面板等级 %s → %s 级（%s 次点击）", start, target,
+                    (_LEVEL_BLIND_RESET if cached is None else 0)
+                    + abs(target - start))
+
+    def _verify_level(self, target: int) -> bool:
+        """回读校验 + 补点。返回 True = 已确认面板在 target。
+
+        最后只 warning 不抛错：等级偏差会被后续 no_result 计数自然兜住
+        （_check_result 的既有机制），不该为此直接烧掉一轮。
+        """
+        for _ in range(_LEVEL_VERIFY_ROUNDS):
+            read = self._read_level()
+            if read is None:
+                return False
+            if read == target:
+                logger.info("[车头] 等级回读确认 %s 级", target)
+                return True
+            logger.warning("[车头] 等级回读 %s 级 ≠ 目标 %s 级，补点 %s 次",
+                           read, target, abs(target - read))
+            self._set_level(target, read)
+        logger.warning("[车头] 等级回读仍未确认（目标 %s 级），继续本轮", target)
+        return False
+
     def _select_level(self, ctx):
         # 面板记住上次的 Tab（实测落在「野蛮人」上，2026-09-11 实机验收发现）。
         # tab_fortress 模板采的是未选中（灰色）态：匹配到 ⇔ 当前不在城寨页，
         # 点它切换；已在城寨页（棕色选中态）不匹配，_click 自动跳过。
         self._click("tab_fortress")
-        level = self._current_level(ctx)
-        # 等级差量调整：缓存缺失（GUI 启动后首轮）才连点降到底，之后每轮
-        # 只点与目标的差量；等级已是目标则零点击（2026-09-11 验收反馈）。
-        with _LEVEL_CACHE_LOCK:
-            cached = _LEVEL_CACHE.get(self._handle)
-        if cached == level:
-            logger.info("[车头] 面板等级已是 %s 级，跳过调整", level)
+        target = self._current_level(ctx)
+
+        current = self._read_level()
+        if current is None:
+            logger.warning("[车头] 等级文本读不出（面板可能不在城寨页），退回盲降")
+            self._blind_set_level(target)
             return
-        if cached is None:
-            logger.info("[车头] 面板等级未知，先降到底再升到 %s 级", level)
-            for _ in range(12):
-                self._click("level_minus")
-                time.sleep(_LEVEL_CLICK_PACE)
-            start = 1
-        else:
-            start = cached
-        delta = level - start
-        btn = "level_plus" if delta > 0 else "level_minus"
-        for _ in range(abs(delta)):
-            self._click(btn)
-            time.sleep(_LEVEL_CLICK_PACE)
-        with _LEVEL_CACHE_LOCK:
-            _LEVEL_CACHE[self._handle] = level
-        logger.info("[车头] 面板等级 %s → %s 级（%s 次点击）",
-                    start, level, (12 if cached is None else 0) + abs(delta))
+        if current == target:
+            logger.info("[车头] 面板等级已是 %s 级，跳过调整", target)
+            self._cache_level(target)
+            return
+        n = self._set_level(target, current)
+        logger.info("[车头] 面板等级 %s → %s 级（%s 次点击）", current, target, n)
+        if self._verify_level(target):
+            self._cache_level(target)
 
     def _confirm_search(self, ctx):
         self._click_retry("search_btn")
