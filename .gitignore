@@ -58,3 +58,6 @@ models/*.onnx
 
 # superpowers skill working dirs
 .superpowers/
+
+# 授权私钥：只留在发码端，绝不进发行包，也不入库
+secrets/
