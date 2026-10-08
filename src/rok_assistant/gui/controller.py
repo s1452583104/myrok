@@ -8,6 +8,7 @@ from ..coordination.event_bus import EventBus
 from ..coordination.runtime import RuntimeCoordinator
 from ..infra.app_paths import config_path as default_config_path
 from ..infra.config import RootConfig
+from ..infra.licensing import guard
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +76,14 @@ class GuiController(QObject):
         被拒（本分支的主场景）时异常在这里被吞、方法正常返回，界面若照旧
         置位就会谎报运行中，Stop 可点而实际什么都没跑。
         """
+        # 纵深防御：GUI 的 _on_start 已经拦过一道，这里再拦一道，
+        # 覆盖不经过界面的调用方（预检脚本、将来的 CLI）。
+        # 放在配置闸门**之前**：与 _on_start 的「先授权后配置」同序，
+        # 且授权过期是最外层、最该先告知用户的阻塞原因。
+        status = guard.current_guard().status()
+        if not status.allows_run:
+            self.error_occurred.emit(f"授权已到期：{status.label()}")
+            return False
         if self._config is None and not self.load_config():
             return False
         try:

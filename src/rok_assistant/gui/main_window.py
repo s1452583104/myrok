@@ -10,11 +10,65 @@ from PyQt6.QtCore import Qt, QTimer
 
 from .character_card import CharacterCard
 from .controller import GuiController
+from .license_dialog import LicenseDialog
 from .log_handler import QtLogHandler
 from ..infra.app_paths import config_path, ensure_user_files, user_dir
+from ..infra.licensing import guard
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
+
+_WARN_DAYS = 7
+_NOTICE_FILE = ".roklicense-notice"
+
+
+def warn_key(status) -> str:
+    """提醒的「已读」标记值。
+
+    带**到期日**：用户又买了天数（到期日变了）就重新提醒一次——否则
+    「不再提醒」之后再也收不到提醒，买完才发现快到期。
+    """
+    return f"{status.kind}:{status.expiry}"
+
+
+def should_warn(status, marker_text: str | None) -> bool:
+    """到期前 7 天提醒一次（spec §8.1）。纯函数，便于单测。"""
+    if status.kind not in ("trial", "licensed"):
+        return False
+    if status.days_left is None or status.days_left > _WARN_DAYS:
+        return False
+    return (marker_text or "").strip() != warn_key(status)
+
+
+def _maybe_warn_expiring(parent):
+    """启动时的一次性到期提醒。
+
+    **只在 `main()` 里调，绝不能放进 `MainWindow.__init__`**：那样 400+ 条
+    测试每条都会弹一次模态框，测试直接挂死。
+    """
+    try:
+        status = guard.current_guard().status()
+    except Exception:                          # noqa: BLE001
+        return
+    marker = user_dir() / _NOTICE_FILE
+    try:
+        text = marker.read_text(encoding="utf-8")
+    except OSError:
+        text = None
+    if not should_warn(status, text):
+        return
+    box = QMessageBox(parent)
+    box.setWindowTitle("授权即将到期")
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setText(f"{status.label()}，到期后将无法启动任务。")
+    box.addButton("知道了", QMessageBox.ButtonRole.AcceptRole)
+    never = box.addButton("不再提醒", QMessageBox.ButtonRole.DestructiveRole)
+    box.exec()
+    if box.clickedButton() is never:
+        try:
+            marker.write_text(warn_key(status), encoding="utf-8")
+        except OSError:
+            logger.warning("写入到期提醒标记失败：%s", marker)
 
 
 class MainWindow(QMainWindow):
@@ -55,6 +109,12 @@ class MainWindow(QMainWindow):
         self.config_btn = QPushButton("⚙ 配置")
         self.config_btn.clicked.connect(self._open_config)
         top.addWidget(self.config_btn)
+        top.addStretch()                      # 授权标签推到右边
+        self.license_label = QLabel("")
+        top.addWidget(self.license_label)
+        self.activate_btn = QPushButton("激活")
+        self.activate_btn.clicked.connect(self._open_license_dialog)
+        top.addWidget(self.activate_btn)
         root.addLayout(top)
         # Account area
         self.account_area = QScrollArea()
@@ -69,6 +129,7 @@ class MainWindow(QMainWindow):
         # Status bar
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
+        self._refresh_license_label()
 
     def _connect_controller(self):
         # worker 线程经信号跨线程送达（Qt 自动排队），槽内访问控件是主线程安全的
@@ -143,6 +204,8 @@ class MainWindow(QMainWindow):
 
     # ---------------- 运行控制 ----------------
     def _on_start(self):
+        if not self._license_ok():             # 到期就不让跑（但仍能开窗）
+            return
         if not self._controller.config_loaded and not self._controller.load_config():
             return
         self._rebuild_cards()   # 懒加载后建卡，状态才有落点
@@ -198,6 +261,50 @@ class MainWindow(QMainWindow):
             if data is not None:
                 card.set_thumbnail(data)
 
+    # ---------------- 授权 ----------------
+    def _refresh_license_label(self):
+        """状态栏常驻授权标签。
+
+        **不弹窗、不拦启动**——到期也照常开窗，用户看得到自己的配置还在
+        （spec §2「能进界面，不能跑任务」）。
+        """
+        try:
+            self._apply_license_label(guard.current_guard().status())
+        except Exception:                      # noqa: BLE001 - 授权坏了不该拖垮界面
+            logger.exception("读取授权状态失败")
+            self.license_label.setText("授权状态未知")
+
+    def _apply_license_label(self, status):
+        self.license_label.setText(status.label())
+        self.license_label.setStyleSheet(
+            "color:#27ae60;" if status.allows_run else "color:#c0392b;")
+
+    def _license_ok(self) -> bool:
+        """Start 前的授权闸门：不允许就弹激活窗、保持按钮置灰（spec §8.1）。
+
+        读不出状态时**一律拦**（fail closed）：这是 Qt 槽，异常逃出去 PyQt6
+        会直接 abort 整个进程；而且放行等于给了一条「让 status() 抛异常即可
+        免授权」的路径。界面仍能开，用户看得到自己的配置还在。
+        """
+        try:
+            status = guard.current_guard().status()
+        except Exception:                      # noqa: BLE001 - 授权坏了不该拖垮界面
+            logger.exception("读取授权状态失败，拒绝启动")
+            self.license_label.setText("授权状态未知")
+            self.statusBar().showMessage("授权状态未知，无法启动任务")
+            return False
+        self._apply_license_label(status)
+        if status.allows_run:
+            return True
+        self.statusBar().showMessage(status.label())
+        self._open_license_dialog()
+        return False
+
+    def _open_license_dialog(self):
+        dlg = LicenseDialog(guard.current_guard(), self)
+        if dlg.exec():
+            self._refresh_license_label()
+
     def _open_config(self):
         path = config_path()
         if not path.exists():
@@ -224,10 +331,18 @@ def main():
     # 控制台报错无 traceback。日志目录优先取项目 logs/（§3.8 验收要求）。
     setup_logging(user_dir() / "logs")
 
+    # 授权状态在这里查一次就够（WMI 在冻结包里慢，1~2s）。
+    # **不拦截启动**：到期也照常开窗，由 Start 按钮拦。
+    try:
+        guard.current_guard().status()
+    except Exception:                          # noqa: BLE001
+        logger.exception("授权状态初始化失败，界面照常打开")
+
     try:
         app = QApplication(sys.argv)
         w = MainWindow()
         w.show()
+        _maybe_warn_expiring(w)                # 到期前 7 天提醒一次（spec §8.1）
     except Exception as e:            # noqa: BLE001 - console=False 时看不到 traceback
         import traceback
         crash = user_dir() / "logs" / "startup_crash.log"
