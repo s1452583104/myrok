@@ -26,6 +26,18 @@ def _rec(trial_start=1000, last_seen=2000, licenses=None):
                         licenses=list(licenses or []))
 
 
+def _write_raw(path, text):
+    """直接往存储位置写原始内容（用来伪造「某一处被改过」）。
+
+    必须先摘掉隐藏/系统属性：本机上带这两个属性的文件无法以 O_TRUNC 打开
+    （`write_text` 就是 O_TRUNC），而 `st.write()` 刚给它们设过——这正是
+    `store._FileSlot.save` 自己也要做的同一件事。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store._set_attrs(path, store._ATTR_NORMAL)
+    path.write_text(text, encoding="utf-8")
+
+
 # ---- 基本读写 ----
 
 def test_write_then_read_roundtrip(st):
@@ -57,17 +69,15 @@ def test_default_locations_has_all_three_slots():
 def test_read_takes_earliest_trial_start(st, loc):
     """取最早 = 剩余试用期最少，是保守方向。"""
     st.write(FP, _rec(trial_start=1000, last_seen=2000))
-    loc.program_data.write_text(
-        store._serialize(_rec(trial_start=500, last_seen=2000), FP),
-        encoding="utf-8")
+    _write_raw(loc.program_data,
+               store._serialize(_rec(trial_start=500, last_seen=2000), FP))
     assert st.read(FP).record.trial_start == 500
 
 
 def test_read_takes_latest_last_seen(st, loc):
     st.write(FP, _rec(trial_start=1000, last_seen=2000))
-    loc.program_data.write_text(
-        store._serialize(_rec(trial_start=1000, last_seen=9000), FP),
-        encoding="utf-8")
+    _write_raw(loc.program_data,
+               store._serialize(_rec(trial_start=1000, last_seen=9000), FP))
     assert st.read(FP).record.last_seen == 9000
 
 
@@ -75,9 +85,8 @@ def test_licenses_merged_as_union_by_serial(st, loc, sign_code):
     c1 = sign_code(FP, kind=codec.KIND_EXTEND, days=30, serial=1)
     c2 = sign_code(FP, kind=codec.KIND_EXTEND, days=7, serial=2)
     st.write(FP, _rec(licenses=[{"code": c1, "applied_at": 10}]))
-    loc.program_data.write_text(
-        store._serialize(_rec(licenses=[{"code": c2, "applied_at": 20}]), FP),
-        encoding="utf-8")
+    _write_raw(loc.program_data,
+               store._serialize(_rec(licenses=[{"code": c2, "applied_at": 20}]), FP))
     got = {codec.serial_of(i["code"]) for i in st.read(FP).record.licenses}
     assert got == {1, 2}
 
@@ -85,9 +94,8 @@ def test_licenses_merged_as_union_by_serial(st, loc, sign_code):
 def test_same_serial_keeps_smaller_applied_at(st, loc, sign_code):
     c1 = sign_code(FP, kind=codec.KIND_EXTEND, days=30, serial=1)
     st.write(FP, _rec(licenses=[{"code": c1, "applied_at": 10}]))
-    loc.program_data.write_text(
-        store._serialize(_rec(licenses=[{"code": c1, "applied_at": 99}]), FP),
-        encoding="utf-8")
+    _write_raw(loc.program_data,
+               store._serialize(_rec(licenses=[{"code": c1, "applied_at": 99}]), FP))
     items = st.read(FP).record.licenses
     assert len(items) == 1
     assert items[0]["applied_at"] == 10
@@ -129,7 +137,7 @@ def test_all_present_but_invalid_is_tamper_not_reset(st, loc):
     for p in (loc.program_data, loc.user_file):
         obj = json.loads(p.read_text(encoding="utf-8"))
         obj["trial_start"] = 1                      # 改一个字节，HMAC 就对不上
-        p.write_text(json.dumps(obj), encoding="utf-8")
+        _write_raw(p, json.dumps(obj))
     res = st.read(FP)
     assert res.exists is True
     assert res.valid is False
@@ -143,7 +151,7 @@ def test_unknown_version_is_treated_as_absent(st, loc):
     for p in (loc.program_data, loc.user_file):
         obj = json.loads(p.read_text(encoding="utf-8"))
         obj["v"] = 2
-        p.write_text(json.dumps(obj), encoding="utf-8")
+        _write_raw(p, json.dumps(obj))
     res = st.read(FP)
     assert res.tampered is False
     assert res.record is None
@@ -151,8 +159,8 @@ def test_unknown_version_is_treated_as_absent(st, loc):
 
 def test_broken_json_is_treated_as_absent(st, loc):
     st.write(FP, _rec())
-    loc.program_data.write_text("{不是 JSON", encoding="utf-8")
-    loc.user_file.write_text("", encoding="utf-8")
+    _write_raw(loc.program_data, "{不是 JSON")
+    _write_raw(loc.user_file, "")
     assert st.read(FP).tampered is False
 
 
@@ -160,8 +168,8 @@ def test_missing_field_is_treated_as_absent(st, loc):
     st.write(FP, _rec())
     obj = json.loads(loc.user_file.read_text(encoding="utf-8"))
     del obj["licenses"]
-    loc.user_file.write_text(json.dumps(obj), encoding="utf-8")
-    loc.program_data.write_text("{}", encoding="utf-8")
+    _write_raw(loc.user_file, json.dumps(obj))
+    _write_raw(loc.program_data, "{}")
     assert st.read(FP).tampered is False
 
 
@@ -187,7 +195,7 @@ def test_cached_fp_main_returns_full_fingerprint(st):
 
 
 def test_cached_fp_main_ignores_broken_records(st, loc):
-    loc.user_file.write_text("{坏的", encoding="utf-8")
+    _write_raw(loc.user_file, "{坏的")
     assert st.cached_fp_main() is None
 
 
