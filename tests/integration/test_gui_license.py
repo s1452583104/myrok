@@ -159,6 +159,37 @@ def test_start_with_broken_license_guard_is_blocked_not_crashed(monkeypatch, win
     assert "授权状态未知" in w.statusBar().currentMessage()
 
 
+# ---- 「激活」按钮的槽兜底 ----
+
+def test_activate_button_does_not_crash_when_dialog_raises(monkeypatch, window):
+    """「激活」按钮直连 `_open_license_dialog`（绕过 `_license_ok`），正踩在 I1 路径上。
+
+    构造 `LicenseDialog` 前要 `current_guard()`，它可能抛（记录被改坏等）；
+    异常逃出 Qt 槽 → PyQt6 默认 qFatal → 整个进程 abort，而激活窗正是授权
+    出问题时**唯一**的自救入口。所以这里必须兜住。
+    """
+    from rok_assistant.gui import main_window as mw
+
+    class _BoomDialog:
+        def __init__(self, *a, **k):
+            raise TypeError("fromhex() argument must be str or bytes-like, not int")
+
+    warned = []
+
+    class _FakeBox:
+        # 只用到 warning：换成假类，避免真弹模态框把用例挂住
+        @staticmethod
+        def warning(parent, title, text):
+            warned.append(text)
+
+    monkeypatch.setattr(guard_mod, "current_guard", lambda: _StubGuard("trial", 12))
+    monkeypatch.setattr(mw, "LicenseDialog", _BoomDialog)
+    monkeypatch.setattr(mw, "QMessageBox", _FakeBox)
+    w = window()
+    w.activate_btn.click()                     # 不抛
+    assert warned and "授权组件异常" in warned[0]
+
+
 # ---- 到期前 7 天提醒（spec §8.1）----
 
 def test_should_warn_within_7_days():
