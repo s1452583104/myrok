@@ -80,8 +80,9 @@
 激活码用 Ed25519 签名（122 字符），绑主板 UUID + CPU ID。
 
 - 模块：`src/rok_assistant/infra/licensing/`（`codec` / `verify` / `pubkey` /
-  `fingerprint` / `store` / `state` / `guard`）。**`guard` 是唯一门面**，
-  界面与 worker 只认它。
+  `fingerprint` / `store` / `state` / `guard`）。**`guard` 是唯一门面**：
+  界面只认它，闸门在 `GuiController.start()` 与 `MainWindow._on_start()`；
+  worker 完全不碰授权——它们是被闸门放行之后才起来的。
 - 存储三处冗余（注册表 + `C:\ProgramData` + `<user_dir>\.roklicense`），
   **重新解压只清得掉第三处**——这就是防「解压刷新试用期」的全部机制。
 - 到期日**不落盘**，每次启动从记录里的签名码现算，所以伪造它需要私钥。

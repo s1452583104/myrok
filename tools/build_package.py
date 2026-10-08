@@ -168,9 +168,9 @@ def _verify(app_dir: Path) -> int:
 
     # 私钥泄漏是**不可逆**的：一旦进包，等于把「给所有人发永久码」的能力
     # 交出去。这条断言是保险丝，比任何文档提醒都可靠（spec §10）。
+    # **目录也查**：空 secrets/ 里虽然没有私钥，但它出现就说明整棵开发目录
+    # 被拷进来了——那时候下一层就可能是真私钥。
     for p in app_dir.rglob("*"):
-        if not p.is_file():
-            continue
         rel = p.relative_to(app_dir)
         if p.name == "license_private.key" or "secrets" in rel.parts:
             problems.append(f"包里混进了私钥：{rel}")
