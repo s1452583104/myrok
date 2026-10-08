@@ -40,6 +40,7 @@ _REG_VALUE = "state"
 _PROGRAM_DATA = Path(r"C:\ProgramData\RoKAssistant\license.dat")
 _USER_FILE_NAME = ".roklicense"
 
+_ATTR_NORMAL = 0x80
 _ATTR_HIDDEN = 0x02
 _ATTR_SYSTEM = 0x04
 
@@ -104,6 +105,11 @@ class _FileSlot:
     def save(self, text: str) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            # 带 HIDDEN|SYSTEM 的文件在这台机器上无法用 O_TRUNC 打开
+            # （`write_text` 就是 O_TRUNC）——本方法上一轮刚给它设过这两个属性，
+            # 不先摘掉的话第二次保存会 PermissionError 被 except OSError 静默吞掉，
+            # 三处冗余只剩注册表一处还在更新。写完再戴回去。
+            _set_attrs(self._path, _ATTR_NORMAL)
             self._path.write_text(text, encoding="utf-8")
         except OSError:
             logger.warning("授权记录写入失败，跳过这一处：%s", self._path)
