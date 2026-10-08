@@ -31,9 +31,6 @@ _CHECK_PREFIX = b"rok-mc-check"
 _PREFIX_BYTES = 10            # 80 位 → 16 个 base32 字符，刚好整除、无填充
 _MACHINE_CODE_CHARS = _PREFIX_BYTES * 8 // 5 + 1     # 16 + 校验位 = 17
 
-# 部分主板/虚拟机把 UUID 报成全 F；它不是唯一标识，必须当失败处理
-_DEGENERATE = "F" * 32
-
 
 @dataclass(frozen=True)
 class Fingerprint:
@@ -97,6 +94,7 @@ def machine_code_from(fp_main: bytes) -> str:
 
 
 def _is_degenerate(uuid: str) -> bool:
+    """部分主板/虚拟机把 UUID 报成全 F；它不是唯一标识，必须当失败处理。"""
     n = normalize(uuid)
     return not n or n.strip("F") == ""
 

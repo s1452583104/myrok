@@ -280,7 +280,7 @@ class MainWindow(QMainWindow):
             "color:#27ae60;" if status.allows_run else "color:#c0392b;")
 
     def _license_ok(self) -> bool:
-        """Start 前的授权闸门：不允许就弹激活窗、保持按钮置灰（spec §8.1）。
+        """Start 前的授权闸门：不允许就弹激活窗、拒绝启动（按钮保持可点，spec §8.1）。
 
         读不出状态时**一律拦**（fail closed）：这是 Qt 槽，异常逃出去 PyQt6
         会直接 abort 整个进程；而且放行等于给了一条「让 status() 抛异常即可
@@ -301,9 +301,20 @@ class MainWindow(QMainWindow):
         return False
 
     def _open_license_dialog(self):
-        dlg = LicenseDialog(guard.current_guard(), self)
-        if dlg.exec():
-            self._refresh_license_label()
+        """打开激活窗——授权出问题时用户**唯一**的自救入口。
+
+        这是个 Qt 槽，异常逃出去 PyQt6 默认 qFatal → 整个进程 abort。构造
+        `LicenseDialog` 前要 `current_guard()`，而它可能抛（记录被改坏等），
+        所以这里必须兜住：弹提示总好过点「激活」直接崩。
+        """
+        try:
+            dlg = LicenseDialog(guard.current_guard(), self)
+            if dlg.exec():
+                self._refresh_license_label()
+        except Exception:                      # noqa: BLE001 - 授权坏了不该拖垮界面
+            logger.exception("打开授权窗口失败")
+            QMessageBox.warning(self, "授权",
+                                "授权组件异常，请把 --selftest 的输出发给作者")
 
     def _open_config(self):
         path = config_path()

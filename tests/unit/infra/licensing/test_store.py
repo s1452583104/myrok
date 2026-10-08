@@ -199,6 +199,19 @@ def test_cached_fp_main_ignores_broken_records(st, loc):
     assert st.cached_fp_main() is None
 
 
+def test_cached_fp_main_ignores_non_string_fp(st, loc):
+    """`fp` 是数字/列表时 `bytes.fromhex` 抛的是 **TypeError**，不是 ValueError。
+
+    漏出去会一路走到「激活」按钮的 Qt 槽（`_open_license_dialog`）→ PyQt6
+    qFatal → 整个进程 abort，砸掉「激活窗是唯一自救入口」这条设计意图。
+    必须和「坏记录」一样当作不存在（I1 回归）。
+    """
+    obj = {"v": store.RECORD_VERSION, "fp": 123, "trial_start": 1,
+           "last_seen": 2, "licenses": [], "hmac": "00"}
+    _write_raw(loc.user_file, json.dumps(obj))
+    assert st.cached_fp_main() is None
+
+
 def test_newest_mtime(st, loc):
     assert st.newest_mtime() is None
     st.write(FP, _rec())

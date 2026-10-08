@@ -62,5 +62,5 @@ models/*.onnx
 # 授权私钥：只留在发码端，绝不进发行包，也不入库
 secrets/
 
-# 源码运行时 user_dir() 就是仓库根，第三处存储会落在仓库里，别提交
-.roklicense
+# 源码运行时 user_dir() 就是仓库根，授权记录与到期提醒标记都会落在仓库里，别提交
+.roklicense*

@@ -248,7 +248,6 @@ def _merge(records: list[Record]) -> Record:
 
 class Store:
     def __init__(self, locations: Locations):
-        self._locations = locations
         self._slots: list = []
         if locations.registry is not None:
             self._slots.append(_RegistrySlot(*locations.registry))
@@ -270,7 +269,10 @@ class Store:
                 continue
             try:
                 raw = bytes.fromhex(obj["fp"])
-            except ValueError:
+            except (ValueError, TypeError):
+                # `_parse` 只校验字段存在、不校验类型，所以 fp 可能是数字/列表，
+                # 那时 fromhex 抛的是 TypeError。漏出去会一路走到「激活」的 Qt 槽
+                # → PyQt6 qFatal → 进程 abort，所以这里必须一起兜住、当作不存在。
                 continue
             if len(raw) == 32:
                 return raw

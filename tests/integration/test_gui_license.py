@@ -262,3 +262,23 @@ def test_controller_start_blocked_when_expired(monkeypatch, tmp_path):
     c.error_occurred.connect(errs.append)
     assert c.start() is False
     assert errs and "试用已结束" in errs[0]
+
+
+def test_controller_start_returns_false_when_status_raises(monkeypatch, tmp_path):
+    """status() 抛异常也必须返回 False + 错误信号。
+
+    这道闸门明确是为「不经过界面的调用方」（预检脚本、将来的 CLI）准备的：
+    它们要的是 False + error_occurred，而不是一个未处理异常（I2 回归）。
+    """
+    from rok_assistant.gui.controller import GuiController
+
+    class _Boom:
+        def status(self):
+            raise RuntimeError("记录坏了")
+
+    monkeypatch.setattr(guard_mod, "current_guard", lambda: _Boom())
+    errs = []
+    c = GuiController(config_path=tmp_path / "nope.yaml")
+    c.error_occurred.connect(errs.append)
+    assert c.start() is False
+    assert errs and "授权状态读取失败" in errs[0]

@@ -80,7 +80,14 @@ class GuiController(QObject):
         # 覆盖不经过界面的调用方（预检脚本、将来的 CLI）。
         # 放在配置闸门**之前**：与 _on_start 的「先授权后配置」同序，
         # 且授权过期是最外层、最该先告知用户的阻塞原因。
-        status = guard.current_guard().status()
+        # 读状态本身也要兜：这些非 GUI 调用方要的是 False + error_occurred，
+        # 不是一个未处理异常（docstring 承诺的「捕获到异常返回 False」）。
+        try:
+            status = guard.current_guard().status()
+        except Exception:                      # noqa: BLE001 - 见上
+            logger.exception("读取授权状态失败")
+            self.error_occurred.emit("授权状态读取失败，无法启动")
+            return False
         if not status.allows_run:
             self.error_occurred.emit(f"授权已到期：{status.label()}")
             return False
