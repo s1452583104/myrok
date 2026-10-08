@@ -89,12 +89,20 @@ def read_ledger(path: Path) -> list[dict]:
 
 
 def used_serials(rows: list[dict]) -> set[int]:
+    """已用过的 serial 集合。
+
+    畸形行**必须报错，不能静默跳过**：被跳过的若正好是当前最大号，
+    `next_serial` 就会回退，把已卖出的号再发一次——客户机上 `check_code`
+    会以「该激活码已被使用」拒掉作者刚发的码，来回一轮就是一次售后。
+    """
     out: set[int] = set()
-    for row in rows:
+    for lineno, row in enumerate(rows, start=2):   # 第 1 行是表头
         try:
             out.add(int(row["serial"]))
-        except (KeyError, TypeError, ValueError):
-            continue                       # 手工改坏的行走不了就跳过
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(
+                f"台账第 {lineno} 行的 serial 读不出来（{row.get('serial')!r}）："
+                f"先修好这一行再发码，否则会重发已用过的号") from e
     return out
 
 
@@ -105,7 +113,9 @@ def next_serial(rows: list[dict]) -> int:
 
 def append_ledger(path: Path, item: Issued, machine_code: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fresh = not path.exists()
+    # 空文件（touch 出来的、或上次写失败留下的 0 字节）也要补表头，
+    # 否则首行数据会被 DictReader 当成表头，serial 列整个丢掉。
+    fresh = not path.exists() or path.stat().st_size == 0
     # 不用 utf-8-sig：追加模式下每次都会再写一个 BOM，把文件写坏
     with path.open("a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=LEDGER_FIELDS)
@@ -174,14 +184,27 @@ class LicenseTool(QWidget):
         self._refresh_status()
 
     def _refresh_status(self, extra: str = ""):
-        issued = len(read_ledger(LEDGER))
-        text = f"台账：{LEDGER}（已发 {issued} 条）"
+        try:
+            issued = len(read_ledger(LEDGER))
+            text = f"台账：{LEDGER}（已发 {issued} 条）"
+        except Exception:                      # noqa: BLE001 - 异常逃出 Qt 槽 = 进程 abort
+            text = f"台账读取失败：{LEDGER}"
         self.status_label.setText(f"{extra}\n{text}" if extra else text)
 
     def _on_kind_changed(self, index: int):
         self.days_spin.setEnabled(index == 0)      # 永久不需要天数
 
     def _on_issue(self):
+        """任何异常都**不许**逃出这个槽：PyQt6 对槽里逃逸的异常调 qFatal，
+        整个发码工具直接 abort——连错误框都不弹，刚发的码也一起丢。"""
+        try:
+            self._issue_once()
+        except Exception as e:                 # noqa: BLE001 - 见 docstring
+            self.code_view.clear()
+            QMessageBox.critical(self, "发码失败", str(e))
+            self._refresh_status("发码失败，未写台账")
+
+    def _issue_once(self):
         permanent = self.kind_combo.currentIndex() == 1
         kind = codec.KIND_PERMANENT if permanent else codec.KIND_EXTEND
         days = 0 if permanent else self.days_spin.value()
@@ -191,6 +214,7 @@ class LicenseTool(QWidget):
             item = issue(machine_code, kind=kind, days=days, serial=serial,
                          seed=self._seed)
         except ValueError as e:
+            self.code_view.clear()             # 别把上一次的码留在屏幕上
             QMessageBox.warning(self, "机器码有问题", str(e))
             return
         append_ledger(LEDGER, item, machine_code)

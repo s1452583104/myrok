@@ -1,7 +1,11 @@
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # 无头跑 Qt：必须在 import Qt 之前
+
 import pathlib
 import sys
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
 # tools/ 不在 pythonpath 里，按路径挂进去（tools/*.py 之间用兄弟模块 import）
 _TOOLS = pathlib.Path(__file__).resolve().parents[4] / "tools"
@@ -17,6 +21,12 @@ from rok_assistant.infra.licensing import (                # noqa: E402
 )
 
 FP = bytes(range(32))
+
+
+@pytest.fixture
+def qapp():
+    app = QApplication.instance() or QApplication([])
+    yield app
 
 
 @pytest.fixture
@@ -104,3 +114,61 @@ def test_ledger_roundtrip(tmp_path):
 
 def test_read_ledger_tolerates_missing_file(tmp_path):
     assert license_tool.read_ledger(tmp_path / "nope.csv") == []
+
+
+def test_used_serials_rejects_malformed_row():
+    """畸形行**必须报错**，不能静默跳过。
+
+    被跳过的若正好是当前最大号，`next_serial` 就会回退，把已卖出的号再发一次
+    ——客户机会以「该激活码已被使用」拒掉作者刚发的码。
+    """
+    rows = [{"serial": "1"}, {"serial": ""}, {"serial": "3"}]
+    with pytest.raises(ValueError) as ei:
+        license_tool.used_serials(rows)
+    assert "第 3 行" in str(ei.value)     # 表头算第 1 行，坏行是第 3 行
+
+
+def test_append_ledger_writes_header_into_empty_existing_file(tmp_path):
+    """已存在但 0 字节的台账（touch 出来、或上次写失败留下的）也要补表头。
+
+    否则 DictReader 把首行数据当表头，serial 列整个丢掉。
+    """
+    ledger = tmp_path / "issued.csv"
+    ledger.touch()                                    # 0 字节
+    license_tool.append_ledger(
+        ledger,
+        license_tool.Issued(serial=7, kind=codec.KIND_EXTEND, days=1, code="X"),
+        "AAAA-BBBB-CCCC-DDDD-E")
+    rows = license_tool.read_ledger(ledger)
+    assert len(rows) == 1
+    assert rows[0]["serial"] == "7"
+
+
+def test_on_issue_does_not_let_exceptions_escape(qapp, monkeypatch, tmp_path,
+                                                 test_private_seed):
+    """槽里逃逸的异常会让 PyQt6 调 qFatal：整个工具 abort、刚发的码一起丢。"""
+    def boom(*_a, **_k):
+        raise OSError("台账被占用")
+    monkeypatch.setattr(license_tool, "LEDGER", tmp_path / "issued.csv")
+    monkeypatch.setattr(license_tool, "append_ledger", boom)
+    monkeypatch.setattr(license_tool.QMessageBox, "critical",
+                        staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(license_tool.QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: None))
+    win = license_tool.LicenseTool(test_private_seed)
+    win.machine_edit.setText(fingerprint.machine_code_from(FP))
+    win._on_issue()                                   # 不得抛出
+
+
+def test_on_issue_clears_stale_code_when_machine_code_is_bad(
+        qapp, monkeypatch, tmp_path, test_private_seed):
+    """机器码有误时清掉上一次的码，否则用户可能复制到错的那个。"""
+    monkeypatch.setattr(license_tool, "LEDGER", tmp_path / "issued.csv")
+    monkeypatch.setattr(license_tool.QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: None))
+    win = license_tool.LicenseTool(test_private_seed)
+    win.code_view.setPlainText("OLD-CODE")
+    good = fingerprint.machine_code_from(FP)
+    win.machine_edit.setText(good[:-1] + ("A" if good[-1] != "A" else "B"))
+    win._on_issue()
+    assert win.code_view.toPlainText() == ""
