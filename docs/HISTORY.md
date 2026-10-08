@@ -1596,3 +1596,35 @@ worker 还没起来，运行日志里一个字都没有，所以既点名又写�
 自本次起**不再成立**：等级设置改走**回读**（见上文 §1），`leader_sm` 现在真读面板
 上的「等级：N」，`zhaizi_level_text` 那套配方也经 `text_fields.fortress_level` 进了
 运行时链路（不再是「只在工具侧」）。
+
+### 终审后的修复（同日，2026-10-07）
+
+全分支终审（9 个提交，opus）判 **With fixes**，无 Critical，两条 Important 已修：
+
+1. **`_on_start` 在启动失败后仍把界面置为「运行中」**——`GuiController.start()` 把
+   异常吞进 `error_occurred`（模态框）后**正常返回**，`_on_start` 便无条件把
+   Start 灰掉、Stop 点亮、状态栏写「运行中」，而实际什么都没跑。这恰好是本次
+   新增的**启动预检**拦下坏模拟器时走的那条路，等于把新功能收在一个撒谎的界面上。
+   改为 `GuiController.start() -> bool`，`_on_start` 只在 `True` 时切运行态。
+   （此缺陷在 Task 6 之后由控制者发现，终审独立复核并从 Minor 升为 Important。）
+2. **`docs/PROGRESS.md` 的「实机验证过」表里混进了没实机验证的东西**——表头写着
+   「核心闭环链路（实机验证过）」，其中一行被改成描述新的**回读**流程，证据格却还是
+   旧盲降流程的「多轮成功」。回读段**只过了假件**。已把证据格改为
+   「多轮成功（回读段待实机）」，并把阈值参考里悬空的「见下」指到本节。
+
+另修：`snapshot()` 改迭代副本（Task 5 引入的跨线程 `runners.clear()` 与 GUI 刷新
+定时器的迭代相撞会抛 `RuntimeError`）；`preflight` 补回 `raise ... from last`；
+`test_start_error_names_the_emulator_that_failed` 里 `assert "b" in msg` 是空断言
+（同一句含 `adb`，`"b"` 白过）；补「耗时」段与「预检通过：N 台模拟器」的断言。
+
+**一处措辞更正（本文件早前条目亦受影响）**：多处曾写「0.35s 间隔**实测** 19 连点零
+丢失」。查 `git show 13ad757:src/rok_assistant/workers/leader_sm.py`，原注释记的是
+**0.4s** 实测零丢失，而常量取 **0.35s**——即**刻意低于实测安全值**。这直接抬高了
+实机待验第 3 条的分量：0.35s 从未被实机证明过。
+
+**一处 spec 偏离（有意）**：spec §4.2 规定 `_LEVEL_MAX_CLICKS` 上限，实现**未加**——
+差量由构造保证 ≤9，上限不可达。推理成立，但属对绑定 spec 的有意偏离，故在此留痕。
+
+### 回归状态（终审修复后）
+
+`pytest tests/ -q` → **752 passed / 0 failed / 0 error**，输出无 warning/噪声。
