@@ -328,10 +328,13 @@ def test_start_error_names_the_emulator_that_failed(tmp_path, monkeypatch):
         with pytest.raises(RuntimeError) as ei:
             coord.start()
     msg = str(ei.value)
-    assert "b" in msg, f"没点名是哪台模拟器：{msg}"          # 第 2 个实例的 name
+    # 带「」定界断言名字：裸 "b" 会被同一句里的 "adb 127.0.0.1:5556" 满足，
+    # 等于没测点名（评审 Minor）。
+    assert "「b」" in msg, f"没点名是哪台模拟器：{msg}"        # 第 2 个实例的 name
     assert "inst1" in msg, f"没带上实例 id：{msg}"
     assert "模拟器 1 可能没有启动" in msg, f"把原始原因吞了：{msg}"
     assert "已试 3 次" in msg, f"没带上重试次数：{msg}"
+    assert "耗时" in msg, f"没带上耗时（spec §7.1 要求次数 + 耗时）：{msg}"
 
 
 def test_stop_keeps_reference_to_stuck_runner(tmp_path):

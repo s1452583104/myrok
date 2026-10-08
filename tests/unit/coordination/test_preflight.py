@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytest
 
@@ -45,13 +47,18 @@ def _cfg():
     return RootConfig.model_validate(CFG)
 
 
-def test_preflight_returns_handles_for_all_instances(monkeypatch):
+def test_preflight_returns_handles_for_all_instances(monkeypatch, caplog):
     frames = {"mumu0": _FakeHandle(np.zeros((1080, 1920, 3), dtype=np.uint8)),
               "mumu1": _FakeHandle(np.zeros((1080, 1920, 3), dtype=np.uint8))}
     monkeypatch.setattr(PF, "create_handle_source",
                         lambda **kw: frames[f"mumu{kw['mumu_index']}"])
-    handles = PF.preflight(_cfg().instances, _cfg().app)
+    with caplog.at_level(logging.INFO,
+                         logger="rok_assistant.coordination.preflight"):
+        handles = PF.preflight(_cfg().instances, _cfg().app)
     assert set(handles) == {"mumu0", "mumu1"}
+    # 成功也留一句：让用户知道连接**真的测过了**，而不是「没报错」（spec §7.1）
+    assert any("预检通过：2 台模拟器" in r.getMessage()
+               for r in caplog.records)
 
 
 def test_preflight_retries_then_names_the_instance(monkeypatch):

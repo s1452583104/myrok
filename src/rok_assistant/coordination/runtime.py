@@ -248,8 +248,13 @@ class RuntimeCoordinator:
         return False
 
     def snapshot(self, char_id: str) -> bytes | None:
-        """该角色最近一帧的 JPEG bytes（GUI 缩略图用），无则 None。"""
-        for runner in self.runners.values():
+        """该角色最近一帧的 JPEG bytes（GUI 缩略图用），无则 None。
+
+        遍历副本：本方法在 GUI 主线程被定时器调用，而 worker 线程自然收工时
+        会走 _on_worker_finished 里的 self.runners.clear()。clear() 落在迭代
+        中途会抛 RuntimeError: dictionary changed size during iteration。
+        """
+        for runner in list(self.runners.values()):
             if runner.char_id == char_id:
                 img = runner.last_frame
                 if img is None:

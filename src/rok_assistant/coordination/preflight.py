@@ -79,7 +79,7 @@ def preflight(instances, app_config) -> dict:
                          inst.name, inst.id, where, elapsed, last)
             raise RuntimeError(
                 f"模拟器「{inst.name}」（{inst.id}，{where}）连不上"
-                f"（已试 {ATTEMPTS} 次，耗时 {elapsed:.1f}s）：{last}")
+                f"（已试 {ATTEMPTS} 次，耗时 {elapsed:.1f}s）：{last}") from last
     # 成功也要报一句，让用户知道连接**真的测过了**，而不是「没报错」。
     # 主线程 + 非 worker 线程名 → QtLogHandler 的 char_id 为空 →
     # MainWindow._on_log_line 直接落到状态栏（log_handler.py:60-61）。

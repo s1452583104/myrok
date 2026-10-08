@@ -35,8 +35,9 @@ app:
     delay_shape: beta       # beta = 偏短带长尾（像人）；uniform = 均匀（旧行为）
     burst_prob: 0.3         # 走「连点」短间隔的概率
     burst_scale: 0.25       # 连点间隔 = min + (max-min) * U(0, 此值)
-    rapid_click_min: 0.35   # 连点段（等级 +/- 连着点）间隔下限（秒）。
-    rapid_click_max: 0.8    # 别低于 0.35：实测更快会丢点击。与 action_delay 独立
+    rapid_click_min: 0.35   # 连点段（等级 +/- 连着点）间隔下限（秒）；低于 09-11
+                            # 实测安全值 0.4s（0.4s 连点 19 次零丢失）→ 真机需确认不丢点击
+    rapid_click_max: 0.8    # 上限。与 action_delay 独立
     anchor_sigma:           # 按目标覆盖散布 σ；缺省用 click_offset_px
       preset_slot: 3
     member_response_delay_min: 10.0   # 成员号收到集结事件后延迟多久响应（秒）。

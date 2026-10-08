@@ -16,7 +16,7 @@ class FakeController(QObject):
     error_occurred = pyqtSignal(str)
     run_finished = pyqtSignal(dict)          # 新增：all_workers_done 转发的信号
 
-    def __init__(self, chars=None):
+    def __init__(self, chars=None, start_result=True):
         super().__init__()
         self._chars = chars if chars is not None else [
             {"instance_id": "inst0", "char_id": "boss",
@@ -27,6 +27,7 @@ class FakeController(QObject):
         self.config_loaded = True
         self.started = False
         self.stopped = False
+        self.start_result = start_result   # start() 的返回值（False = 模拟启动失败）
         self.snapshots: dict[str, bytes | None] = {}
 
     def load_config(self) -> bool:
@@ -38,8 +39,9 @@ class FakeController(QObject):
     def characters(self):
         return list(self._chars)
 
-    def start(self):
+    def start(self) -> bool:
         self.started = True
+        return self.start_result
 
     def stop(self):
         self.stopped = True
@@ -88,6 +90,22 @@ def test_start_stop_buttons_drive_controller(qapp):
     assert w.start_btn.isEnabled()
     assert not w.stop_btn.isEnabled()
     assert w.statusBar().currentMessage() == "已停止"
+
+def test_failed_start_leaves_buttons_in_stopped_state(qapp):
+    """启动失败（如 Start 前预检被拒）时界面不得谎报「运行中」。
+
+    controller.start() 把异常吞进 error_occurred 后正常返回；界面若照旧置位，
+    就是「弹框点名了模拟器，关掉后却显示运行中、Start 变灰」——错误信息与
+    按钮态自相矛盾。断言按钮停在停止态，且状态栏没被改成「运行中」。
+    """
+    from rok_assistant.gui.main_window import MainWindow
+    fake = FakeController(start_result=False)
+    w = MainWindow(controller=fake)
+    w.start_btn.click()
+    assert fake.started                       # 确实尝试启动了
+    assert w.start_btn.isEnabled() is True    # 仍可再点
+    assert w.stop_btn.isEnabled() is False    # 没东西在跑
+    assert w.statusBar().currentMessage() != "运行中"
 
 def test_status_update_routes_to_card(qapp):
     from rok_assistant.gui.main_window import MainWindow

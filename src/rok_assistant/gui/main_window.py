@@ -146,7 +146,11 @@ class MainWindow(QMainWindow):
         if not self._controller.config_loaded and not self._controller.load_config():
             return
         self._rebuild_cards()   # 懒加载后建卡，状态才有落点
-        self._controller.start()
+        # 只有真起来了才切运行态。启动失败（如预检被拒）时 start() 返回 False，
+        # 错误已由 error_occurred 弹框呈现；若照旧置位，界面会谎报「运行中」，
+        # Start 变灰、Stop 可点，而实际什么都没跑。
+        if not self._controller.start():
+            return
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.statusBar().showMessage("运行中")

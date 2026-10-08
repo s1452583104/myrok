@@ -20,8 +20,9 @@ _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
 # 实机验收 mumu1 卡死态）：点侧栏外空地收起侧栏与「创建部队」引导气泡。
 _QUEUE_SIDEBAR_DISMISS = (1550, 320)
 # 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
-# 0.35s 间隔实测 19 连点零丢失）。节奏值现由 anti_detection.rapid_click_min
-# 持有（spec §5），这里不再有第二处硬编码 sleep。
+# 实测 **0.4s** 间隔连点 19 次零丢失）。原 _LEVEL_CLICK_PACE 取 0.35s，是**低于
+# 实测安全值**的取值——正因如此真机必须确认不丢点击。节奏值现由
+# anti_detection.rapid_click_min 持有（spec §5），这里不再有第二处硬编码 sleep。
 _LEVEL_BLIND_RESET = 12          # 读不出等级时的降底点击数（原 12 次 minus）
 _LEVEL_READ_ATTEMPTS = 3         # 读等级的重读次数
 _LEVEL_VERIFY_ROUNDS = 2         # 回读校验 + 修正的轮数上限

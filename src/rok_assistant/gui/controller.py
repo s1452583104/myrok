@@ -68,15 +68,23 @@ class GuiController(QObject):
         return out
 
     # ---- 运行 ----
-    def start(self) -> None:
+    def start(self) -> bool:
+        """成功返回 True，捕获到异常返回 False（错误经 error_occurred 弹出）。
+
+        返回值是给界面用的：失败时界面**不能**切到「运行中」态——启动预检
+        被拒（本分支的主场景）时异常在这里被吞、方法正常返回，界面若照旧
+        置位就会谎报运行中，Stop 可点而实际什么都没跑。
+        """
         if self._config is None and not self.load_config():
-            return
+            return False
         try:
             self._coordinator = self._coordinator_factory(self._config, event_bus=self._bus)
             self._coordinator.start()
+            return True
         except Exception as e:
             logger.exception("启动失败")
             self.error_occurred.emit(f"启动失败：{e}")
+            return False
 
     def stop(self) -> None:
         if self._coordinator is not None:

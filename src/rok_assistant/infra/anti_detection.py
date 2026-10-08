@@ -21,8 +21,8 @@ class AntiDetectionConfig:
     # 连点段（同一控件上的连续点击，如等级 +/-）的间隔。人手调数字盘是连着
     # 点好几下，不该套用跨动作延迟；而突发分支在 action_delay_min=3.1 下
     # 算出来只有 3.1–3.7s，等于没有突发（spec §5.2）。
-    # 下限 0.35 有实测支撑：0.35s 间隔连点 19 次零丢失
-    #（原 leader_sm._LEVEL_CLICK_PACE 的值）。
+    # 下限 0.35 沿用原 leader_sm._LEVEL_CLICK_PACE 的取值：那是**低于** 2026-09-11
+    # 实测安全值（0.4s 间隔连点 19 次零丢失）的取值，故真机需确认不丢点击。
     rapid_click_min: float = 0.35
     rapid_click_max: float = 0.8
     anchor_sigma: dict = field(default_factory=dict)   # 模板 id -> σ 覆盖

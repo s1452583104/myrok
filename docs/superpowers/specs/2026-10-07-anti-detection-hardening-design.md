@@ -243,7 +243,7 @@ _verify_level(target) -> bool:           # True = 已确认面板在 target
 `infra/anti_detection.py` 的 `AntiDetectionConfig` 新增：
 
 ```yaml
-rapid_click_min: 0.35   # 连点段下限。实测 0.35s 连点 19 次零丢失（原 _LEVEL_CLICK_PACE）
+rapid_click_min: 0.35   # 连点段下限。沿用原 _LEVEL_CLICK_PACE 的 0.35s（低于 09-11 实测安全值 0.4s）
 rapid_click_max: 0.8
 ```
 
@@ -282,8 +282,8 @@ def click(self, x: int, y: int, anchor: str | None = None,
 
 `leader_sm.py:24` 的 `_LEVEL_CLICK_PACE` 与 `:379`、`:387` 两处
 `time.sleep(_LEVEL_CLICK_PACE)` 删除。节奏统一由 handle 层拥有，不再有第二处
-硬编码的、无抖动的 sleep。原注释里「0.35s 零丢失」这条实测值迁到
-`rapid_click_min` 的默认值注释里，作为证据保留。
+硬编码的、无抖动的 sleep。原注释里那条实测值（**0.4s** 连点 19 次零丢失）迁到
+`rapid_click_min` 的默认值注释里，作为证据保留——注意默认值取 0.35s，**低于**实测安全值。
 
 ---
 
