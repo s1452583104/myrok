@@ -202,7 +202,7 @@ def test_loads_text_fields_and_builds_recognizer(tmp_path):
     m = tmp_path / "manifest.yaml"
     m.write_text(_TEXT_FIELDS_MANIFEST, encoding="utf-8")
     reg = TemplateRegistry.load(m)
-    recs = reg.build_recognizers(ocr_fallback=False)
+    recs = reg.build_recognizers()          # 默认参数（ocr_fallback=True）
     assert "fortress_level" in recs
     assert recs["fortress_level"]._roi.x1 == 100
 
@@ -211,11 +211,12 @@ def test_no_text_fields_section_builds_nothing_extra(tmp_path):
     m = tmp_path / "manifest.yaml"
     m.write_text("templates: []\n", encoding="utf-8")
     reg = TemplateRegistry.load(m)
-    assert "fortress_level" not in reg.build_recognizers(ocr_fallback=False)
+    assert "fortress_level" not in reg.build_recognizers()
 
 
 def test_text_field_survives_ocr_name_fallback_off(tmp_path):
-    # 读面板数字不该被「车头名字要不要 OCR 兜底」这个开关门控
+    # 读面板数字**不该**被「车头名字要不要 OCR 兜底」这个开关门控。
+    # 这条与上一条的区别就是 ocr_fallback=False——不是重复用例。
     m = tmp_path / "manifest.yaml"
     m.write_text(_TEXT_FIELDS_MANIFEST, encoding="utf-8")
     reg = TemplateRegistry.load(m)
@@ -475,8 +476,8 @@ Expected: FAIL —— `AntiDetectionConfig` 没有 `rapid_click_min`；`MockHand
     # 连点段（同一控件上的连续点击，如等级 +/-）的间隔。人手调数字盘是连着
     # 点好几下，不该套用跨动作延迟；而突发分支在 action_delay_min=3.1 下
     # 算出来只有 3.1–3.7s，等于没有突发（spec §5.2）。
-    # 下限 0.35 有实测支撑：0.35s 间隔连点 19 次零丢失
-    #（原 leader_sm._LEVEL_CLICK_PACE 的值）。
+    # 0.35 沿用原 leader_sm._LEVEL_CLICK_PACE 的值，但**低于**实测安全值：
+    # 2026-09-11 实机验收的结论是 0.4s 间隔连点 19 次零丢失。
     rapid_click_min: float = 0.35
     rapid_click_max: float = 0.8
 ```
@@ -564,7 +565,7 @@ Expected: PASS（既有用例全绿 + 4 条新用例 + 扫描测试）
 `config.example.yaml` 的 `anti_detection:` 里，在 `burst_scale` 之后加：
 
 ```yaml
-    rapid_click_min: 0.35   # 连点段（等级 +/- 连着点）间隔下限（秒）。
+    rapid_click_min: 0.35   # 连点段（等级 +/- 连着点）间隔下限（秒）。低于实测安全值 0.4s。
     rapid_click_max: 0.8    # 别低于 0.35：实测更快会丢点击。与 action_delay 独立
 ```
 
@@ -764,7 +765,7 @@ Expected: FAIL —— `_read_level` 不存在；`_LevelStub` 注入后 `_select_
 
 ```python
 # 等级按钮连点太快游戏会丢点击（2026-09-11 实机验收：目标7实际4、目标8实际6；
-# 0.35s 间隔实测 19 连点零丢失）。节奏值现由 anti_detection.rapid_click_min
+# 0.4s 间隔实测 19 连点零丢失）。节奏值现由 anti_detection.rapid_click_min
 # 持有（spec §5），这里不再有第二处硬编码 sleep。
 _LEVEL_BLIND_RESET = 12          # 读不出等级时的降底点击数（原 12 次 minus）
 _LEVEL_READ_ATTEMPTS = 3         # 读等级的重读次数
@@ -1503,7 +1504,16 @@ from rok_assistant.coordination import runtime as RT
 from rok_assistant.coordination.event_bus import EventBus
 from rok_assistant.infra.config import RootConfig
 
-from tests.unit.coordination.test_preflight import CFG
+# 就地写一份最小配置，**不要**从 test_preflight 里 import——本仓库还没有
+# 跨测试模块 import 的先例，而那会让 pytest 把同一个模块收两遍。
+CFG = {
+    "instances": [
+        {"id": "mumu0", "name": "如愿", "mumu_index": 0,
+         "characters": [{"id": "c0", "name": "车头", "role": "leader",
+                         "target_levels": [5], "march_preset": 1,
+                         "march_troop_types": ["cavalry"]}]},
+    ],
+}
 
 
 def test_start_runs_preflight_before_building_recognizers(monkeypatch):
@@ -1657,6 +1667,6 @@ git commit -m "docs: 记录防检测加固落地（等级回读/连点节奏/轮
 
 1. **野蛮人页守卫**（Task 4 Step 9 记入 PROGRESS 的那条）——本设计唯一的实质性未知。
 2. 等级回读在真机上读得准（`zhaizi_level_text` 是离线脚本验证的，不是运行时验证的）。
-3. 连点节奏 0.35s 下限在真机上不丢点击（沿用原 `_LEVEL_CLICK_PACE` 的实测值，但当时是配 3.1s 动作延迟 + 0.35s 硬编码 sleep 的组合，现在组合变了）。
+3. 连点节奏 0.35s 下限在真机上不丢点击——**注意 0.35s 低于实测安全值**：2026-09-11 验收实测的是 0.4s 间隔连点 19 次零丢失，常量取 0.35s 是刻意更快。且当时的组合是 3.1s 动作延迟 + 0.35s 硬编码 sleep，现在组合变了。
 4. 预检能拦住「模拟器没起」「竖屏」两类，且文案确实点名到台。
 5. 跑满轮数后按钮真的自动复位（两号轮次不同长，需等到**都**收工）。
