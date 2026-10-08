@@ -411,7 +411,7 @@ preflight(instances, app_config) -> dict[instance_id, HandleSource]
 | `rapid` 参数漏实现 | 某个 `HandleSource` 实现没收下关键字 → `TypeError` | 5 个实现类逐一改；可选加一条扫描测试（同 `tests/unit/infra/test_subproc.py` 的做法） |
 | 盲降回退路径被改坏 | 它是降级模式，只在 OCR 失败时才走到，容易长期不被发现 | 逐字保留今天的主体；既有的三个缓存测试（`test_select_level_reuses_cached_level` / `test_no_result_invalidates_level_cache_and_resyncs_on_retry` / `test_switch_order_follows_config_not_sorted`）**一行不改**即为护栏 |
 | `text_fields` 新键被 manifest 校验拒绝 | — | `load` 是 `raw.get(...)` 裸字典读取，未知键本就忽略；**实现时先确认** |
-| 连点下限过低丢点击 | 游戏丢点击 | 默认 `rapid_click_min=0.35` 有实测支撑；且回读校验会补 |
+| 连点下限过低丢点击 | 游戏丢点击 | 默认 `rapid_click_min=0.35` **低于** 09-11 实测安全值（0.4s 连点 19 次零丢失），故真机须确认不丢点击；且回读校验会补 |
 
 **回滚杠杆**（互相独立，可单独退）：
 
