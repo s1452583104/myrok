@@ -166,6 +166,16 @@ def _verify(app_dir: Path) -> int:
         problems.append(f"包里混进了 {len(pts)} 个 .pt 权重，例如 "
                         f"{pts[0].relative_to(app_dir)}")
 
+    # 私钥泄漏是**不可逆**的：一旦进包，等于把「给所有人发永久码」的能力
+    # 交出去。这条断言是保险丝，比任何文档提醒都可靠（spec §10）。
+    for p in app_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(app_dir)
+        if p.name == "license_private.key" or "secrets" in rel.parts:
+            problems.append(f"包里混进了私钥：{rel}")
+            break
+
     exe = app_dir / "rok-assistant.exe"
     if exe.is_file():
         print(f"  OK  rok-assistant.exe ({exe.stat().st_size / 1e6:.1f} MB)")

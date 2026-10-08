@@ -80,6 +80,16 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 
 单帧 CPU 推理 26~30ms（目标 < 100ms），对轮询节奏绰绰有余。
 
+## 授权与密钥（**不要打包 secrets/**）
+
+发行包只带**公钥**（`src/rok_assistant/infra/licensing/pubkey.py`，已入库），
+不带私钥。
+
+- `secrets/license_private.key` 是发码的唯一凭据，**绝不进发行包**；
+  `tools/build_package.py` 的产物断言里有一条硬失败专门盯它。
+- 打包机上如果存在 `secrets/` 目录，**先确认它不在 `dist/` 里**再分发 zip。
+- 首启行为不变：解压即用，默认 30 天试用，无需任何操作。
+
 ## 目标机器要求
 
 - **Windows 64 位**（打包用的是 Python 3.14 + win_amd64）

@@ -74,6 +74,20 @@
   文本判据，见 HISTORY 2026-10-07），所以本分支**不需要**重跑 `calibrate_yolo_threshold`——上一条的「换权重后必须重跑」
   是通用规则，不是对本次的提醒。
 
+### 授权与发码（2026-10-08）
+
+离线授权已实现：默认 30 天试用，到期后 Start 置灰、可进界面不能跑任务；
+激活码用 Ed25519 签名（122 字符），绑主板 UUID + CPU ID。
+
+- 模块：`src/rok_assistant/infra/licensing/`（`codec` / `verify` / `pubkey` /
+  `fingerprint` / `store` / `state` / `guard`）。**`guard` 是唯一门面**，
+  界面与 worker 只认它。
+- 存储三处冗余（注册表 + `C:\ProgramData` + `<user_dir>\.roklicense`），
+  **重新解压只清得掉第三处**——这就是防「解压刷新试用期」的全部机制。
+- 到期日**不落盘**，每次启动从记录里的签名码现算，所以伪造它需要私钥。
+- 设计文档：`docs/superpowers/specs/2026-10-08-授权与发码平台-design.md`
+  （§12 列了 6 条**已知局限**，别当成没实现）
+
 ## 已知问题（v1 接受）
 
 1. **战斗队列图标单匹配限制**：采集+行军混合在外时可能漏检行军图标误放行（v2 可做多目标计数）。
@@ -149,6 +163,10 @@
     **下次再遇到先看这两处**：`logs/selftest.log` 的「各模拟器连接」一行
     （`create_handle_source` 阶段的失败**只有这里看得见**，worker 没起来时运行日志
     一个字都没有），以及报错弹窗的原文。
+
+- **授权是离线方案，有硬上限**：三处存储全删干净仍可重置试用（旧延长码还能
+  再吃一次）；改 exe 跳过校验可行；记录里的 HMAC 密钥可由主指纹推出来。
+  完整清单见 `docs/superpowers/specs/2026-10-08-授权与发码平台-design.md` §12。
 
 ## 接下来需要做的
 
@@ -254,6 +272,15 @@ C:/模拟器/MuMuPlayer/nx_main/adb.exe connect 127.0.0.1:16416   # mumu1
 
 # 监控日志
 grep -E "发起|填兵|锁定|已回城|集结门槛|失败结束|异常" _driver.log | tail
+
+# 发码（作者本机；首次运行会生成密钥对并把公钥写进 pubkey.py——记得提交）
+.venv/Scripts/python.exe -X utf8 tools/license_tool.py
+
+# 只重新生成/恢复 pubkey.py（私钥还在时复用它，不换密钥对）
+.venv/Scripts/python.exe -X utf8 tools/gen_license_keypair.py
+
+# 看本机机器码（报障时让用户抄这一行）
+.venv/Scripts/python.exe -X utf8 -m rok_assistant.infra.selftest
 ```
 
 ### 实机运行手册
