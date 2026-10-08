@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import base64
 import sys
 import time
 import traceback
@@ -229,7 +230,52 @@ def _run_checks() -> list[tuple[str, bool, str]]:
                             f"[{time.time() - t0:.2f}s]")
         return "；".join(bits)
 
+    @check("授权状态与机器码")
+    def _():
+        return _license_status_detail()
+
+    @check("授权链自检")
+    def _():
+        return _license_chain_detail()
+
     return results
+
+
+def _license_status_detail() -> str:
+    """打印授权状态 + 机器码——用户报障时直接抄这一行给作者。
+
+    **不做拦截**：它是诊断工具，被授权挡住反而查不了问题（spec §8.3）。
+    """
+    from .licensing import guard
+    st = guard.current_guard().status()
+    return (f"状态={st.kind} 剩余={st.days_left} 到期={st.expiry} "
+            f"机器码={st.machine_code}")
+
+
+def _license_chain_detail() -> str:
+    """授权链自检：`cryptography` 能否导入、内嵌公钥能否加载、签名往返。
+
+    这一项是给**冻结包**兜底的——`cryptography` 有 C 扩展，是本次唯一新增的
+    二进制依赖，绿色包最容易在这里缺东西，而缺了的表现是「所有激活码都
+    无效」，极难远程排查（spec §8.3）。
+    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    from .licensing import codec, verify
+
+    priv = Ed25519PrivateKey.generate()
+    pub_b64 = base64.b64encode(priv.public_key().public_bytes_raw()).decode("ascii")
+    payload = codec.build_payload(ver=codec.FORMAT_VERSION,
+                                  fp_main=b"\x01" * 32,
+                                  kind=codec.KIND_EXTEND, days=1, serial=1)
+    code = codec.encode_code(payload, priv.sign(payload))
+    got, reason = verify.verify_code(code, b"\x01" * 32, public_key_b64=pub_b64)
+    assert got is not None, f"签名往返失败：{reason}"
+    assert codec.serial_of(code) == 1, "码解析不回 serial"
+    verify.load_public_key()          # 真发码用的那把也必须能加载
+    return f"cryptography OK，签名往返 OK，内嵌公钥可加载（码长 {len(code)}）"
 
 
 def run() -> int:
