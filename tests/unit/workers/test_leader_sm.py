@@ -491,6 +491,8 @@ def test_launch_gives_up_after_ap_refill_cap():
     # 体力真耗尽（补不动）时不能无限补：补满 _AP_REFILL_MAX 次仍点不出行军
     # → 放弃本轮（交给 runner 连续失败计数停机），而不是死循环
     import rok_assistant.workers.leader_sm as leader_sm
+    # 值本身也要钉住：否则把常量改回 3 全绿（2026-10-09 复核发现）
+    assert leader_sm._AP_REFILL_MAX == 8
     sm, handle = _make_sm()
     _unique_march_point(sm)
     res = sm._rec["ap_refill"].recognize.return_value
