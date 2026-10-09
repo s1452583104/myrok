@@ -144,18 +144,30 @@ class StateMachine:
     #                                  领过后（该行上移）=初级100，都便宜够用
     _AP_DIALOG_X = (1638, 120)      # 弹窗右上角 X
 
+    # 一次补体力最多吃几口道具（2026-10-09 用户要求「吃到没道具为止」）。
+    # 上限是**有界**的：本项目观测不到「道具已吃完」这个信号——弹窗在体力
+    # 已够时也保持打开（2026-09-18 run10 实机教训），而道具行的空/灰没有
+    # 模板可判。所以这里只做到「一次多吃几口」，把「吃到没道具」交给上层
+    # 的有界外循环（leader_sm._launch 的 _AP_REFILL_MAX）。实机确认弹窗
+    # 长什么样之后再收紧（spec §7 未决项）。
+    _AP_EAT_MAX = 3
+
     def _refill_ap(self) -> bool:
-        """行动力不足弹窗（行军点击时 AP < 消耗，2026-09-18 实机 run9
-        实锤：加入集结的行军同样耗行动力，140/150 自然上限跑不满 10 轮
-        目标，历次「连续 3 轮失败」停机根因即此）。先领每日免费 500，再
-        点第二行「使用」补一点，最后关弹窗 —— 实机 run10 教训：用完道具
-        弹窗不会自动关（体力已够也开着），X 关一次可能被 toast 动画吞掉，
-        必须循环确认。返回弹窗是否已关闭。"""
+        """行动力不足弹窗：先领每日免费，再反复点第二行「使用」吃道具
+        （最多 `_AP_EAT_MAX` 口，弹窗中途关掉就停），最后关弹窗。
+        返回弹窗是否已关闭。
+
+        2026-10-09：原实现只吃一口就走 `_close_ap_dialog`，一次补的体力
+        常常不够一轮集结的消耗——`_launch` 里那圈「补一次→点行军→又弹」
+        的有界重试正是这个不足的证据。现在一次多补几口。
+        """
         if self._find("ap_refill") is None:
             return False
         self._handle.click(*self._AP_CLAIM_DAILY)
         time.sleep(self._human.jitter(1.5))
-        if self._find("ap_refill") is not None:
+        for _ in range(self._AP_EAT_MAX):
+            if self._find("ap_refill") is None:
+                break
             self._handle.click(*self._AP_USE_ROW2)
             time.sleep(self._human.jitter(1.5))
         return self._close_ap_dialog()

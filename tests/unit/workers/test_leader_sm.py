@@ -497,7 +497,9 @@ def test_launch_gives_up_after_ap_refill_cap():
     # 弹窗永远复现：怎么补都不够
     sm._rec["ap_refill"].recognize.side_effect = _ap_popup_by_march_click(
         handle, res, reappear_until=99)
-    with pytest.raises(RuntimeError, match="行动力补充 3 次后 march_btn 仍点不出去"):
+    with pytest.raises(
+            RuntimeError,
+            match=f"行动力补充 {leader_sm._AP_REFILL_MAX} 次后 march_btn 仍点不出去"):
         sm._launch({})
     # 行军点到上限就放弃（不死循环）；第 1 轮入口无残留弹窗 → 少补一次
     assert handle.clicks.count(_MARCH_PT) == leader_sm._AP_REFILL_MAX
@@ -932,3 +934,40 @@ def test_single_preset_keeps_legacy_constructor_path():
     """只传旧的 march_preset/march_troop_types 时，行为与改动前逐字相同。"""
     sm, _ = _make_sm()
     assert sm._march_presets == [(1, ["cavalry"])]
+
+
+# ---- 体力补充：多口有界循环（2026-10-09）----
+
+class _ScriptedRec:
+    """按脚本返回 matched，用尽后保持最后一个值。"""
+
+    def __init__(self, *flags):
+        self._flags = list(flags)
+        self.calls = 0
+
+    def recognize(self, _img):
+        i = min(self.calls, len(self._flags) - 1)
+        self.calls += 1
+        r = MagicMock()
+        r.matched = self._flags[i]
+        r.confidence = 1.0 if self._flags[i] else 0.0
+        r.bbox = MagicMock(center=lambda: (50, 50))
+        return r
+
+
+def test_refill_ap_eats_multiple_items_in_one_call():
+    """弹窗一直在（道具没吃完）→ 一口接一口，不是点一次就交给关窗。"""
+    sm, handle = _make_sm()
+    sm._rec["ap_refill"] = _ScriptedRec(True)
+    assert sm._refill_ap() is False          # 关不掉（脚本里它一直在）
+    used = [c for c in handle.clicks if c == (1447, 570)]
+    assert len(used) == 3                    # _AP_EAT_MAX
+
+
+def test_refill_ap_stops_early_when_dialog_closes():
+    sm, handle = _make_sm()
+    # 入口 _find True；循环第 1 口前的复查仍 True → 吃一口；吃完再查 False
+    # → 停（Step 3 的循环是「先查后吃」，故这里第 2 个 flag 给 True）
+    sm._rec["ap_refill"] = _ScriptedRec(True, True, False)
+    assert sm._refill_ap() is True
+    assert [c for c in handle.clicks if c == (1447, 570)] == [(1447, 570)]
