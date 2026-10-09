@@ -182,27 +182,31 @@ class LeaderStateMachine(StateMachine):
     def queue_verdict(self) -> str:
         """右侧 */5 派遣队列判读（2026-09-16 实机重校准）：
 
-        - 'none'    地图视图上徽标不可见=无队列在外
-        - 'battle'  绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
-                    黄色箭头=返程中 / 红色刀剑=战斗中（动态多形态动画：
-                    交叉 X=queue_battle_icon、平行双剑=queue_fight_icon、
-                    白色「上箭头」挥舞帧=queue_recall_icon —— 2026-09-17
-                    实机确认无独立召回态，取消集结直接解散无图标、撤回
-                    显示绿脚印普通行军；该模板匹配的就是战斗动画帧）
-                    （阻塞，无宽限）。
-                    2026-09-16 用户报告：预设主将未回城（返程/战斗态）时
-                    开集结，游戏让默认武将代开车打不过寨子。同日第二次
-                    事故：返程/战斗图标无模板，采集锄头匹配把混合队列
-                    误判成「仅采集」放行 —— 五态+战斗动画各形态
-                    全部补齐模板
-        - 'gather'  仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
-        - 'unknown' 徽标在但已知图标都不可辨，或不在地图视图无法判读
-          —— fail-closed 按在外处理，持续超宽限期才放行告警。
-          2026-09-14 实机教训：模板裁剪含背景像素换场景掉分，误判
-          「仅采集/已回城」提前开集结。2026-09-16：战争列表面板开着时
-          队列栏整体隐藏，「徽标不可见」被误读成「无队列」放行搜索。
-          未知宁可等。注：_find 不匹配与未配置都返回 None，须用
-          _rec.get 区分（未配置=门槛不生效，保持旧行为）
+        - 'none'      地图视图上徽标不可见=无队列在外
+        - 'battle'    绿色脚印=行军中 / 蓝色旗帜=驻扎·集结等待 /
+                      红色刀剑=战斗中（动态多形态动画：交叉 X=queue_battle_icon、
+                      平行双剑=queue_fight_icon、白色「上箭头」挥舞帧=
+                      queue_recall_icon —— 2026-09-17 实机确认无独立召回态，
+                      取消集结直接解散无图标、撤回显示绿脚印普通行军；该模板
+                      匹配的就是战斗动画帧）—— 阻塞，无宽限。
+                      2026-09-16 用户报告：预设主将未回城（返程/战斗态）时
+                      开集结，游戏让默认武将代开车打不过寨子。同日第二次
+                      事故：返程/战斗图标无模板，采集锄头匹配把混合队列
+                      误判成「仅采集」放行 —— 五态+战斗动画各形态
+                      全部补齐模板
+        - 'returning' 黄色返回箭头=返程中 —— **放行**（2026-10-09 用户拍板，
+                      推翻 2026-09-16 的阻塞结论）。安全阀在车头侧：
+                      _select_preset 对载不出预设的槽回退到下一个，全失败
+                      则抛异常（2026-09-16 那次事故的成因正是「点了预设但没
+                      确认、游戏用默认武将代开车」）
+        - 'gather'    仅绿色锄头=采集在外（放行，2026-09-13 用户确认）
+        - 'unknown'   徽标在但已知图标都不可辨，或不在地图视图无法判读
+                      —— fail-closed 按在外处理，持续超宽限期才放行告警。
+                      2026-09-14 实机教训：模板裁剪含背景像素换场景掉分，误判
+                      「仅采集/已回城」提前开集结。2026-09-16：战争列表面板开着时
+                      队列栏整体隐藏，「徽标不可见」被误读成「无队列」放行搜索。
+                      未知宁可等。注：_find 不匹配与未配置都返回 None，须用
+                      _rec.get 区分（未配置=门槛不生效，保持旧行为）
 
         2026-10-04 从 either_sm 搬到这里：整段只用 self._rec/_find/_handle，
         本来就是车头的事；纯 leader 也要用它（见 __init__ 的 _queue_gate）。
@@ -260,10 +264,15 @@ class LeaderStateMachine(StateMachine):
                 # 城市视图不匹配、且语义相反，不能用它出城
                 self._handle.click(72, 1034)
             return "unknown"
-        for icon in ("queue_march_icon", "queue_flag_icon", "queue_return_icon",
+        # 阻塞集合（2026-10-09 起不含 queue_return_icon）：行军/驻扎/战斗中
+        for icon in ("queue_march_icon", "queue_flag_icon",
                      "queue_battle_icon", "queue_fight_icon", "queue_recall_icon"):
             if self._find(icon) is not None:
                 return "battle"
+        # 返程中：放行（用户 2026-10-09 拍板）。返程的主将载不出预设，由
+        # _select_preset 的回退兜住——不靠阻塞整轮，靠「载不出来就换一个」。
+        if self._find("queue_return_icon") is not None:
+            return "returning"
         if self._find("queue_gather_icon") is not None:
             return "gather"
         return "unknown"

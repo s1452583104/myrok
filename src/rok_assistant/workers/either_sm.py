@@ -276,6 +276,15 @@ class EitherStateMachine:
         if verdict == "battle":
             logger.info("[等待返城] 行军/驻扎队列仍在城外")
             return
+        if verdict == "returning":
+            # 返程中：部队确实还在城外，但按 2026-10-09 的「返回中放行」
+            # 决策收轮（与门槛同一口径）。**不写 mark_troops_home** ——
+            # 账本只记已确认的事实，部队确实还没回城。
+            logger.info("[等待返城] 队列返程中，按「返回中放行」收轮")
+            self._phase = "done"
+            self.current = "MEMBER:END"
+            self.history.append(self.current)
+            return
         if verdict == "gather":
             logger.info("[等待返城] 城外仅采集队列，不影响开集结，本轮完成")
             self._phase = "done"

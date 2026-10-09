@@ -146,3 +146,20 @@ def test_factory_leader_without_ledger_has_no_gate():
         screenshot=np.zeros((10, 10, 3), dtype=np.uint8)), {})
     assert isinstance(sm, LeaderStateMachine)
     assert sm._queue_gate is None
+
+
+def test_gate_returning_verdict_does_not_mark_troops_home(monkeypatch):
+    """返程中放行，但**不**写回城账本：部队确实还在城外。
+
+    账本口径是「派遣队列判空」（见 leader_sm.step 的 docstring），返程
+    不是判空。写错的账本会让后续 unknown 判据误以为部队在家而提前放行。
+    """
+    led = ActionLedger()
+    led.mark_troops_out("c1")
+    gate = QueueGate(led, "c1")
+    sm = _sm(led, gate)
+    monkeypatch.setattr(sm, "queue_verdict", lambda: "returning")
+    for _ in range(3):
+        sm.step()
+    assert sm.current != "IDLE"          # 门槛放行，轮次已启动
+    assert led.troops_out("c1") is True  # 账本没被改写成「在家」

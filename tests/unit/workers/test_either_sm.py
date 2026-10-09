@@ -679,11 +679,10 @@ def test_wait_return_unknown_queue_icon_keeps_waiting(monkeypatch):
     assert sm.current == "WAIT_RETURN"
 
 
-def test_gate_blocks_on_return_queue_icon(monkeypatch):
-    # 2026-09-16 用户报告：预设槽 1 主将未回城（右侧队列黄色返回态图标）
-    # 时照常发起集结，游戏让默认武将代开车，打不过寨子白烧行动力。
-    # 黄色返回/红色战斗图标与行军/驻扎同属战斗队列 —— 必须按 battle
-    # 拦截（无宽限放行），而不是 unknown（宽限一到就放行，正是本次事故）
+def test_gate_passes_on_return_queue_icon(monkeypatch):
+    # 2026-10-09 用户拍板推翻 2026-09-16 的结论：返程中放行。那次事故的
+    # 成因是「点了预设但没确认、游戏用默认武将代开车」，本设计用「确认失败
+    # 即换下一个预设、全失败即抛异常」堵住它，而不是靠阻塞整轮。
     class _FakeTime:
         t = 1000.0
 
@@ -699,13 +698,8 @@ def test_gate_blocks_on_return_queue_icon(monkeypatch):
     sm._leader._rec["queue_return_icon"] = ret
     for _ in range(10):
         sm.step()
-    assert sm.current == "LEADER:IDLE"   # 门槛拦下：轮次根本没启动
-    assert not any("SEARCH" in h for h in sm.history)
-    _FakeTime.t += 901.0   # 越过 unknown 宽限期：battle 判定不受宽限影响
-    for _ in range(10):
-        sm.step()
-    assert sm.current == "LEADER:IDLE"
-    assert not any("SEARCH" in h for h in sm.history)
+    assert sm.current != "LEADER:IDLE"   # 门槛放行：轮次已启动
+    assert any("SEARCH" in h for h in sm.history)
 
 
 def test_gate_blocks_on_battle_queue_icon(monkeypatch):
@@ -759,8 +753,9 @@ def test_gate_blocks_on_recall_queue_icon(monkeypatch):
     assert not any("SEARCH" in h for h in sm.history)
 
 
-def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
-    # 黄色返回态出现在 WAIT_RETURN：部队正在返程，继续等待不提前终态
+def test_wait_return_return_queue_icon_ends_round_without_marking_home(monkeypatch):
+    # 返程中收轮（与门槛放行同一口径），但不写 mark_troops_home —— 部队
+    # 确实还在城外，账本只记已确认的事实。
     class _FakeTime:
         t = 1000.0
 
@@ -774,6 +769,9 @@ def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
 
     monkeypatch.setattr("rok_assistant.workers.either_sm.time", _FakeTime)
     sm = _make_sm(fill_targets=[])
+    # 账本先显式置成「在外」：这样下面那条断言检验的确实是「没被改写成
+    # 回城」，而不是「本来就没记过」
+    sm._ledger.mark_troops_out(sm._char_id)
     state = {"forced": None}
     _badge_lights_on_launch(sm, state)   # 轮次入口不可见，发射后点亮
     for icon in ("queue_march_icon", "queue_flag_icon", "queue_gather_icon"):
@@ -792,8 +790,8 @@ def test_wait_return_return_queue_icon_keeps_waiting(monkeypatch):
     sm._leader._rec["queue_return_icon"] = _mock_rec()   # 返程图标可见
     _FakeTime.t += 60
     sm.step()
-    assert not sm.is_terminal()
-    assert sm.current == "WAIT_RETURN"
+    assert sm.is_terminal()                            # 收轮
+    assert sm._ledger.troops_out(sm._char_id) is True   # 但没写「已回城」
 
 
 def test_foreign_rally_gate_skips_own_launch():

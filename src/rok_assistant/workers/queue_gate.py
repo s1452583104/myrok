@@ -91,7 +91,9 @@ class QueueGate:
             return GateOutcome(
                 GateDecision.WAIT,
                 "有行军/驻扎队列在城外，等待回城后再搜索", settled, "vote")
-        if settled in ("none", "gather"):
+        if settled in ("none", "gather", "returning"):
+            # returning 与 gather 同属「队列非空但不阻塞」：回城账本的写入
+            # 口径是 verdict == "none"（见 leader_sm.step），这里只决定放行
             self._unknown_since = None
             return GateOutcome(GateDecision.PROCEED, "", settled, "vote")
         return self._unknown_outcome(ts)

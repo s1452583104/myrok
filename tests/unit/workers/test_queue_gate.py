@@ -167,3 +167,22 @@ def test_unknown_since_resets_after_a_settled_non_unknown():
     _settle(g, "unknown", now=60.0)
     # 若计时没清零，now=110 时会被误判为已等 110s 而放行
     assert g.observe("unknown", now=110.0).decision is GateDecision.WAIT
+
+
+def test_returning_passes_like_gather():
+    """返程中放行（2026-10-09 用户拍板，推翻 2026-09-16 的阻塞结论）。
+
+    放行的安全阀在车头侧：返程中的主将载不出预设，_select_preset 会
+    回退到下一个可用预设，全都载不出来则抛异常。
+    """
+    g = _gate()
+    out = _settle(g, "returning", now=0.0)
+    assert out.decision is GateDecision.PROCEED
+    assert out.verdict == "returning"
+
+
+def test_returning_does_not_flip_settled_battle():
+    """投票「只延迟不翻转」不变：已采信 battle 后来一帧 returning 仍 WAIT。"""
+    g = _gate()
+    _settle(g, "battle", now=0.0)
+    assert g.observe("returning", now=3.0).decision is GateDecision.WAIT
