@@ -151,3 +151,58 @@ def test_target_levels_duplicate_rejected():
 
 def test_target_levels_three_is_allowed():
     assert _leader(target_levels=[9, 8, 7]).target_levels == [9, 8, 7]
+
+
+# ---- 多预设（2026-10-09）----
+
+def test_march_presets_new_field_kept_in_order():
+    c = _leader(march_presets=[{"preset": 3, "troops": ["archer"]},
+                               {"preset": 1, "troops": ["infantry", "cavalry"]}])
+    assert [p.preset for p in c.march_presets] == [3, 1]      # 顺序就是优先级
+    assert c.march_presets[1].troops == ["infantry", "cavalry"]
+
+
+def test_legacy_fields_migrate_into_one_preset():
+    """老 config.yaml（只写 march_preset + march_troop_types）不改也能读。"""
+    c = _leader()
+    assert len(c.march_presets) == 1
+    assert c.march_presets[0].preset == 1
+    assert c.march_presets[0].troops == ["infantry"]
+
+
+def test_march_presets_win_over_legacy_fields():
+    """两者都写时以新字段为准，旧字段不参与。"""
+    c = _leader(march_presets=[{"preset": 4, "troops": ["cavalry"]}],
+                march_preset=2, march_troop_types=["archer"])
+    assert len(c.march_presets) == 1
+    assert c.march_presets[0].preset == 4
+
+
+def test_neither_new_nor_legacy_field_raises():
+    with pytest.raises(ValidationError, match="march_presets"):
+        _leader(march_preset=None, march_troop_types=[])
+
+
+def test_march_presets_reject_empty_troops():
+    with pytest.raises(ValidationError, match="兵种"):
+        _leader(march_presets=[{"preset": 1, "troops": []}])
+
+
+def test_march_presets_reject_too_many():
+    with pytest.raises(ValidationError, match="最多"):
+        _leader(march_presets=[{"preset": 1, "troops": ["infantry"]},
+                               {"preset": 2, "troops": ["infantry"]},
+                               {"preset": 3, "troops": ["infantry"]},
+                               {"preset": 4, "troops": ["infantry"]}])
+
+
+def test_march_presets_reject_duplicate_slot():
+    """同一槽位出现两次：第二条永远轮不到，是配置错误不是回退。"""
+    with pytest.raises(ValidationError, match="重复"):
+        _leader(march_presets=[{"preset": 2, "troops": ["infantry"]},
+                               {"preset": 2, "troops": ["cavalry"]}])
+
+
+def test_march_presets_reject_out_of_range_slot():
+    with pytest.raises(ValidationError):
+        _leader(march_presets=[{"preset": 6, "troops": ["infantry"]}])

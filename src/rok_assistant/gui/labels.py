@@ -90,6 +90,7 @@ LOC_LABELS = {
     "name": "名字",
     "role": "分工",
     "target_levels": "目标城寨等级",
+    "march_presets": "行军预设",
     "march_preset": "行军预设",
     "march_troop_types": "兵种",
     "fill_target_leaders": "填兵目标",

@@ -24,6 +24,28 @@ class FillLeader(BaseModel):
 # 一圈的代价越大（每级 5 次全量重搜 ≈ 40s）。
 MAX_TARGET_LEVELS = 3
 
+# 有序行军预设列表上限（2026-10-09）：与 MAX_TARGET_LEVELS 同理——列表越长，
+# 每个预设都要跑一遍「点槽 + 确认 selected_preset_N 高亮」的代价越大。
+MAX_MARCH_PRESETS = 3
+
+
+class MarchPreset(BaseModel):
+    """一个行军预设槽 + 该槽要点的兵种。
+
+    troops 是列表而非单值：创建部队表单允许同时勾多个兵种，车头
+    `_form_troop` 也是逐个点 `troop_*`（见 leader_sm），GUI 因此用 3 个
+    复选框而不是单选下拉。
+    """
+    preset: int = Field(ge=1, le=5)
+    troops: list[Literal["infantry", "cavalry", "archer"]]
+
+    @field_validator("troops")
+    @classmethod
+    def _troops_not_empty(cls, v):
+        if not v:
+            raise ValueError("march_presets 每项至少要一个兵种")
+        return v
+
 
 class CharacterConfig(BaseModel):
     id: str
@@ -33,16 +55,14 @@ class CharacterConfig(BaseModel):
     # 顺序**完全自由**（用户明确要求，例如 6→4→5 合法），不强制降序；
     # 下限即列表中的最小值，不另设 min_level 字段。
     target_levels: list[int]
-    march_preset: int = Field(ge=1, le=5)
-    march_troop_types: list[Literal["infantry", "cavalry", "archer"]]
+    # 有序行军预设列表（2026-10-09）：第一个确认不了高亮就换第二个，
+    # 行序即优先级。空列表时由下面的 _migrate_march 从旧字段合成。
+    march_presets: list[MarchPreset] = []
+    # 旧字段（2026-10-09 起降级为「只读兼容」）：GUI 不再写，读侧仍认。
+    # 保留是为了不逼用户手改 config.yaml——已有配置照旧能加载。
+    march_preset: int | None = Field(default=None, ge=1, le=5)
+    march_troop_types: list[Literal["infantry", "cavalry", "archer"]] = []
     fill_target_leaders: list[FillLeader] = []
-
-    @field_validator("march_troop_types")
-    @classmethod
-    def _not_empty(cls, v):
-        if not v:
-            raise ValueError("march_troop_types must be non-empty")
-        return v
 
     @field_validator("target_levels")
     @classmethod
@@ -58,6 +78,30 @@ class CharacterConfig(BaseModel):
         if len(set(v)) != len(v):
             raise ValueError(f"target_levels 有重复等级：{v}")
         return v
+
+    @model_validator(mode="after")
+    def _migrate_march(self):
+        """旧字段 → march_presets 的兼容迁移与校验。
+
+        三件事：(1) 新字段空时用旧字段合成一条；(2) 两者都空 = 配置错误
+        （原来 march_preset/march_troop_types 是必填，不能因为改字段就
+        变成可缺省）；(3) 新字段自己的三条约束（项数 / 预设号不重复）。
+        """
+        if not self.march_presets:
+            if self.march_preset is None or not self.march_troop_types:
+                raise ValueError(
+                    "必须配置 march_presets（或旧的 march_preset + "
+                    "march_troop_types）")
+            self.march_presets = [MarchPreset(preset=self.march_preset,
+                                              troops=list(self.march_troop_types))]
+        if len(self.march_presets) > MAX_MARCH_PRESETS:
+            raise ValueError(
+                f"march_presets 最多 {MAX_MARCH_PRESETS} 项"
+                f"（收到 {len(self.march_presets)} 项）")
+        slots = [p.preset for p in self.march_presets]
+        if len(set(slots)) != len(slots):
+            raise ValueError(f"march_presets 预设号重复：{slots}")
+        return self
 
 
 class InstanceConfig(BaseModel):
