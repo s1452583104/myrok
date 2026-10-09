@@ -1,3 +1,5 @@
+import threading
+import time
 from unittest.mock import MagicMock
 
 from rok_assistant.coordination.event_bus import EventBus
@@ -27,6 +29,28 @@ def _coord(bus):
     # 车头收工时协调器会真的调成员 runner 的 stop()（2026-10-09）
     coord.runners = {"mumu0:c0": MagicMock(), "mumu1:c1": MagicMock()}
     return coord
+
+
+# 两个车头 + 一个成员：并发收工回归用（两个车头都会走「收尾」分支）。
+CFG_TWO_LEADERS = {
+    "app": {"mumu_manager_path": "M.exe", "adb_path": "adb.exe"},
+    "instances": [
+        {"id": "mumu0", "mumu_index": 0,
+         "characters": [{"id": "c0", "name": "头0", "role": "leader",
+                         "target_levels": [5], "march_preset": 1,
+                         "march_troop_types": ["cavalry"]}]},
+        {"id": "mumu1", "mumu_index": 1,
+         "characters": [{"id": "c1", "name": "头1", "role": "leader",
+                         "target_levels": [5], "march_preset": 1,
+                         "march_troop_types": ["cavalry"]}]},
+        {"id": "mumu2", "mumu_index": 2,
+         "characters": [{"id": "c2", "name": "填兵", "role": "member",
+                         "target_levels": [5], "march_preset": 1,
+                         "march_troop_types": ["cavalry"],
+                         "fill_target_leaders": [{"instance": "mumu0",
+                                                  "name": "头0"}]}]},
+    ],
+}
 
 
 def test_leaders_finishing_stops_members_and_fires_all_workers_done():
@@ -103,3 +127,61 @@ def test_old_coordinator_does_not_refire_after_natural_finish():
     bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
                                     "stopped_reason": "r"})
     assert len(done) == 1                  # 没有第二次 all_workers_done
+
+
+def test_concurrent_finishes_are_safe_and_publish_exactly_once():
+    """两个车头近同时收工：并发跑 _on_worker_finished 不得抛异常，且
+    all_workers_done 恰好发一次（回归 Important）。
+
+    EventBus.publish 是同步的——处理器就在发布事件的 worker 线程里跑，两个
+    车头近同时收工就会并发跑这里。修复前 `_leaders_done` 迭代 self.runners 时
+    另一线程 `runners.clear()` → RuntimeError（被 EventBus 吞掉 → 发不出
+    all_workers_done、GUI 按钮不复位）；`_stop_members` 也会在 clear 后
+    `self.runners[key]` 抛 KeyError。修复后顶部拍一次 runners 快照即可安全。
+
+    两个钩子把并发窗口拉出来（都只用**跨版本稳定**的签名，不碰内部实现）：
+    - `_leaders_done` 进门前加一道 Barrier，逼两个线程同时停在处理器里；
+    - `_role_of` 首次遇到成员 key 时阻塞一下，让另一线程先跑完并 clear。
+    修复前滞留线程恢复后继续迭代已被清空的 dict → RuntimeError 逃逸；
+    修复后无异常且只发一次。
+    """
+    bus = EventBus()
+    done: list = []
+    bus.subscribe("all_workers_done", done.append)
+    coord = RuntimeCoordinator(RootConfig.model_validate(CFG_TWO_LEADERS),
+                               event_bus=bus)
+    coord.runners = {"mumu0:c0": MagicMock(), "mumu1:c1": MagicMock(),
+                     "mumu2:c2": MagicMock()}
+
+    real_leaders_done = coord._leaders_done
+    real_role_of = coord._role_of
+    barrier = threading.Barrier(2)      # 逼两个线程同时进处理器
+    stall_token = {"open": True}        # 原子认领：只让一个线程滞留
+
+    def synced_leaders_done(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return real_leaders_done(*args, **kwargs)
+
+    def slow_role_of(key):
+        if key == "mumu2:c2" and stall_token.pop("open", None) is not None:
+            time.sleep(0.5)             # 让另一线程先跑完并 clear
+        return real_role_of(key)
+
+    coord._leaders_done = synced_leaders_done
+    coord._role_of = slow_role_of
+
+    errors: list = []
+
+    def finish(inst: str, cid: str) -> None:
+        try:
+            coord._on_worker_finished({"instance_id": inst, "char_id": cid,
+                                       "stopped_reason": "r"})
+        except Exception as e:          # noqa: BLE001
+            errors.append(e)
+
+    t1 = threading.Thread(target=finish, args=("mumu0", "c0"))   # 车头
+    t2 = threading.Thread(target=finish, args=("mumu1", "c1"))   # 车头
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    assert errors == []                 # 无异常逃逸（修复前是 RuntimeError）
+    assert len(done) == 1               # all_workers_done 恰好一次

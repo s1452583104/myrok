@@ -200,6 +200,76 @@ def test_wave_failed_join_is_not_recorded_and_is_retried(monkeypatch):
     assert handle.clicks.count((1335, 161)) >= 2
 
 
+def _runner_poll_interval() -> float:
+    """WorkerRunner 的步间轮询默认值（波次回归测试必须用真节奏）。
+
+    直接读签名默认，别硬编码 2.0：runner 改了默认值，这条回归要跟着动，
+    否则又会退回「紧密循环掩盖窗口 bug」的老坑。
+    """
+    import inspect
+    from rok_assistant.workers.runner import WorkerRunner
+    return inspect.signature(WorkerRunner.__init__).parameters[
+        "poll_interval"].default
+
+
+def test_wave_fills_every_target_at_real_runner_poll_cadence(monkeypatch):
+    """按 WorkerRunner 的真实步间轮询节奏，一波仍要填满所有点名车头。
+
+    回归评审发现的 Critical：5s 窗口原来在「填完那一刻」起算，而状态机要过
+    ~3 拍才回到 _poll_join，加上 runner 在每步之后等一个 jitter(poll_interval)
+    （默认 2.0s），真去搜时窗口早已过期 → FIND_JOIN 的放弃边当场触发，整波
+    只填得到第一个目标 —— 正是用户报的「三号 A/B/C，C 只填了第一个发车的」。
+    现有的紧密循环测试掩盖了它（步间不推进时钟）。窗口改成量「搜索时长」后，
+    同一节奏下 A/B/C 三个全填。
+
+    3 个目标：pre-fix 只点 1 次「+」，post-fix 点 3 次。
+    """
+    poll = _runner_poll_interval()
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm(targets=("A", "B", "C"))
+    sm.on_rally_launched(_launch_event("A"))
+    for name in ("A", "B", "C"):
+        recs[f"fill_{name}"].recognize.return_value.matched = True
+    for _ in range(200):
+        sm.step()
+        fake.t += poll              # 每步之后等一个 runner 轮询间隔（真节奏）
+        if sm.current == "IDLE":
+            break
+    assert sm.current == "IDLE"
+    plus_clicks = [c for c in handle.clicks if c[0] == 1335]
+    assert len(plus_clicks) == 3    # 三个点名车头全填
+
+
+def test_second_signal_in_wave_start_window_does_not_start_another_wave(monkeypatch):
+    """波次启动窗口内再来一个信号，不得再开一波（回归 Important）。
+
+    起波窗口 = IDLE→WAIT_LAUNCH_EVENT（消费信号）之后、WAIT_LAUNCH_EVENT→
+    SWITCH_TO_SELF 之前；这段里到达的信号被 on_rally_launched 存进
+    _pending_event。波次模式的 SM 跨波存活（不再每轮重建），留着它会在回
+    IDLE 的瞬间立刻再开一波，把已填车头重填一遍（第一个目标还走 3 分钟长
+    窗口）。收波/耗尽回 IDLE 时必须清掉。
+
+    只应有一波：A、B 各点一次「+」（若第二波开了，两个都会被重填 → 4 次）。
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm(targets=("A", "B"))
+    recs["fill_A"].recognize.return_value.matched = True
+    recs["fill_B"].recognize.return_value.matched = True
+    sm.on_rally_launched(_launch_event("A"))
+    sm.step()                              # IDLE -> WAIT_LAUNCH_EVENT（消费信号 1）
+    assert sm.current == "WAIT_LAUNCH_EVENT"
+    sm.on_rally_launched(_launch_event("B"))   # 起波窗口内又来一个信号
+    for _ in range(60):
+        sm.step()
+    plus_clicks = [c for c in handle.clicks if c[0] == 1335]
+    assert len(plus_clicks) == 2           # 只有一波
+    assert sm._pending_event is None       # 残留信号已被丢掉
+
+
 def test_wave_mode_is_never_terminal():
     sm, _, _ = _make_wave_sm()
     for state in ("IDLE", "NORMALIZE", "FIND_JOIN", "END"):

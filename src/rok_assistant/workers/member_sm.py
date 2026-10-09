@@ -15,10 +15,11 @@ _JOIN_POLL_TIMEOUT = 3.0
 _JOIN_MAX_ATTEMPTS = 60
 _PANEL_MAX_ATTEMPTS = 10
 
-# 波次窗口（2026-10-09 用户拍板 5s）：填完一个目标后，等**下一个**目标在
-# 战争列表里刷出来的时间上限。超时即收波，回 IDLE 等下一个 rally_launched。
-# 每填完一个目标都重置一次——窗口是「找下一个」的，不是「找所有后续」的
-# （见 spec §2.3 的措辞修正）。
+# 波次窗口（2026-10-09 用户拍板 5s）：等**下一个**目标在战争列表里刷出来的
+# **搜索**时间上限。超时即收波，回 IDLE 等下一个 rally_launched。
+# 窗口量的是「真去搜的时长」，不是「距上次填完多久」——表在 `_poll_join`
+# 首次开搜那一刻才起（见 _next_target / _poll_join）。第一个目标走既有的
+# 长窗口（_JOIN_MAX_ATTEMPTS），5s 只约束「第一个之后」的剩余目标。
 _WAVE_TARGET_WAIT = 5.0
 
 # 战争列表固定几何（1920x1080 实机测量）：「+加入」按钮列横坐标固定；
@@ -172,11 +173,12 @@ class MemberStateMachine(StateMachine):
             ctx["target_name"] = None
 
     def _find_join_give_up(self, ctx) -> bool:
-        """FIND_JOIN 的放弃判据：长窗口耗尽，或波次窗口过期。
+        """FIND_JOIN 的放弃判据：长窗口耗尽，或搜索窗口过期。
 
         第一个目标用既有的长窗口（`_JOIN_MAX_ATTEMPTS=60` × 3s ≈ 3 分钟）——
         那是「等车头开出集结」用的；5s 窗口只管**第一个之后**的剩余目标
-        （此时列表里该有的已经有了，没刷出来就是这一波没有）。
+        （此时列表里该有的已经有了，没刷出来就是这一波没有）。窗口由
+        `_poll_join` 首次开搜时起算，量的是搜索时长，不是距上次填完的时长。
         """
         if ctx.get("join_attempts", 0) > _JOIN_MAX_ATTEMPTS:
             return True
@@ -186,7 +188,7 @@ class MemberStateMachine(StateMachine):
         return deadline is not None and time.time() >= deadline
 
     def _wave_has_more(self, ctx) -> bool:
-        """填完一个目标后：还有没填过的目标、且窗口没过 → 继续下一轮。
+        """填完一个目标后：还有没填过的目标 → 继续下一轮。
 
         前提是本轮**真的填成功了**：`joined` 为假说明「+」/创建部队/行军某步
         没生效（延迟下漏点等），这一轮什么都没填上。此时必须返回 False，让
@@ -200,34 +202,44 @@ class MemberStateMachine(StateMachine):
         空转（全目标都填完时列表里已无待填项，_poll_join 直接跳过、假/真时钟
         都不推进），直到 join_attempts 撞穿 60 才收波——那是「没找到」的口径，
         不是「填完了」。排除当前目标后，填完最后一个即走 _wave_done 收波。
+
+        **这里不判 `next_deadline`**：那是「刚填成功之后」问「搜索窗口过没过」，
+        量的其实是「填完一个目标花掉的时间」，与搜索时长是两回事，必然恒为
+        「过期」→ 每一波都被截在两个目标。放弃判据只留在 `_find_join_give_up`。
         """
         if not ctx.get("joined"):
             return False
         filled = ctx.get("filled") or set()
-        current = ctx.get("target_name")
-        remaining = [t for t in self._fill_targets
-                     if t["name"] not in filled and t["name"] != current]
-        if not remaining:
-            return False
-        deadline = ctx.get("next_deadline")
-        return deadline is None or time.time() < deadline
+        name = ctx.get("target_name")
+        return any(t["name"] not in filled and t["name"] != name
+                   for t in self._fill_targets)
 
     def _next_target(self, ctx):
-        """记下刚填完的目标，重置 5s 窗口与计数，回归一化继续找下一个。"""
+        """记下刚填完的目标、清空搜索窗口与计数，回归一化继续找下一个。
+
+        `next_deadline` 只清不起：表要等 `_poll_join` **真的开搜**那一刻才起
+        （见 `_poll_join` 顶部）。填完就起表的话，状态机要过约 3 拍才回到
+        `_poll_join`，加上 WorkerRunner 的步间 `jitter(poll_interval)`（默认
+        2.0s），真去搜时 5s 早已耗尽 → 整波只填得到第一个目标。
+        """
         name = ctx.get("target_name")
         if name:
             ctx.setdefault("filled", set()).add(name)
-        ctx["next_deadline"] = time.time() + _WAVE_TARGET_WAIT
+        ctx["next_deadline"] = None
         ctx["join_attempts"] = 0
         ctx["war_attempts"] = 0
         ctx["panel_open"] = False
         ctx["join_found"] = False
         ctx["target_click"] = None
-        logger.info("成员·已填 %s，继续找下一个目标（窗口 %.0fs）",
+        logger.info("成员·已填 %s，继续找下一个目标（搜索窗口 %.0fs）",
                     name, _WAVE_TARGET_WAIT)
 
     def _wave_done(self, ctx):
         filled = ctx.get("filled") or set()
+        # 收波即丢掉可能残留在起波窗口里的第二个信号：波次模式的 SM 跨波存活，
+        # 留着它会在回到 IDLE 的瞬间再开一波（去填已经填过的车头，第一个目标
+        # 走长窗口，白烧最多 3 分钟）。耗尽收波（_exhausted）同理。
+        self._pending_event = None
         logger.info("成员·本波填兵结束（已填 %s 个：%s），等下一个信号",
                     len(filled), "、".join(sorted(filled)) or "无")
 
@@ -335,6 +347,13 @@ class MemberStateMachine(StateMachine):
         # 原地轮询点名车头的集结：名字模板在名字列匹配出目标行，记录该行
         # 「+」按钮的固定几何位置。联盟集结每隔几分钟才开一轮，暂时没有
         # 就继续等；他人的集结一律不填（见类注释）
+        #
+        # 搜索窗口的**起点**在这里：真正开始找「第一个之后」的目标时才起表。
+        # `filled` 非空 ⟺ 本波至少填过一个（_consume_event 起波时清空过），
+        # 所以第一个目标仍走既有的长窗口，5s 只约束后续目标。
+        if self._event_driven and ctx.get("next_deadline") is None \
+                and ctx.get("filled"):
+            ctx["next_deadline"] = time.time() + _WAVE_TARGET_WAIT
         ctx["join_attempts"] = ctx.get("join_attempts", 0) + 1
         n, cap = ctx["join_attempts"], _JOIN_MAX_ATTEMPTS
         # 列表中途被游戏关掉（自己参与的集结发车/弹窗顶掉等，2026-09-18
@@ -432,6 +451,9 @@ class MemberStateMachine(StateMachine):
             # 波次模式：本波一个目标都没填上不是失败——成员不记轮次，
             # 回 IDLE 等下一个信号。单发模式的 no_rally_found 失败口径
             # 随之只对 either 的内嵌成员有效。
+            # 回 IDLE 同样要丢掉起波窗口残留的第二个信号（与 _wave_done 同因），
+            # 否则空波收尾后会立刻再开一波、白烧第一个目标的长窗口。
+            self._pending_event = None
             logger.warning("成员·本波未找到可填目标，收波等下一个信号")
             return
         # 重试耗尽：置失败标记。fail_reason 由 WorkerRunner 在终态的

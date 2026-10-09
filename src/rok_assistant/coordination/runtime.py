@@ -172,27 +172,36 @@ class RuntimeCoordinator:
                     return char.role
         return None
 
-    def _leaders_done(self) -> bool:
+    def _leaders_done(self, runners: dict) -> bool:
         """所有 leader/either 是否都已上报收工。
 
         配置层保证至少 1 个 leader/either（config.py 的 _cross_checks），
         所以这个集合非空，收工出口一定可达。
+
+        `runners` 是调用方在 `_on_worker_finished` 顶部拍的**快照**：本方法在
+        worker 线程里跑，另一台 worker 同时收工可能已在 `runners.clear()`，直接
+        迭代 self.runners 会抛「dictionary changed size during iteration」。
         """
-        leaders = [k for k in self.runners
+        leaders = [k for k in runners
                    if self._role_of(k) in (RoleEnum.LEADER, RoleEnum.EITHER)]
         return bool(leaders) and set(leaders) <= set(self._stopped)
 
-    def _stop_members(self) -> None:
+    def _stop_members(self, runners: dict) -> None:
         """车头全收工 → 停掉还在跑的成员。
 
         波次模式的成员永不进终态（不记轮次，见 member_sm.is_terminal），
         只能由这里停。已自然收工过的成员跳过（避免重复 stop）。
+
+        `runners` 同样用快照：若直接 `self.runners[key]` 取，另一线程已
+        `clear()` 时会 KeyError，异常被 EventBus 吞掉 → all_workers_done
+        永远发不出去（GUI 按钮不复位）。快照里的引用仍指向真实 runner，
+        停线程照常。
         """
-        for key in list(self.runners):
+        for key, runner in runners.items():
             if self._role_of(key) != RoleEnum.MEMBER or key in self._stopped:
                 continue
-            self.runners[key].stop(timeout=_STOP_TIMEOUT)
-            self._warn_if_alive(key, self.runners[key])
+            runner.stop(timeout=_STOP_TIMEOUT)
+            self._warn_if_alive(key, runner)
             self._stopped[key] = "车头已全部收工，协调器停止成员"
 
     def _on_worker_finished(self, payload: dict) -> None:
@@ -205,14 +214,22 @@ class RuntimeCoordinator:
 
         只在 payload 里的 key 确实在 self.runners 里时才计入，否则
         「上一次运行遗留的迟到事件」会凑数提前复位按钮。
+
+        本方法在发布事件的 worker 线程里被同步调用，两台 worker 近同时收工
+        就会并发跑这里。**顶部拍一次 runners 快照**，后续只读快照：不这么做
+        的话 `_leaders_done` 会在另一线程 `runners.clear()` 时抛
+        RuntimeError、`_stop_members` 会 KeyError，两者都被 EventBus 吞掉，
+        all_workers_done 发不出去。快照而非加锁：`_stop_members` 会 join 被停
+        线程，若持锁等待正在同一处理函数里等锁的线程就死锁了。
         """
+        runners = dict(self.runners)          # 快照：并发收工时另一线程可能 clear()
         key = f"{payload.get('instance_id')}:{payload.get('char_id')}"
-        if key not in self.runners:
+        if key not in runners:
             return
         self._stopped[key] = payload.get("stopped_reason", "")
-        if not self._leaders_done():
+        if not self._leaders_done(runners):
             return
-        self._stop_members()
+        self._stop_members(runners)
         logger.info("全部车头已收工：%s", self._stopped)
         self._bus.publish("all_workers_done", {"reasons": dict(self._stopped)})
         self._running = False
