@@ -55,7 +55,7 @@ def test_pixel_stat_ids_are_absent_from_the_template_table(registry):
         assert tid not in registry._t, (
             f"{tid} 混进了 templates: —— auto_label_yolo/ingest_raw_imgs 会"
             f"对每个 spec cv2.imread(spec.file)")
-    assert len(registry._t) == 53, "templates: 条目数变了，确认是有意的"
+    assert len(registry._t) == 54, "templates: 条目数变了，确认是有意的"
 
 
 def test_build_recognizers_includes_the_pixel_stats(registry):
