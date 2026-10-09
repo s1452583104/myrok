@@ -1628,3 +1628,122 @@ worker 还没起来，运行日志里一个字都没有，所以既点名又写�
 ### 回归状态（终审修复后）
 
 `pytest tests/ -q` → **752 passed / 0 failed / 0 error**，输出无 warning/噪声。
+
+## 2026-10-08 离线授权与发码平台（试用 30 天 / Ed25519 激活 / 防解压重置）
+
+设计文档：`docs/superpowers/specs/2026-10-08-授权与发码平台-design.md`（绑定权威，§12 列了 6 条已知局限）。
+实现计划：`docs/superpowers/plans/2026-10-08-授权与发码平台.md`（10 个任务）。
+当前状态速查见 `docs/PROGRESS.md`。本节只记**决定与理由**，不重复代码。
+
+16 个提交（`3adaeca` 之后）快进并入 `main`，35 文件 +3154 行。全套 **870 passed**。
+
+### 1. 为什么是「三处冗余 + 到期日不落盘」而不是「加密的到期日」
+
+需求里的硬约束是**防「重新解压刷新试用期」**。三处存储里注册表
+（`HKCU\Software\RoKAssistant\License`）与 `C:\ProgramData\RoKAssistant\license.dat`
+**不在解压目录内**，所以重新解压只清得掉第三处 `<user_dir>\.roklicense`——这就是全部机制。
+
+到期日**不落盘**、每次启动从 `licenses` 里的签名激活码现算，是因为记录只有 HMAC 保护，
+而 HMAC 密钥 = `SHA256(主指纹 + 固定 salt)`，主指纹的输入（主板 UUID + CPU ID）全在
+用户自己机器上，理论上算得出来。**现算则要求伪造者持有私钥**，严格更强。这条是
+2026-10-08 早些时候改过 spec 才定下来的（见 `e9e5a2b`）。
+
+同理，Ed25519 **签名不可截断**（验签需要完整的 R 和 S），所以激活码是 **122 字符**，
+不是最初方案里的 45 字符——那版密码学上不成立（`7cda436`）。
+
+### 2. 本次最贵的一条经验：**PyQt6 槽内未捕获异常 = `qFatal` = 整个进程 abort**
+
+这一条单独驱动了 **5 处**修复，都是同一种形状。凡是在 Qt 槽（按钮 `clicked`、
+对话框 `exec()` 内的嵌套事件循环）里可能抛异常的调用，都必须就地兜住——
+**包住调用方没用**，因为异常是在槽自己的栈上逃逸的。具体踩到的：
+
+- `MainWindow._license_ok()`：`status()` 抛 → 点 Start 杀进程。裁定**失败即闭**（返回 False），
+  不能因为「读不出状态」就放行——那等于「把 `status()` 弄抛就能白拿授权」。
+- `LicenseDialog._refresh_status()` / `_on_activate()`：激活窗是授权出问题时**唯一**的自救入口，
+  它自己崩掉最糟。
+- `LicenseTool._on_issue()` / `_refresh_status()`：发码工具同理（台账被 Excel / OneDrive 锁住时
+  Windows 抛 `PermissionError`）。
+- `MainWindow._open_license_dialog()`：终审发现的 I1 路径，见 §4。
+
+**两个容易漏的异常类型**（都不是 `ValueError`，所以 `except ValueError` 兜不住）：
+`bytes.fromhex(123)` 抛 **`TypeError`**；`codec.build_payload` 在 serial > 65535 时抛 **`struct.error`**。
+
+### 3. 本机的 Windows 坑：带 HIDDEN / SYSTEM 属性的文件无法以 `O_TRUNC` 打开
+
+`Path.write_text` 就是 `O_TRUNC`。而 `store._FileSlot.save()` 上一轮刚给文件戴上
+`HIDDEN|SYSTEM`，第二次保存就会 `PermissionError` 被 `except OSError` **静默吞掉**，
+三处冗余只剩注册表一处在更新。修法：写入前 `SetFileAttributesW(path, 0x80)`
+（`FILE_ATTRIBUTE_NORMAL`）摘掉属性，写完再戴回去。
+**测试里直写这些文件时也要先摘**（`store._set_attrs(p, _ATTR_NORMAL)`）。
+
+### 4. 两轮评审各自抓到的东西（值得回看根因时参考）
+
+**逐任务评审**（10 个任务，每个都过「spec 合规 + 代码质量」两阶段）抓到的实质缺陷：
+
+- **Task 6**：计划漏了把公钥穿进 `Guard`，导致 7 条激活测试永远不可能通过。裁定用
+  **依赖注入**（`Guard.__init__(..., public_key_b64=None)`，生产默认 `None` 用内嵌公钥），
+  **不用**全局 monkeypatch——spec §8.2 明确要求「测试隔离走依赖注入」，而全局改
+  `verify.PUBLIC_KEY_B64` 是全局可变状态。
+- **Task 7**：计划把授权闸门放在「`try:` 之前」，但配置闸门就在 `try` 前一行，闸门会落到配置之后，
+  计划自带的测试永远过不了。裁定放到**最顶上**，与 `MainWindow._on_start()` 的
+  「先授权后配置」同序。
+- **Task 9**：`format_code` 把 122 字符按 5 分组得 **25 组、24 个连字符**（末组 2 字符），
+  而计划写 `122 // 5 - 1 = 23`。这是同一个算术错误的**第二次**出现（Task 1 那次是
+  `len(groups) == CODE_CHARS // GROUP_SIZE` 得 24、应为 25）。用 ceil 写法。
+- **Task 9**：`used_serials` 对畸形台账行**静默跳过** → `next_serial` 的 max 回退 →
+  重发已卖出的号 → 客户机以「该激活码已被使用」拒掉作者刚发的码。改成**报错**。
+  连带修 `append_ledger` 的 `fresh = not path.exists()`（漏掉「文件存在但为空」→ 不写表头 →
+  `DictReader` 把首行数据当表头 → serial 列丢失，正好触发上面那条）。
+
+**最终全分支评审**（opus，0 Critical / 2 Important / 8 Minor，判 With fixes）抓到的两条 Important：
+
+- **I1**：`store.cached_fp_main()` 只捕 `ValueError`，而 `_parse()` 只校验字段**存在**不校验**类型**；
+  一条结构合法但 `fp` 是数字的记录会让 `bytes.fromhex(123)` 抛 `TypeError`，一路传到
+  `_open_license_dialog`（当时无兜底）→ **点「激活」整个进程 abort**——恰好砸掉「激活窗是
+  唯一自救入口」这条设计意图。修：`except (ValueError, TypeError)`，并给该槽加兜底。
+- **I2**：`GuiController.start()` 的授权闸门在 `try` **之外**，违反它自己 docstring 承诺的
+  「捕获到异常返回 False」。GUI 路径因 `_license_ok()` 先兜住而安全，但这段代码的**明确目的**
+  正是覆盖「不经过界面的调用方」（预检脚本、将来的 CLI）。修：单独包 try。
+
+### 5. 两处「文档说了假话」的更正（本次一并修掉）
+
+- **「到期后 Start 置灰」**：spec §2/§8.1、`main_window.py` docstring、`PROGRESS.md` 都这么写，
+  但实现是**按钮保持可点、点击弹激活窗并拦下启动**，计划自己的测试也断言
+  `isEnabled() is True`。spec §2 那句本身自相矛盾（置灰就点不了）。**实现是对的，错的是文案。**
+- **spec §11 的「删掉 HMAC 就能重置试用期」**：用词错了。spec §12 第 2 条**自己**已确立术语——
+  「**删掉**是「没有记录」（新试用），**改坏**是「有记录但无效」（判篡改锁死）」。
+  删掉 `hmac` **字段**属**结构损坏** → 按 §12 第 7 条是**已接受**的局限，不是被防住的。
+  改成「改坏 HMAC」。
+
+### 6. 密钥边界（复核方法留在下面，将来改发码端时照做）
+
+- 私钥 `secrets/license_private.key`（已 gitignore）**只在发码端**被读；
+  `src/` 里**绝不出现**私钥。内嵌公钥 `licensing/pubkey.py` 是生成物，别手改。
+- 测试用的固定密钥对在 `tests/fixtures/licensing/`，与真密钥对**必须不同**。复核三件事：
+  测试私钥 ≠ 真私钥；`PUBLIC_KEY_B64` == 真私钥的公开部分（真码验得过）；
+  `PUBLIC_KEY_B64` ≠ 测试公钥（测试不会误用真密钥）。
+- 打包保险丝：`tools/build_package.py::_verify` 里一条硬失败，扫 `app_dir.rglob("*")`，
+  命中 `license_private.key` **或路径里有 `secrets` 段**（**目录也算**）即失败。
+  已用真实 326MB `dist/` 实测**不误报**（`"secrets" in rel.parts` 是整段精确匹配，
+  stdlib 的 `secrets.py` 不会误伤）。
+
+### 7. 收尾时**未做**的两件事（诚实边界）
+
+1. **打包路径未实机验证**：现有 `dist/rok-assistant` 是加授权**之前**打的包。冻结包能否真激活
+   只做了静态判断（`cryptography` 是运行时依赖、`verify.py` 在入口静态可达路径上、未被 excludes 排除）。
+   真验要重跑 `build_package.py`，而跑冻结包 `--selftest` 会**在本机三处真实存储上写记录**，
+   所以没擅自做。
+2. **完成标准里的手工闭环**：`tools/license_tool.py` 用本机机器码发一张延长 30 天的码 →
+   粘进激活窗 → 状态栏应显示「已授权，剩余 60 天」。同一段代码路径已用**离屏程序化**覆盖
+   （真私钥签发 → 真机器码 → 临时 store → `licensed` / `days_left=60` / label
+   「已授权，剩余 60 天」），字面的人工点击未做。
+
+### 8. 一处与本分支无关的环境异常（留痕）
+
+`.trae/skills/superpowers` 子模块在收尾时显示 `-dirty`：其内部
+`tests/claude-code/analyze-token-usage.py` 被删除。本分支没碰过 `.trae/`，来源不明，
+**未处理**（按用户要求，不确定在用的东西不要清）。
+
+### 回归状态
+
+`pytest tests/ -q` → **870 passed / 0 failed / 0 error**（4m25s）。
