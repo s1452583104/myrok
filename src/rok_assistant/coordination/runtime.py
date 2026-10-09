@@ -192,6 +192,7 @@ class RuntimeCoordinator:
             if self._role_of(key) != RoleEnum.MEMBER or key in self._stopped:
                 continue
             self.runners[key].stop(timeout=_STOP_TIMEOUT)
+            self._warn_if_alive(key, self.runners[key])
             self._stopped[key] = "车头已全部收工，协调器停止成员"
 
     def _on_worker_finished(self, payload: dict) -> None:

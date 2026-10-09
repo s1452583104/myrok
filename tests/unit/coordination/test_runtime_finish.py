@@ -90,12 +90,16 @@ def test_old_coordinator_does_not_refire_after_natural_finish():
     bus = EventBus()
     done = []
     bus.subscribe("all_workers_done", done.append)
-    _coord(bus)
+    coord = _coord(bus)
     bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
                                     "stopped_reason": "r"})
     assert len(done) == 1                  # 车头收工即触发（成员由协调器停）
 
-    # 旧 coordinator 已退订：同一根 bus 上再投一台也不该有第二次
-    bus.publish("worker_finished", {"instance_id": "mumu1", "char_id": "c1",
+    # 旧 coordinator 已退订：把 runner 再挂回去（模拟同一根 bus 上下一轮又被
+    # 挂上），再投一次也不该有第二次。必须重新挂回——_on_worker_finished 末尾的
+    # runners.clear() 会替退订挡住第二次，只有挂回去才能单独钉住「退订」本身。
+    coord.runners["mumu0:c0"] = MagicMock()
+    coord.runners["mumu1:c1"] = MagicMock()
+    bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
                                     "stopped_reason": "r"})
     assert len(done) == 1                  # 没有第二次 all_workers_done
