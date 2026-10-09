@@ -15,6 +15,12 @@ _JOIN_POLL_TIMEOUT = 3.0
 _JOIN_MAX_ATTEMPTS = 60
 _PANEL_MAX_ATTEMPTS = 10
 
+# 波次窗口（2026-10-09 用户拍板 5s）：填完一个目标后，等**下一个**目标在
+# 战争列表里刷出来的时间上限。超时即收波，回 IDLE 等下一个 rally_launched。
+# 每填完一个目标都重置一次——窗口是「找下一个」的，不是「找所有后续」的
+# （见 spec §2.3 的措辞修正）。
+_WAVE_TARGET_WAIT = 5.0
+
 # 战争列表固定几何（1920x1080 实机测量）：「+加入」按钮列横坐标固定；
 # 名字行中心到同行「+」按钮中心的纵向偏移（两行实测 112/110px）。
 _PLUS_X = 1335
@@ -49,9 +55,17 @@ class MemberStateMachine(StateMachine):
     """
 
     def __init__(self, handle_source, recognizers: dict, fill_target_leaders,
-                 char_id: str = "?", ledger=None, human=None):
+                 char_id: str = "?", ledger=None, human=None,
+                 event_driven: bool = False):
         self._handle = handle_source
         self._rec = recognizers
+        # 波次模式（2026-10-09）：一次 rally_launched 信号 = 一个波次，把
+        # fill_targets 里尚未填过的车头依次填完再等下一个信号，永不进终态
+        # （由协调器在车头全收工时停）。False = 旧的「一次一填、填完即终态」，
+        # 只有 either 的内嵌成员还在用（它的车头阶段每轮要重来，不适用波次）。
+        # 必须在 super().__init__() 之前赋值：基类构造会调 self._setup()，
+        # _setup 按本标志分叉出口边。
+        self._event_driven = event_driven
         # 归一化：config 侧是 FillLeader pydantic 对象，测试/事件侧是 dict
         self._fill_targets = [
             {"instance": t["instance"], "name": t["name"]} if isinstance(t, dict)
@@ -95,7 +109,10 @@ class MemberStateMachine(StateMachine):
         self.add_transition("NORMALIZE", "OPEN_WAR", self._open_war)
         # 耗尽出口必须注册在对应重试边之前：StateMachine.step 按注册顺序
         # 取第一个 from_state 匹配且 guard 通过的转移。
-        self.add_transition("OPEN_WAR", "END", self._exhausted,
+        # 出口状态按模式分叉：波次模式回 IDLE 等下一个信号（不记轮次、不
+        # 进终态）；单发模式进 END 计一轮。
+        exit_state = "IDLE" if self._event_driven else "END"
+        self.add_transition("OPEN_WAR", exit_state, self._exhausted,
                             guard=lambda ctx: ctx.get("war_attempts", 0) > _PANEL_MAX_ATTEMPTS)
         self.add_transition("OPEN_WAR", "OPEN_WAR", self._open_war,
                             guard=lambda ctx: not ctx.get("panel_open"))
@@ -103,8 +120,8 @@ class MemberStateMachine(StateMachine):
                             guard=lambda ctx: ctx.get("panel_open"))
         self.add_transition("FIND_JOIN", "CLICK_JOIN", self._click_join,
                             guard=lambda ctx: ctx.get("join_found"))
-        self.add_transition("FIND_JOIN", "END", self._exhausted,
-                            guard=lambda ctx: ctx.get("join_attempts", 0) > _JOIN_MAX_ATTEMPTS)
+        self.add_transition("FIND_JOIN", exit_state, self._exhausted,
+                            guard=self._find_join_give_up)
         self.add_transition("FIND_JOIN", "FIND_JOIN", self._poll_join,
                             guard=lambda ctx: not ctx.get("join_found"))
         # guard 先于 action 求值：每步的副作用都放在入口 action 里完成，
@@ -120,8 +137,16 @@ class MemberStateMachine(StateMachine):
                             guard=lambda ctx: not ctx.get("form_open"))
         self.add_transition("LAUNCH", "VERIFY_JOINED", self._launch)
         self.add_transition("VERIFY_JOINED", "JOIN_CHECKED", self._verify_join)
-        self.add_transition("JOIN_CHECKED", "END", lambda ctx: None,
-                            guard=lambda ctx: ctx.get("joined"))
+        if self._event_driven:
+            # 还有没填过的目标、且 5s 窗口没过 → 归一化后继续找下一个。
+            # 必须注册在 IDLE 出口之前（注册序 = 优先级）
+            self.add_transition("JOIN_CHECKED", "NORMALIZE", self._next_target,
+                                guard=self._wave_has_more)
+            self.add_transition("JOIN_CHECKED", "IDLE", self._wave_done,
+                                guard=lambda ctx: ctx.get("joined"))
+        else:
+            self.add_transition("JOIN_CHECKED", "END", lambda ctx: None,
+                                guard=lambda ctx: ctx.get("joined"))
         self.add_transition("JOIN_CHECKED", "OPEN_WAR", self._join_missed,
                             guard=lambda ctx: not ctx.get("joined"))
 
@@ -134,6 +159,69 @@ class MemberStateMachine(StateMachine):
     def _consume_event(self, ctx):
         self.last_event = self._pending_event
         self._pending_event = None
+        if self._event_driven:
+            # 新波次：清掉上一波的进度与全部计数（收波只切状态、不清数据，
+            # 便于日志里看清上一波填了什么）
+            ctx["filled"] = set()
+            ctx["next_deadline"] = None
+            ctx["join_attempts"] = 0
+            ctx["war_attempts"] = 0
+            ctx["panel_open"] = False
+            ctx["join_found"] = False
+            ctx["target_click"] = None
+            ctx["target_name"] = None
+
+    def _find_join_give_up(self, ctx) -> bool:
+        """FIND_JOIN 的放弃判据：长窗口耗尽，或波次窗口过期。
+
+        第一个目标用既有的长窗口（`_JOIN_MAX_ATTEMPTS=60` × 3s ≈ 3 分钟）——
+        那是「等车头开出集结」用的；5s 窗口只管**第一个之后**的剩余目标
+        （此时列表里该有的已经有了，没刷出来就是这一波没有）。
+        """
+        if ctx.get("join_attempts", 0) > _JOIN_MAX_ATTEMPTS:
+            return True
+        if not self._event_driven:
+            return False
+        deadline = ctx.get("next_deadline")
+        return deadline is not None and time.time() >= deadline
+
+    def _wave_has_more(self, ctx) -> bool:
+        """填完一个目标后：还有没填过的目标、且窗口没过 → 继续下一轮。
+
+        判据要把**刚填完的当前目标**也算作已填：`filled` 是在 _next_target
+        （本 guard 通过后才执行的动作）里才加入 target_name 的，所以这里若
+        只看 `filled`，最后一个目标也会被判成「还没填」→ 又开一轮 FIND_JOIN
+        空转（全目标都填完时列表里已无待填项，_poll_join 直接跳过、假/真时钟
+        都不推进），直到 join_attempts 撞穿 60 才收波——那是「没找到」的口径，
+        不是「填完了」。排除当前目标后，填完最后一个即走 _wave_done 收波。
+        """
+        filled = ctx.get("filled") or set()
+        current = ctx.get("target_name")
+        remaining = [t for t in self._fill_targets
+                     if t["name"] not in filled and t["name"] != current]
+        if not remaining:
+            return False
+        deadline = ctx.get("next_deadline")
+        return deadline is None or time.time() < deadline
+
+    def _next_target(self, ctx):
+        """记下刚填完的目标，重置 5s 窗口与计数，回归一化继续找下一个。"""
+        name = ctx.get("target_name")
+        if name:
+            ctx.setdefault("filled", set()).add(name)
+        ctx["next_deadline"] = time.time() + _WAVE_TARGET_WAIT
+        ctx["join_attempts"] = 0
+        ctx["war_attempts"] = 0
+        ctx["panel_open"] = False
+        ctx["join_found"] = False
+        ctx["target_click"] = None
+        logger.info("成员·已填 %s，继续找下一个目标（窗口 %.0fs）",
+                    name, _WAVE_TARGET_WAIT)
+
+    def _wave_done(self, ctx):
+        filled = ctx.get("filled") or set()
+        logger.info("成员·本波填兵结束（已填 %s 个：%s），等下一个信号",
+                    len(filled), "、".join(sorted(filled)) or "无")
 
     def _switch_to_self(self, ctx):
         # v1: 每个实例单角色，无需切换（多角色切换是 v2）
@@ -242,13 +330,17 @@ class MemberStateMachine(StateMachine):
                 logger.info("成员·战争列表被关闭且联盟旗帜不可见，下拍重试")
                 ctx["join_found"] = False
                 return
+        filled = ctx.get("filled") or set()
         for t in self._fill_targets:
+            if t["name"] in filled:
+                continue   # 本波已填过，不重复填（防止反复填 A 而漏掉 B）
             r = self._wait_for_result(self._target_rec_id(t),
                                       timeout=_JOIN_POLL_TIMEOUT)
             if r is None:
                 continue
             _, cy = r.bbox.center()
             ctx["target_click"] = (_PLUS_X, cy + _NAME_TO_PLUS_DY)
+            ctx["target_name"] = t["name"]
             ctx["join_found"] = True
             logger.info("成员·找到车头 %s 的集结，准备加入", t["name"])
             return
@@ -321,6 +413,12 @@ class MemberStateMachine(StateMachine):
         logger.warning("成员·加入未生效，重开战争列表重试")
 
     def _exhausted(self, ctx):
+        if self._event_driven:
+            # 波次模式：本波一个目标都没填上不是失败——成员不记轮次，
+            # 回 IDLE 等下一个信号。单发模式的 no_rally_found 失败口径
+            # 随之只对 either 的内嵌成员有效。
+            logger.warning("成员·本波未找到可填目标，收波等下一个信号")
+            return
         # 重试耗尽：置失败标记。fail_reason 由 WorkerRunner 在终态的
         # status_update payload 中带出；冷却重建后的 SM 自动重试新一轮。
         ctx["failed"] = True
@@ -328,4 +426,9 @@ class MemberStateMachine(StateMachine):
         logger.warning("成员·重试耗尽，本轮放弃填兵")
 
     def is_terminal(self) -> bool:
+        if self._event_driven:
+            # 波次模式没有终态：由协调器在「所有车头收工」时停（见
+            # coordination/runtime._stop_members）。runner 主循环因此永远
+            # 走 step 分支，不进冷却重建——这正是「不记轮次」的实现。
+            return False
         return self.current == "END"

@@ -33,10 +33,11 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
     if character.role == RoleEnum.MEMBER:
         # 填兵不使用预设/兵种选择（用户要求 2026-09-09），
         # 故不传 march_preset/march_troop_types
+        # event_driven=True：一次信号填完所有点名车头，不记轮次（2026-10-09）
         return MemberStateMachine(handle_source, recognizers,
                                   character.fill_target_leaders,
                                   char_id=character.id, ledger=ledger,
-                                  human=human)
+                                  human=human, event_driven=True)
     if character.role == RoleEnum.EITHER:
         return EitherStateMachine(handle_source, recognizers, character.target_levels,
                                   character.march_preset, character.march_troop_types,

@@ -57,6 +57,136 @@ def _make_sm():
     return sm, handle, rec_preset, rec_troop
 
 
+def _make_wave_sm(targets=("Boss", "Chief")):
+    """波次模式（event_driven=True）的成员状态机。
+
+    识别器基线与 _make_sm 一致（全部匹配），再关掉不该在场的残留弹窗
+    （照 _make_sm 的设置）；波次逻辑的关键变量是「哪个车头的名字模板
+    什么时候刷得出来」，目标识别器默认全灭，逐个用例按需置 True 最省事。
+    """
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    # 与 _make_sm 同款残留弹窗默认不在场
+    recs["rally_attack_popup"] = _mock_rec(matched=False)
+    recs["ap_refill"] = _mock_rec(matched=False)
+    recs["form_title"] = _mock_rec(matched=False)
+    recs["replace_popup"] = _mock_rec(matched=False)
+    recs["menu_expanded"] = _mock_rec(matched=False)   # 底部快捷菜单展开态
+    recs["warning_panel"] = _mock_rec(matched=False)   # 「预警」警报面板
+    recs["alliance_btn"] = _mock_rec(matched=True)     # 归一化：旗帜可见即成功
+    recs["war_title"] = _mock_rec(matched=True)        # 战争列表已开
+    recs["join_btn"] = _mock_rec(matched=True)         # 列表里那条集结的「加入」
+    recs["march_btn"] = _mock_rec(matched=True)        # 创建部队弹窗
+    recs["swap_btn"] = _mock_rec(matched=True)         # 加入成功（橙「替换」）
+    recs["join_create_btn"] = _mock_rec(matched=True)
+    for name in targets:
+        recs[f"fill_{name}"] = _mock_rec(matched=False)
+    sm = MemberStateMachine(handle_source=handle, recognizers=recs,
+                            fill_target_leaders=[{"instance": "i1", "name": n}
+                                                 for n in targets],
+                            char_id="m1", event_driven=True)
+    return sm, handle, recs
+
+
+def _launch_event(name="A"):
+    return {"rally_id": f"rally_{name}", "fortress_level": 5, "char_id": name}
+
+
+def test_wave_fills_every_named_target_in_one_signal(monkeypatch):
+    """A、B 同时发起集结 → 一次信号把两个都填掉（P1 的核心回归）。
+
+    回归的是 2026-10-09 用户报的现象：三号 A/B/C，C 只给第一个发车的填了兵。
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    recs["fill_Chief"].recognize.return_value.matched = True
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert sm.current == "IDLE"          # 收波，等下一个信号
+    assert not sm.is_terminal()          # 波次模式没有终态
+    # 两次点「+」（(1335, cy+111)）—— 两个目标各一次
+    plus_clicks = [c for c in handle.clicks if c[0] == 1335]
+    assert len(plus_clicks) == 2
+
+
+def test_wave_skips_already_filled_target(monkeypatch):
+    """同一波里已经填过的车头不重复填（防止反复填 A 而漏掉 B）。"""
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert [c for c in handle.clicks if c[0] == 1335] == [(1335, 161)]  # 只有一次
+
+
+def test_wave_ends_when_next_target_never_shows_up(monkeypatch):
+    """填完一个后 5s 内没刷出下一个目标 → 收波，不是死等 60 拍。"""
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    steps = 0
+    for _ in range(200):
+        steps += 1
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert sm.current == "IDLE"
+    # 从填完 Boss 到收波只花了 ~5s（假时钟），远小于 60 拍 × 3s 的长窗口。
+    # 阈值给 90s 是留余量：填兵链路本身的假时钟耗时（等 war_title /
+    # march_btn / swap_btn 各若干拍）也算在里面，但那是几十秒量级，
+    # 与「长窗口 180s」仍可明确区分。
+    assert fake.t - 1000.0 < 90.0
+
+
+def test_wave_new_signal_starts_a_fresh_wave(monkeypatch):
+    """收波后再来一个信号，已填集合清空（新一轮可以再填 A）。"""
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert sm.current == "IDLE"
+    sm.on_rally_launched(_launch_event("B"))
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert len([c for c in handle.clicks if c[0] == 1335]) == 2   # 又填了一次
+
+
+def test_wave_mode_is_never_terminal():
+    sm, _, _ = _make_wave_sm()
+    for state in ("IDLE", "NORMALIZE", "FIND_JOIN", "END"):
+        sm.current = state
+        assert sm.is_terminal() is False
+
+
+def test_single_shot_mode_still_terminates():
+    """默认（either 的内嵌成员）仍是「填完即终态」的旧行为。"""
+    sm, _, _, _ = _make_sm()
+    sm.current = "END"
+    assert sm.is_terminal() is True
+
+
 def test_missing_fill_recognizer_warns_about_the_ocr_switch(caplog):
     """点名车头没有识别器时，warning 要指向真正的开关。
 
