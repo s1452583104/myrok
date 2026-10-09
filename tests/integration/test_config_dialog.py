@@ -648,3 +648,63 @@ def test_table_shows_search_order_arrow(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
     assert dlg._tables[0].item(0, 2).text() == "8→7→6"
+
+
+# ---- 多预设有序编辑器（2026-10-09）----
+
+def test_preset_editor_writes_ordered_list(qapp):
+    """3 行编辑器的行序就是优先级，原样写进 march_presets。"""
+    dlg = CharacterEditDialog(None, _char(
+        [7], march_presets=[{"preset": 3, "troops": ["archer"]},
+                            {"preset": 1, "troops": ["infantry", "cavalry"]}],
+        march_preset=None, march_troop_types=[]), [])
+    assert dlg.get_result()["march_presets"] == [
+        {"preset": 3, "troops": ["archer"]},
+        {"preset": 1, "troops": ["infantry", "cavalry"]},
+    ]
+
+
+def test_preset_editor_does_not_write_legacy_fields(qapp):
+    """旧字段不再由 GUI 写（config 层仍能读，用户手改的 yaml 不受影响）。"""
+    dlg = CharacterEditDialog(None, _char([7]), [])
+    out = dlg.get_result()
+    assert "march_preset" not in out
+    assert "march_troop_types" not in out
+
+
+def test_preset_editor_reads_legacy_fields(qapp):
+    """老配置（只写 march_preset + march_troop_types）在编辑器里也要显示出来。"""
+    dlg = CharacterEditDialog(None, _char([7], march_preset=2,
+                                          march_troop_types=["cavalry"]), [])
+    assert dlg.get_result()["march_presets"] == [
+        {"preset": 2, "troops": ["cavalry"]}]
+
+
+def test_preset_editor_skips_blank_rows(qapp):
+    """第 2/3 行留空 = 不启用，不进结果。"""
+    dlg = CharacterEditDialog(None, _char(
+        [7], march_presets=[{"preset": 1, "troops": ["infantry"]}],
+        march_preset=None, march_troop_types=[]), [])
+    assert len(dlg.get_result()["march_presets"]) == 1
+
+
+def test_preset_editor_rejects_row_without_troop(qapp):
+    dlg = CharacterEditDialog(None, _char([7]), [])   # 旧字段 → 第 1 行预设 1
+    for cb in dlg.preset_rows[0][1].values():
+        cb.setChecked(False)
+    assert dlg.validate() == "预设 1 没有选兵种"
+
+
+def test_preset_editor_rejects_duplicate_slot(qapp):
+    dlg = CharacterEditDialog(None, _char([7]), [])
+    pcombo = dlg.preset_rows[1][0]
+    pcombo.setCurrentIndex(pcombo.findData(1))        # 第 2 行也选预设 1
+    dlg.preset_rows[1][1]["cavalry"].setChecked(True)
+    assert dlg.validate() == "预设号重复：[1, 1]"
+
+
+def test_preset_editor_requires_at_least_one_row(qapp):
+    """一行都不启用 = 配不出车头，必须拦住。"""
+    dlg = CharacterEditDialog(None, None, [])
+    dlg.name_edit.setText("X")
+    assert dlg.validate() == "至少配置一行行军预设"

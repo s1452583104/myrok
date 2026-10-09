@@ -23,7 +23,8 @@ from PyQt6.QtWidgets import (
 from pydantic import ValidationError
 
 from rok_assistant.core.handle_source import create_handle_source
-from rok_assistant.infra.config import MAX_TARGET_LEVELS, RootConfig, load_config
+from rok_assistant.infra.config import (MAX_MARCH_PRESETS, MAX_TARGET_LEVELS,
+                                        RootConfig, load_config)
 from rok_assistant.infra.mumu import (
     MumuLocatorError, MumuNotRunningError, list_instances,
 )
@@ -379,11 +380,20 @@ class ConfigDialog(QDialog):
         row = table.rowCount()
         table.insertRow(row)
         fills = ", ".join(f"{f['instance']}/{f['name']}" for f in c.get("fill_target_leaders", []))
-        troops = "、".join(TROOP_LABELS[t] for t in c["march_troop_types"])
-        summary = troops + (f" ｜ 填: {fills}" if fills else "")
+        # 新字段优先，没有就用旧字段合成一条（与 config 层的迁移同口径）。
+        # 全部用 .get()：GUI 保存后写的是 march_presets，此时旧键不存在，
+        # 直接下标会 KeyError
+        presets = c.get("march_presets") or []
+        if not presets and c.get("march_preset"):
+            presets = [{"preset": c["march_preset"],
+                        "troops": c.get("march_troop_types", [])}]
+        preset_text = "→".join(
+            f"{p['preset']}（{'/'.join(TROOP_LABELS[t] for t in p['troops'])}）"
+            for p in presets) or "—"
+        summary = f"填: {fills}" if fills else ""
         levels = "→".join(str(v) for v in c["target_levels"])
         for col, text in enumerate([c["name"], ROLE_LABELS[c["role"]],
-                                    levels, str(c["march_preset"]), summary]):
+                                    levels, preset_text, summary]):
             table.setItem(row, col, QTableWidgetItem(text))
 
     def _leader_candidates(self, exclude=None) -> list[dict]:
@@ -744,19 +754,45 @@ class CharacterEditDialog(QDialog):
                     ConfigDialog._wrap(level_box))
         self._refresh_level_order()
 
-        self.preset_spin = QSpinBox()
-        self.preset_spin.setRange(1, 5)
-        self.preset_spin.setValue((character or {}).get("march_preset", 1))
-        form.addRow("行军预设", self.preset_spin)
+        # 行军预设（2026-10-09）：3 行固定编辑器，行序即优先级；第 2/3 行
+        # 留空 = 不启用。每行 = [预设 ▾][□步兵 □骑兵 □弓兵] —— 兵种用复选
+        # 而不是单选下拉：一个预设允许同时点多个兵种（_form_troop 逐个点
+        # troop_*），单选会丢掉这个能力。
+        self.preset_rows: list[tuple[QComboBox, dict]] = []
+        preset_box = QVBoxLayout()
+        preset_box.setContentsMargins(0, 0, 0, 0)
+        for _ in range(MAX_MARCH_PRESETS):
+            row = QHBoxLayout()
+            pcombo = QComboBox()
+            pcombo.addItem("（不启用）", None)
+            for n in range(1, 6):
+                pcombo.addItem(f"预设 {n}", n)
+            row.addWidget(pcombo)
+            checks = {}
+            for key, label in TROOP_LABELS.items():
+                cb = QCheckBox(label)
+                checks[key] = cb
+                row.addWidget(cb)
+            preset_box.addLayout(row)
+            self.preset_rows.append((pcombo, checks))
+        form.addRow(f"行军预设（按顺序，最多 {MAX_MARCH_PRESETS} 行）",
+                    ConfigDialog._wrap(preset_box))
 
-        troop_row = QHBoxLayout()
-        self.troop_checks = {}
-        for key, label in TROOP_LABELS.items():
-            cb = QCheckBox(label)
-            cb.setChecked(key in (character or {}).get("march_troop_types", ["infantry"]))
-            self.troop_checks[key] = cb
-            troop_row.addWidget(cb)
-        form.addRow("兵种", ConfigDialog._wrap(troop_row))
+        # 载入：新字段优先，没有就用旧字段合成一行（与 config 层的迁移同口径）
+        presets = (character or {}).get("march_presets") or []
+        if not presets and (character or {}).get("march_preset"):
+            presets = [{"preset": (character or {})["march_preset"],
+                        "troops": (character or {}).get("march_troop_types", [])}]
+        for i, (pcombo, checks) in enumerate(self.preset_rows):
+            if i >= len(presets):
+                continue
+            p = presets[i]
+            idx = pcombo.findData(p.get("preset"))
+            if idx >= 0:
+                pcombo.setCurrentIndex(idx)
+            for t in p.get("troops", []):
+                if t in checks:
+                    checks[t].setChecked(True)
 
         form.addRow(QLabel("填兵目标（成员 / 车头或成员 必选，可多选）："))
         lists = QHBoxLayout()
@@ -838,6 +874,20 @@ class CharacterEditDialog(QDialog):
             self.sel_list.takeItem(self.sel_list.row(item))
             self.cand_list.addItem(item)
 
+    def _read_march_presets(self) -> list[dict]:
+        """读 3 行编辑器 → [{"preset": n, "troops": [...]}, ...]。
+
+        预设选「（不启用）」的行跳过；行序就是返回顺序，也就是优先级。
+        """
+        out = []
+        for pcombo, checks in self.preset_rows:
+            preset = pcombo.currentData()
+            if preset is None:
+                continue
+            out.append({"preset": preset,
+                        "troops": [k for k, cb in checks.items() if cb.isChecked()]})
+        return out
+
     def _selected_fills(self) -> list[dict]:
         out = []
         for i in range(self.sel_list.count()):
@@ -851,9 +901,15 @@ class CharacterEditDialog(QDialog):
             return "角色名不能为空"
         if not self._level_order:
             return f"至少勾选一个目标城寨等级（最多 {MAX_TARGET_LEVELS} 个）"
-        troops = [k for k, cb in self.troop_checks.items() if cb.isChecked()]
-        if not troops:
-            return "至少选择一个兵种"
+        presets = self._read_march_presets()
+        if not presets:
+            return "至少配置一行行军预设"
+        for p in presets:
+            if not p["troops"]:
+                return f"预设 {p['preset']} 没有选兵种"
+        slots = [p["preset"] for p in presets]
+        if len(set(slots)) != len(slots):
+            return f"预设号重复：{slots}"
         role = LABEL_ROLES[self.role_combo.currentText()]
         if role in ("member", "either") and not self._selected_fills():
             return f"分工为 {ROLE_LABELS[role]} 时必须选择填兵目标"
@@ -873,7 +929,6 @@ class CharacterEditDialog(QDialog):
             "name": self.name_edit.text().strip(),
             "role": role,
             "target_levels": list(self._level_order),
-            "march_preset": self.preset_spin.value(),
-            "march_troop_types": [k for k, cb in self.troop_checks.items() if cb.isChecked()],
+            "march_presets": self._read_march_presets(),
             "fill_target_leaders": [] if role == "leader" else self._selected_fills(),
         }
