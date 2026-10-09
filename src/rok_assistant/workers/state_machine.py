@@ -3,7 +3,11 @@ import time
 from typing import Callable, Union
 from ..core.recognizer import RecognizeResult
 from ..infra.anti_detection import AntiDetectionConfig, HumanProfile
+from ..infra.logger import get_logger
 from dataclasses import dataclass, field
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class State:
@@ -182,3 +186,27 @@ class StateMachine:
             self._handle.click(*self._AP_DIALOG_X)
             time.sleep(self._human.jitter(1.2))
         return self._find("ap_refill") is None
+
+    # 断网弹框「确定」按钮中心（2026-10-09 实机截图实测 bbox
+    # (779,666)-(1142,757)，中心 (960,711)）
+    _NET_ERROR_CONFIRM_XY = (960, 711)
+    _NET_ERROR_MAX_CLICKS = 3
+
+    def _click_net_error(self) -> bool:
+        """点掉断网弹框（「网络不稳定，连接已断开」）的「确定」，返回是否
+        点过。
+
+        有界循环：点一次确认一次，弹框还在才补点（点「确定」会触发重连，
+        画面可能停在加载态 —— 那是**弹框已消失**的正常表现，不能当成没点
+        掉而死循环）。归一化里紧跟一段 `_wait_for(地图标志)` 兜住重连窗口。
+        """
+        clicked = False
+        for _ in range(self._NET_ERROR_MAX_CLICKS):
+            if self._find("net_error_confirm") is None:
+                break
+            self._handle.click(*self._NET_ERROR_CONFIRM_XY)
+            clicked = True
+            logger.warning("检测到断网弹框，点击「确定」重连（第 %s 次）",
+                           _ + 1)
+            time.sleep(self._human.jitter(1.5))
+        return clicked

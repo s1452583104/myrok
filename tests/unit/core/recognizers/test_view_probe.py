@@ -32,6 +32,7 @@ IMG = np.zeros((100, 100, 3), dtype=np.uint8)
     (View.RALLY_POPUP, "rally_attack_popup"),
     (View.TROOP_FORM, "march_btn"),
     (View.MODAL, "ap_refill"),
+    (View.NET_ERROR, "net_error_confirm"),
 ])
 def test_each_view_anchor_is_detected(view, rid):
     """每个视图的每个锚点单独出现时都必须被判成该视图。"""
@@ -98,3 +99,11 @@ def test_probe_only_calls_each_recognizer_once():
     ViewProbe(recs).probe(IMG)
     for rid, rec in recs.items():
         assert rec.recognize.call_count == 1, rid
+
+
+def test_net_error_wins_over_everything():
+    """断网弹框盖住一切，必须最先判——否则归一化会以为已在地图视图而漏关它。"""
+    v = ViewProbe(_recs({"net_error_confirm": 0.95,
+                         "search_icon": 0.99,
+                         "ap_refill": 0.98})).probe(IMG)
+    assert v.view is View.NET_ERROR

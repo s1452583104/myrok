@@ -241,6 +241,13 @@ class MemberStateMachine(StateMachine):
         # 侧栏展开态则点空地收起（见 _QUEUE_SIDEBAR_DISMISS 注释）。搜索面板
         # 开着时底部栏变成搜索目标栏、旗帜不可见（2026-09-11 实机），先退
         # 搜索；城市视图则点 map_btn 回地图。
+        # 断网弹框优先（2026-10-09 实机）：它是居中模态，四周地图仍可见，
+        # alliance_btn/search_icon 可能露出来 —— 放在后面就永远不会被点到。
+        # 点掉后等地图就绪；重连较慢时交给下方清理清单与末尾判据兜底。
+        if self._find("net_error_confirm") is not None:
+            self._click_net_error()
+            if self._wait_for("alliance_btn", timeout=15.0):
+                return
         if self._find("alliance_btn"):
             return
         if self._find("war_title"):

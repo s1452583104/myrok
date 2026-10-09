@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class View(str, Enum):
+    NET_ERROR = "网络断开"
     MODAL = "弹窗遮罩"
     TROOP_FORM = "创建部队"
     RALLY_POPUP = "集结弹窗"
@@ -19,6 +20,7 @@ class View(str, Enum):
 
 # 锚点：id 全部取自 templates/manifest.yaml，改这里前先确认 manifest 里存在
 VIEW_ANCHORS: dict[View, tuple[str, ...]] = {
+    View.NET_ERROR: ("net_error_confirm",),
     View.MODAL: ("replace_popup", "ap_refill", "warning_panel", "menu_expanded"),
     View.TROOP_FORM: ("form_title", "march_btn"),
     View.RALLY_POPUP: ("rally_attack_popup",),
@@ -29,9 +31,11 @@ VIEW_ANCHORS: dict[View, tuple[str, ...]] = {
 }
 
 # 判定优先级：全屏模态在最前（它盖住一切，同时命中时必须判它），
-# 地图在最后（它是「什么都没盖住」的兜底，不是默认值）
+# 地图在最后（它是「什么都没盖住」的兜底，不是默认值）。
+# 断网弹框排在最前：它也是全屏模态，但**必须被点掉**而不是被「关掉」，
+# 处置不同（2026-10-09）。
 VIEW_PRIORITY: list[View] = [
-    View.MODAL, View.TROOP_FORM, View.RALLY_POPUP,
+    View.NET_ERROR, View.MODAL, View.TROOP_FORM, View.RALLY_POPUP,
     View.WAR_LIST, View.SEARCH, View.CITY, View.MAP,
 ]
 

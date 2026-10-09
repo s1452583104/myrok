@@ -214,6 +214,12 @@ class LeaderStateMachine(StateMachine):
         2026-10-04 从 either_sm 搬到这里：整段只用 self._rec/_find/_handle，
         本来就是车头的事；纯 leader 也要用它（见 __init__ 的 _queue_gate）。
         """
+        # 断网弹框盖住队列栏（2026-10-09）：不先点掉，徽标必然不可见 →
+        # 判 unknown → fail-closed 干等。点掉后本拍返回 unknown（画面刚被
+        # 模态盖过，下一拍在地图上重判），不做「猜它是什么」的推断。
+        if self._find("net_error_confirm") is not None:
+            self._click_net_error()
+            return "unknown"
         if self._rec.get("queue_badge") is None:
             return "none"   # 未配置徽标识别器：门槛不生效（与旧版一致）
         if self._find("queue_badge") is None:
@@ -329,6 +335,12 @@ class LeaderStateMachine(StateMachine):
         # 战争列表开着会盖住左下角按钮（成员阶段回流/上一轮残留）：
         # 点面板右上角 X（固定几何 1671,64）关掉再归一化；派遣队列侧栏
         # 展开态同样盖住底部栏，先点空地收起。
+        # 断网弹框优先（2026-10-09 实机）：居中模态，四周地图仍可见，
+        # search_icon 可能露出来 —— 放在后面就永远不会被点到
+        if self._find("net_error_confirm") is not None:
+            self._click_net_error()
+            if self._wait_for("search_icon", timeout=15.0):
+                return
         if self._find("search_icon"):
             return
         if self._find("war_title"):
