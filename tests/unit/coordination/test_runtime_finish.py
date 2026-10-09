@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from rok_assistant.coordination.event_bus import EventBus
 from rok_assistant.coordination.runtime import RuntimeCoordinator
 from rok_assistant.infra.config import RootConfig
@@ -21,26 +23,41 @@ CFG = {
 
 def _coord(bus):
     coord = RuntimeCoordinator(RootConfig.model_validate(CFG), event_bus=bus)
-    # 不真启动：只放两个占位 runner，测汇总逻辑
-    coord.runners = {"mumu0:c0": object(), "mumu1:c1": object()}
+    # 不真启动：只放两个占位 runner，测汇总逻辑。必须是 MagicMock ——
+    # 车头收工时协调器会真的调成员 runner 的 stop()（2026-10-09）
+    coord.runners = {"mumu0:c0": MagicMock(), "mumu1:c1": MagicMock()}
     return coord
 
 
-def test_all_workers_done_only_after_every_runner_reports():
+def test_leaders_finishing_stops_members_and_fires_all_workers_done():
+    """车头全收工 → 成员被协调器停掉 → 发 all_workers_done。
+
+    波次模式下成员永不进终态（不记轮次），「全部上报」这个条件永远不成立，
+    所以收工判据改成「全部 leader/either 上报」（2026-10-09）。
+    """
+    bus = EventBus()
+    done = []
+    bus.subscribe("all_workers_done", done.append)
+    coord = _coord(bus)
+    member_runner = coord.runners["mumu1:c1"]
+
+    bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
+                                    "stopped_reason": "已完成 10 轮，达到轮数上限"})
+    assert len(done) == 1
+    assert done[0]["reasons"]["mumu0:c0"] == "已完成 10 轮，达到轮数上限"
+    assert "mumu1:c1" in done[0]["reasons"]        # 成员由协调器代记
+    member_runner.stop.assert_called_once()
+
+
+def test_member_finishing_first_does_not_fire():
+    """成员先收工（异常停机）不算全部收工：车头还在跑。"""
     bus = EventBus()
     done = []
     bus.subscribe("all_workers_done", done.append)
     _coord(bus)
-
-    bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
-                                    "stopped_reason": "已完成 10 轮，达到轮数上限"})
-    assert done == []                      # 还差一台
-
     bus.publish("worker_finished", {"instance_id": "mumu1", "char_id": "c1",
-                                    "stopped_reason": "已完成 10 轮，达到轮数上限"})
-    assert len(done) == 1
-    assert set(done[0]["reasons"]) == {"mumu0:c0", "mumu1:c1"}
-    assert done[0]["reasons"]["mumu0:c0"] == "已完成 10 轮，达到轮数上限"
+                                    "stopped_reason": "连续 6 次 step 异常"})
+    assert done == []
 
 
 def test_all_workers_done_not_published_for_unknown_runner():
@@ -53,6 +70,19 @@ def test_all_workers_done_not_published_for_unknown_runner():
     assert done == []      # 不在 self.runners 里的事件不能凑数
 
 
+def test_already_stopped_member_is_not_stopped_twice():
+    """成员已经自然收工过（异常停机），协调器不再对它调 stop。"""
+    bus = EventBus()
+    bus.subscribe("all_workers_done", lambda _p: None)
+    coord = _coord(bus)
+    member_runner = coord.runners["mumu1:c1"]
+    bus.publish("worker_finished", {"instance_id": "mumu1", "char_id": "c1",
+                                    "stopped_reason": "r"})
+    bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
+                                    "stopped_reason": "r"})
+    member_runner.stop.assert_not_called()
+
+
 def test_old_coordinator_does_not_refire_after_natural_finish():
     # 旧 coordinator 自然收工后必须从 bus 上退订（Critical 回归）：否则同一根
     # bus 上新起一轮时，旧 coordinator 的满员状态会立刻再发一次
@@ -60,16 +90,12 @@ def test_old_coordinator_does_not_refire_after_natural_finish():
     bus = EventBus()
     done = []
     bus.subscribe("all_workers_done", done.append)
-    _coord(bus)                            # 旧 coordinator（两台占位 runner）
-    bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
-                                    "stopped_reason": "r"})
-    bus.publish("worker_finished", {"instance_id": "mumu1", "char_id": "c1",
-                                    "stopped_reason": "r"})
-    assert len(done) == 1                  # 旧 coordinator 收工一次
-
-    # 同一根 bus 上再建一个新 coordinator（模拟用户再点 Start），只投一台：
-    # 新 coordinator 还差一台，不该触发；旧 coordinator 已退订，也不该再触发。
     _coord(bus)
     bus.publish("worker_finished", {"instance_id": "mumu0", "char_id": "c0",
+                                    "stopped_reason": "r"})
+    assert len(done) == 1                  # 车头收工即触发（成员由协调器停）
+
+    # 旧 coordinator 已退订：同一根 bus 上再投一台也不该有第二次
+    bus.publish("worker_finished", {"instance_id": "mumu1", "char_id": "c1",
                                     "stopped_reason": "r"})
     assert len(done) == 1                  # 没有第二次 all_workers_done

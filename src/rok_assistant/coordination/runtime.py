@@ -164,8 +164,43 @@ class RuntimeCoordinator:
         self._stopped.clear()
         self._running = False
 
+    def _role_of(self, key: str) -> RoleEnum | None:
+        """runner key（"实例id:角色id"）→ 配置里的分工。查不到返回 None。"""
+        for inst in self._config.instances:
+            for char in inst.characters:
+                if f"{inst.id}:{char.id}" == key:
+                    return char.role
+        return None
+
+    def _leaders_done(self) -> bool:
+        """所有 leader/either 是否都已上报收工。
+
+        配置层保证至少 1 个 leader/either（config.py 的 _cross_checks），
+        所以这个集合非空，收工出口一定可达。
+        """
+        leaders = [k for k in self.runners
+                   if self._role_of(k) in (RoleEnum.LEADER, RoleEnum.EITHER)]
+        return bool(leaders) and set(leaders) <= set(self._stopped)
+
+    def _stop_members(self) -> None:
+        """车头全收工 → 停掉还在跑的成员。
+
+        波次模式的成员永不进终态（不记轮次，见 member_sm.is_terminal），
+        只能由这里停。已自然收工过的成员跳过（避免重复 stop）。
+        """
+        for key in list(self.runners):
+            if self._role_of(key) != RoleEnum.MEMBER or key in self._stopped:
+                continue
+            self.runners[key].stop(timeout=_STOP_TIMEOUT)
+            self._stopped[key] = "车头已全部收工，协调器停止成员"
+
     def _on_worker_finished(self, payload: dict) -> None:
-        """一台 worker 自然收工。全部收工 → 发 all_workers_done（spec §6.2）。
+        """一台 worker 自然收工。**所有车头收工** → 停成员 → 发
+        all_workers_done（spec §2.4）。
+
+        收工判据从「全部 runner 上报」改成「全部 leader/either 上报」：
+        波次模式下的成员不记轮次、永不进终态，旧判据永远不成立。成员由此
+        改为被协调器停，它的收工理由也由协调器代记。
 
         只在 payload 里的 key 确实在 self.runners 里时才计入，否则
         「上一次运行遗留的迟到事件」会凑数提前复位按钮。
@@ -174,9 +209,10 @@ class RuntimeCoordinator:
         if key not in self.runners:
             return
         self._stopped[key] = payload.get("stopped_reason", "")
-        if not set(self.runners) <= set(self._stopped):
+        if not self._leaders_done():
             return
-        logger.info("全部 worker 已收工：%s", self._stopped)
+        self._stop_members()
+        logger.info("全部车头已收工：%s", self._stopped)
         self._bus.publish("all_workers_done", {"reasons": dict(self._stopped)})
         self._running = False
         # 收工即退订：订阅与运行同寿。否则旧 coordinator 仍挂在同一根 bus 上，
