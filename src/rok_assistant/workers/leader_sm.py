@@ -77,18 +77,33 @@ class LeaderStateMachine(StateMachine):
     """
 
     def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
-                 march_preset: int, march_troop_types: list, event_bus=None,
+                 march_preset: int | None = None,
+                 march_troop_types: list | None = None, event_bus=None,
                  wait_members_seconds: float = 330.0,
                  publisher_id: str | None = None,
-                 ledger=None, queue_gate=None, human=None):
+                 ledger=None, queue_gate=None, human=None,
+                 march_presets: list | None = None):
         self._handle = handle_source
         self._rec = recognizers
         # 有序搜索列表（2026-10-04）：本轮从第 0 个开始，每级连搜
         # _MAX_NO_RESULT 次无结果就换下一个，绕完一圈放弃。顺序完全按
         # 配置，不做降序假设（用户明确要求 6→4→5 这类顺序合法）
         self._target_levels = list(target_levels)
-        self._march_preset = march_preset
-        self._march_troop_types = march_troop_types
+        # 有序预设列表（2026-10-09）：每项 (预设号, 兵种列表)。第一个确认
+        # 不了高亮就换下一个（返程中的主将载不出预设，见 _select_preset）。
+        # 新参数是**关键字**且在末尾：既有的 18 处位置参数调用（测试 +
+        # either_sm）一字不改；只给旧的两个字段时退化成单元素列表，
+        # 行为与改动前逐字相同。
+        if march_presets:
+            self._march_presets = [(int(p), list(t)) for p, t in march_presets]
+        else:
+            self._march_presets = [
+                (int(1 if march_preset is None else march_preset),
+                 list(march_troop_types or []))]
+        # 兼容读侧：老代码/老测试读 _march_preset / _march_troop_types 时
+        # 拿到首选那一项
+        self._march_preset = self._march_presets[0][0]
+        self._march_troop_types = list(self._march_presets[0][1])
         self._bus = event_bus
         self._wait_members_seconds = wait_members_seconds
         # 发布 rally_launched 时带上账号标识：either_sm 的进程级集结事件
@@ -578,11 +593,54 @@ class LeaderStateMachine(StateMachine):
         if not self._wait_for("march_btn", timeout=15.0):
             view = self._view_probe.probe(self._handle.capture()).view
             raise RuntimeError(f"创建部队弹窗未出现，卡在[{view.value}]视图")
-        self._select_preset()
-        for t in self._march_troop_types:
+        preset, troops = self._select_preset()
+        ctx["used_preset"] = preset
+        # 点胜出预设**自己的**兵种，不是全局兵种（多预设下每个槽可以配不同兵）
+        for t in troops:
             self._click(f"troop_{t}")
 
-    def _select_preset(self):
+    def _select_preset(self) -> tuple[int, list[str]]:
+        """按配置顺序挑一个能确认高亮的预设槽，返回 (预设号, 兵种列表)。
+
+        逐个预设跑 `_select_one_preset`（原实现，逐字复用：模板点击 + 列
+        基准自校准 + 确认 `selected_preset_N` 高亮）；**第一个确认成功的
+        胜出**。全部确认不了仍抛异常（保持 loud 失败）。
+
+        为什么需要回退（2026-10-09 用户要求）：队列门槛已放行「返程中」
+        （见 queue_verdict 的 "returning"），而返程中的主将载不出预设 ——
+        回退就是这次放行的安全阀：载不出来就换下一个槽，而不是用默认武将
+        代开车（2026-09-16 那次事故）。全都载不出来说明确实没兵可派，
+        抛异常交给 runner 重试。
+
+        未配置 `selected_preset_N` 识别器时（manifest 没写 pixel_stats 的
+        部署）`_select_one_preset` 走盲点分支、必然「成功」，因此**不会**
+        回退——这是刻意的：没有判据就没有回退依据，宁可保持旧行为。
+        """
+        first = self._march_presets[0][0]
+        last_exc = None
+        for idx, (n, troops) in enumerate(self._march_presets):
+            try:
+                self._select_one_preset(n)
+            except RuntimeError as exc:
+                last_exc = exc
+                if idx + 1 < len(self._march_presets):
+                    logger.warning("[车头] 预设槽 %s 高亮确认不了，改用下一个"
+                                   "预设槽 %s", n, self._march_presets[idx + 1][0])
+                continue
+            if idx:
+                logger.info("[车头] 预设槽 %s 不可用，本轮改用预设槽 %s",
+                            first, n)
+            return n, list(troops)
+        # 单预设：逐字保留 _select_one_preset 的原异常（spec §6「单元素时行为
+        # 与旧版逐字相同」——旧消息里带具体槽号与轮数，是既有测试与运维日志
+        # 都依赖的口径）。多预设才用下面的聚合消息，好把「全都不可用」讲清。
+        if len(self._march_presets) == 1:
+            raise last_exc
+        raise RuntimeError(
+            f"预设槽 {[n for n, _ in self._march_presets]} 全部高亮未确认，"
+            "拒绝派错兵，集结未发起")
+
+    def _select_one_preset(self, n: int) -> None:
         """点预设槽并**确认**高亮移到了槽 N（2026-09-27）。
 
         旧实现是盲点：`self._click(f"preset_{N}")` 的返回值直接丢掉，两种失败
@@ -609,7 +667,6 @@ class LeaderStateMachine(StateMachine):
         未配置 `selected_preset_N` 识别器时退回旧的盲点行为——manifest 没写
         `pixel_stats:` 的部署、以及 test_leader_sm 的 26 击断言都靠这道守卫。
         """
-        n = self._march_preset
         rec_id = f"selected_preset_{n}"
         if self._rec.get(rec_id) is None:
             self._click(f"preset_{n}")
@@ -716,11 +773,13 @@ class LeaderStateMachine(StateMachine):
             ctx["fail_reason"] = "rally_rejected"
             self.last_rally_event = None
             return
+        used = ctx.get("used_preset", self._march_presets[0][0])
         self.last_rally_event = {
             "rally_id": f"rally_{int(time.time())}",
             # 实际搜到的那一级（多选列表里可能已降过级），不是列表首个
             "fortress_level": self._current_level(ctx),
-            "march_preset": self._march_preset,
+            # 实际用上的预设号（可能是回退后的第二个），供日志/账本核对
+            "march_preset": used,
         }
         # 账本写入点：到这里才确认发车成功（上面刚验过队列徽标出现）。
         # 被静默拒绝的那条分支已提前 return，走不到这里。未配置徽标识别器
@@ -731,7 +790,7 @@ class LeaderStateMachine(StateMachine):
             self._ledger.mark_troops_out(self._publisher_id)
             self._ledger.mark_rally_launched(self._publisher_id)
         logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
-                    self._current_level(ctx), self._march_preset)
+                    self._current_level(ctx), used)
         if self._bus:
             payload = dict(self.last_rally_event)
             if self._publisher_id:

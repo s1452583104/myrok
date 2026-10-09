@@ -64,7 +64,8 @@ RECOGNIZER_IDS = ("map_btn", "search_icon", "tab_fortress", "level_plus",
                   "rally_attack_popup", "blue_rally", "preset_1",
                   "troop_cavalry", "march_btn", "war_title", "queue_panel",
                   "search_back", "ap_refill", "form_title", "replace_popup",
-                  "queue_badge")   # 派遣队列徽标：发射验证用（默认在场）
+                  "queue_badge",   # 派遣队列徽标：发射验证用（默认在场）
+                  "troop_infantry", "troop_archer")
 
 
 def _make_sm(target_levels=(7,), wait=0.0):
@@ -875,3 +876,59 @@ def test_readback_writes_cache_only_after_confirmation():
     sm2, h2 = _make_sm_with_level([3, 3, 3], target_levels=(6,))
     _to_select_level(sm2)
     assert _LEVEL_CACHE.get(h2) is None      # 未确认 → 不写缓存
+
+
+# ---- 多预设有序回退（2026-10-09）----
+
+def _preset_sm(presets, selected_hits):
+    """selected_hits: {预设号: 该槽的高亮识别器是否命中}。
+
+    只给选中槽装 selected_preset_N 识别器，其余槽的 _rec.get 返回 None
+    → 走「未配置判据」的盲点分支。这里刻意给全部槽都装，好让确认逻辑
+    真的跑起来。
+    """
+    handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
+    recs = {k: _mock_rec() for k in RECOGNIZER_IDS}
+    recs["ap_refill"] = _mock_rec(matched=False)
+    recs["menu_expanded"] = _mock_rec(matched=False)
+    recs["warning_panel"] = _mock_rec(matched=False)
+    for n in range(1, 6):
+        recs[f"selected_preset_{n}"] = _mock_rec(matched=selected_hits.get(n, False))
+    sm = LeaderStateMachine(handle, recs, target_levels=[7], event_bus=None,
+                            wait_members_seconds=0.0, march_presets=presets)
+    return sm, handle
+
+
+def test_select_preset_falls_back_to_second_when_first_unconfirmed():
+    """预设 1 高亮确认不了（返程中的主将载不出预设）→ 用预设 2 及其兵种。"""
+    sm, _ = _preset_sm([(1, ["cavalry"]), (3, ["infantry"])], {3: True})
+    assert sm._select_preset() == (3, ["infantry"])
+
+
+def test_select_preset_uses_first_when_confirmed():
+    sm, _ = _preset_sm([(2, ["archer"]), (4, ["infantry"])], {2: True, 4: True})
+    assert sm._select_preset() == (2, ["archer"])
+
+
+def test_select_preset_raises_when_all_unconfirmed():
+    """全部确认不了仍抛异常（loud 失败不变）——绝不盲发一轮兵种不可信的集结。"""
+    sm, _ = _preset_sm([(1, ["cavalry"]), (3, ["infantry"])], {})
+    with pytest.raises(RuntimeError, match="高亮未确认"):
+        sm._select_preset()
+
+
+def test_form_troop_clicks_winning_preset_troops():
+    """点的是**胜出预设自己**的兵种，不是全局兵种。"""
+    sm, _ = _preset_sm([(1, ["cavalry"]), (3, ["infantry"])], {3: True})
+    sm._rec["march_btn"] = _mock_rec(matched=True)
+    ctx = {}
+    sm._form_troop(ctx)
+    assert ctx["used_preset"] == 3
+    assert sm._rec["troop_infantry"].recognize.called
+    assert not sm._rec["troop_cavalry"].recognize.called
+
+
+def test_single_preset_keeps_legacy_constructor_path():
+    """只传旧的 march_preset/march_troop_types 时，行为与改动前逐字相同。"""
+    sm, _ = _make_sm()
+    assert sm._march_presets == [(1, ["cavalry"])]

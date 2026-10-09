@@ -25,10 +25,11 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
         # 注入时特性关闭（与 ledger 参数的既有语义一致）。
         gate = QueueGate(ledger, character.id) if ledger is not None else None
         return LeaderStateMachine(handle_source, recognizers, character.target_levels,
-                                  character.march_preset,
-                                  character.march_troop_types, event_bus,
+                                  event_bus=event_bus,
                                   publisher_id=character.id, ledger=ledger,
-                                  queue_gate=gate, human=human)
+                                  queue_gate=gate, human=human,
+                                  march_presets=[(p.preset, list(p.troops))
+                                                 for p in character.march_presets])
     if character.role == RoleEnum.MEMBER:
         # 填兵不使用预设/兵种选择（用户要求 2026-09-09），
         # 故不传 march_preset/march_troop_types
@@ -41,5 +42,7 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
                                   character.march_preset, character.march_troop_types,
                                   character.fill_target_leaders, event_bus,
                                   char_id=character.id, rally_tracker=rally_tracker,
-                                  ledger=ledger, human=human)
+                                  ledger=ledger, human=human,
+                                  march_presets=[(p.preset, list(p.troops))
+                                                 for p in character.march_presets])
     raise ValueError(f"Unknown role: {character.role}")

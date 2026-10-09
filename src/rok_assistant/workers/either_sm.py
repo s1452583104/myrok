@@ -69,7 +69,8 @@ class EitherStateMachine:
     def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
                  march_preset: int, march_troop_types: list,
                  fill_target_leaders, event_bus=None, char_id: str = "?",
-                 rally_tracker=None, ledger=None, human=None):
+                 rally_tracker=None, ledger=None, human=None,
+                 march_presets=None):
         self._bus = event_bus
         self._char_id = char_id
         # 本类无基类：human 不会被 super().__init__ 落到 self._human，须自行
@@ -96,7 +97,8 @@ class EitherStateMachine:
                                           march_preset, march_troop_types, event_bus,
                                           wait_members_seconds=0.0,
                                           publisher_id=self._char_id,
-                                          ledger=self._ledger, human=human)
+                                          ledger=self._ledger, human=human,
+                                          march_presets=march_presets)
         # 填兵不使用预设（用户要求 2026-09-09）：成员构造不再传 march 参数。
         # char_id 必须传：成员填兵确认后要按本账号 id 写账本，缺省 "?" 会把
         # 事实记到错误（共享）名下
