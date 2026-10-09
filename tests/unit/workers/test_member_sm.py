@@ -173,6 +173,33 @@ def test_wave_new_signal_starts_a_fresh_wave(monkeypatch):
     assert len([c for c in handle.clicks if c[0] == 1335]) == 2   # 又填了一次
 
 
+def test_wave_failed_join_is_not_recorded_and_is_retried(monkeypatch):
+    """加入失败（swap 不出现）的目标绝不能记入已填。
+
+    回归评审发现的 Important：JOIN_CHECKED→NORMALIZE(_next_target) 注册在
+    joined 出口之前，若 _wave_has_more 不看 joined，一个没填上的目标会被
+    _next_target 写进 filled 而整波永久跳过 —— 正是用户报的「C 只填了 A
+    没填 B」的另一条路径。失败须返回 False 落到 _join_missed，重开列表重试
+    同一个目标。
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    recs["fill_Chief"].recognize.return_value.matched = True
+    recs["swap_btn"].recognize.return_value.matched = False   # 加入始终不生效
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    # 失败的目标没有被记成已填（否则整波被永久跳过、静默漏掉车头）
+    assert "Boss" not in (sm._ctx.get("filled") or set())
+    # 交回 _join_missed 重试同一个目标：目标行的「+」被点了不止一次
+    assert handle.clicks.count((1335, 161)) >= 2
+
+
 def test_wave_mode_is_never_terminal():
     sm, _, _ = _make_wave_sm()
     for state in ("IDLE", "NORMALIZE", "FIND_JOIN", "END"):

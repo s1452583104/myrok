@@ -188,13 +188,21 @@ class MemberStateMachine(StateMachine):
     def _wave_has_more(self, ctx) -> bool:
         """填完一个目标后：还有没填过的目标、且窗口没过 → 继续下一轮。
 
-        判据要把**刚填完的当前目标**也算作已填：`filled` 是在 _next_target
+        前提是本轮**真的填成功了**：`joined` 为假说明「+」/创建部队/行军某步
+        没生效（延迟下漏点等），这一轮什么都没填上。此时必须返回 False，让
+        JOIN_CHECKED 落到 `_join_missed`（重开列表重试同一个目标）——若放行
+        `_next_target`，会把**没填上的**目标名写进 filled 而永久跳过，整波静默
+        漏掉一个点名车头（正是用户报的「C 只填了 A 没填 B」的另一条路径）。
+
+        另外判据要把**刚填完的当前目标**也算作已填：`filled` 是在 _next_target
         （本 guard 通过后才执行的动作）里才加入 target_name 的，所以这里若
         只看 `filled`，最后一个目标也会被判成「还没填」→ 又开一轮 FIND_JOIN
         空转（全目标都填完时列表里已无待填项，_poll_join 直接跳过、假/真时钟
         都不推进），直到 join_attempts 撞穿 60 才收波——那是「没找到」的口径，
         不是「填完了」。排除当前目标后，填完最后一个即走 _wave_done 收波。
         """
+        if not ctx.get("joined"):
+            return False
         filled = ctx.get("filled") or set()
         current = ctx.get("target_name")
         remaining = [t for t in self._fill_targets
