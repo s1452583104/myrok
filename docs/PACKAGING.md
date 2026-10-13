@@ -102,8 +102,10 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 
 - 目标等级配 **1–10** —— 行为与改动前逐字相同，可以正常发包；
 - 目标等级配 **11–15** —— 设等级时 `leader_sm._switch_level_range` 找不到
-  `level_range_high` 识别器，**抛 `RuntimeError` 结束本轮**（响亮中止，且计入
-  连续失败数，见 `workers/runner.py`）。
+  `level_range_high` 识别器，**抛 `RuntimeError`**。异常发生在任何点击之前，所以
+  不会误搜错等级的寨子；但它是**异常**不是干净收工：runner 不重建状态机，在同一
+  状态退避重放，攒满 6 次异常直接停机（`workers/runner.py` 的 `_error_streak`，
+  注意它与 3 轮的 `_fail_streak` 不是同一个计数）。
 
 **因此：`manifest.yaml` 里这两条目落地之前，不要发这个包。**
 
