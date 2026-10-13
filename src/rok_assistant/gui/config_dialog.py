@@ -626,7 +626,7 @@ class ConfigDialog(QDialog):
         self._scan_error = None
         if not manager:
             self._scanned = None
-            self._scan_error = "还没填 MuMuManager 路径，请先到「全局设置」自动检测或手动指定"
+            self._scan_error = "还没填 MuMuManager 路径，请先到「公共配置」自动检测或手动指定"
         else:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
@@ -767,7 +767,7 @@ class ConfigDialog(QDialog):
             name = self._instance_name(index) or f"编号 {index}"
             return f"模拟器「{name}」没有启动，请先在 MuMu 里启动它，再点「测试连接」"
         if isinstance(e, MumuLocatorError) and "无法运行 MuMuManager" in str(e):
-            return ("找不到 MuMuManager，请到「全局设置」点「自动检测 MuMu/adb 路径」，"
+            return ("找不到 MuMuManager，请到「公共配置」点「自动检测 MuMu/adb 路径」，"
                     "或手动指定 MuMuManager.exe 和 adb.exe")
         if isinstance(e, MumuLocatorError) and "没有响应" in str(e):
             # 超时不是配置问题，别让人去改路径（2026-10-05 有用户被误导过）

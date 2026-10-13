@@ -88,8 +88,11 @@ class MainWindow(QMainWindow):
         self._pages: dict[AppMode, ModePage] = {}
         self._running_mode: AppMode | None = None
         self._build_ui()
-        self._rebuild_cards()
+        # 先接控制器信号再接卡：_rebuild_cards() 内部会经 controller.characters()
+        # 触发首次 load_config()，失败时 error_occurred 要有人听（否则升级用户
+        # 首次打开只看到空态，看不到那句可操作的报错）。
         self._connect_controller()
+        self._rebuild_cards()
         self._install_log_handler()
         self._setup_refresh_timer()
 

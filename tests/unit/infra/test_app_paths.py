@@ -50,10 +50,11 @@ def _seed_example(internal: Path) -> None:
         "  # 留空 = 首启自动探测\n"
         "  mumu_manager_path: \"\"\n"
         "  adb_path: \"\"\n"
-        "instances:\n"
-        "  - id: mumu0\n"
-        "    mumu_index: 0\n"
-        "    characters: []\n",
+        "zhaiduo:\n"
+        "  instances:\n"
+        "    - id: mumu0\n"
+        "      mumu_index: 0\n"
+        "      characters: []\n",
         encoding="utf-8")
 
 

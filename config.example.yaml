@@ -86,7 +86,7 @@ zhaiduo:
           march_troop_types: [infantry]
           fill_target_leaders:    # member/either 必填；leader 不能填
             - { instance: mumu0, name: "集结手" }   # instance 填车头所在的 id，name 填车头角色名
-# 以下两个模式尚未实现（空壳）。可留空、也可整段删掉——程序按空处理，不会报错。
+# 以下两个模式尚未实现（空壳）。保持 instances: []（或整段删掉）——程序按空处理，不会报错。
 gem:
   instances: []
 quiz:

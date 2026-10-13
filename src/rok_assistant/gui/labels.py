@@ -122,7 +122,7 @@ def role_label(value: str | None) -> str:
 # pydantic 的 loc 是英文键（instances / 0 / characters / 1 / target_levels），
 # 直接摊给用户看等于什么都没说。
 LOC_LABELS = {
-    "app": "全局设置",
+    "app": "公共配置",
     # 模式键：复用 config.py 的 MODE_LABELS，别在这里抄第二份中文
     **{m.value: MODE_LABELS[m] for m in AppMode},
     "instances": "模拟器",

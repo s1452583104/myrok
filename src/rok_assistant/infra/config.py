@@ -305,6 +305,13 @@ class AppConfig(BaseModel):
     anti_detection: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
 
 
+# 老格式（顶层 instances）的可操作提示。config.py 的校验器与 selftest 的诊断共用
+# 同一句，避免两处文案漂移。
+LEGACY_FLAT_INSTANCES_HINT = (
+    "配置格式已更新：instances 现在挂在 zhaiduo 模式下。"
+    "请删除 config.yaml 后重启，程序会从 config.example.yaml 重新生成一份。")
+
+
 class RootConfig(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     zhaiduo: ZhaiduoConfig
@@ -320,13 +327,15 @@ class RootConfig(BaseModel):
         `zhaiduo / Field required`，不知道该干什么。**这是报错，不是迁移**：
         经确认不做自动迁移，老配置报错、用户重配。
 
+        判据是「顶层出现 instances 就报错」——不再要求 zhaiduo 缺席。半迁移
+        配置（顶层 instances 与 zhaiduo 同时存在）本会被 pydantic 静默丢弃顶层
+        那段、加载成功；对「硬报错、不迁移」的设计来说，静默丢数据比报错更糟。
+
         必须放在 RootConfig 的 mode="before" 里，不能挂在 load_config() 上——
         GuiController.load_config 自己走 model_validate，不经过 load_config()。
         """
-        if isinstance(data, dict) and "instances" in data and "zhaiduo" not in data:
-            raise ValueError(
-                "配置格式已更新：instances 现在挂在 zhaiduo 模式下。"
-                "请删除 config.yaml 后重启，程序会从 config.example.yaml 重新生成一份。")
+        if isinstance(data, dict) and "instances" in data:
+            raise ValueError(LEGACY_FLAT_INSTANCES_HINT)
         return data
 
     def instances_for(self, mode: AppMode) -> list[InstanceConfig]:

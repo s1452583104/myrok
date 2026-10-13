@@ -649,6 +649,10 @@ def test_autodetect_warns_when_nothing_found(tmp_path, qapp, monkeypatch):
 
 def test_main_window_has_config_button(qapp, monkeypatch):
     from rok_assistant.gui.main_window import MainWindow
+    # 默认控制器会读真实 config.yaml：环境里它可能缺失或是老格式，首屏
+    # error_occurred 会弹模态框（构造顺序见 MainWindow）。本用例只关心按钮
+    # 文案，替掉弹框避免阻塞。
+    monkeypatch.setattr(MainWindow, "_on_error", lambda self, msg: None)
     w = MainWindow()
     assert w.config_btn.text().endswith("配置")
 

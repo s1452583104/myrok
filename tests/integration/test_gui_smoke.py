@@ -57,14 +57,20 @@ def test_main_window_can_be_created(qapp):
     w = MainWindow(controller=FakeController())
     assert w.windowTitle() == "RoK 助手"
 
-def test_main_window_default_controller_is_lazy(qapp, tmp_path):
-    # 指向不存在的配置文件：构造不崩、不弹错误框（error_occurred 连接晚于建卡），
-    # 只是建不出卡片并提示
+def test_main_window_default_controller_is_lazy(qapp, tmp_path, monkeypatch):
+    # 指向不存在的配置文件：构造不崩、只是建不出卡片。
+    # 配置加载失败经 error_occurred 弹出——信号在 _rebuild_cards() 之前就接上
+    # （见 MainWindow 构造顺序），所以首屏就会报错，不用等点「刷新配置」。
+    # 这里替掉弹框：既免模态阻塞，也顺带钉住这条修复。
     from rok_assistant.gui.main_window import MainWindow
     from rok_assistant.gui.controller import GuiController
+    errors = []
+    monkeypatch.setattr(MainWindow, "_on_error",
+                        lambda self, msg: errors.append(msg))
     w = MainWindow(controller=GuiController(config_path=tmp_path / "nope.yaml"))
     assert w._controller.config_loaded is False
     assert w._cards == {}
+    assert errors and "配置加载失败" in errors[0]
 
 def test_main_window_has_start_stop_buttons(qapp):
     from rok_assistant.gui.main_window import MainWindow
