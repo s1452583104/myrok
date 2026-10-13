@@ -42,7 +42,10 @@ _QUEUE_SIDEBAR_DISMISS = (1550, 320)
 # 实测 **0.4s** 间隔连点 19 次零丢失）。原 _LEVEL_CLICK_PACE 取 0.35s，是**低于
 # 实测安全值**的取值——正因如此真机必须确认不丢点击。节奏值现由
 # anti_detection.rapid_click_min 持有（spec §5），这里不再有第二处硬编码 sleep。
-_LEVEL_BLIND_RESET = 12          # 读不出等级时的降底点击数（原 12 次 minus）
+# 读不出等级时降到底的**余量**（秒表在下面 _blind_reset_clicks 里）。
+# 1–10 区间算出来是 (10-1)+3 = 12 —— 与改动前的常量逐字相同；11–15 是 7。
+# 多点几下打在滑条端点上，无害。
+_LEVEL_BLIND_MARGIN = 3
 _LEVEL_READ_ATTEMPTS = 3         # 读等级的重读次数
 _LEVEL_VERIFY_ROUNDS = 2         # 回读校验 + 修正的轮数上限
 # 搜索面板会记住上次等级。**2026-10-07 起本缓存只服务盲降回退路径**
@@ -53,6 +56,12 @@ _LEVEL_VERIFY_ROUNDS = 2         # 回读校验 + 修正的轮数上限
 # 已知限制：若玩家在 GUI 运行期间手动改过面板等级，缓存会偏一轮。
 _LEVEL_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _LEVEL_CACHE_LOCK = threading.Lock()
+
+
+def _blind_reset_clicks(target: int) -> int:
+    """读不出等级时，把面板降到底需要的点击数 = 区间跨度 + 余量。"""
+    low, high = level_range(target)
+    return (high - low) + _LEVEL_BLIND_MARGIN
 
 # 预设槽选中态确认（2026-09-27，见 _select_preset）。超时给 2.0s：高亮是本地
 # 重绘（不像 queue_badge 要等服务端往返），实测 toast 与高亮同帧出现。
@@ -513,13 +522,13 @@ class LeaderStateMachine(StateMachine):
                     lv = int(raw)
                 except (TypeError, ValueError):
                     lv = None
-                if lv is not None and 1 <= lv <= 10:
+                if lv is not None and MIN_TARGET_LEVEL <= lv <= MAX_TARGET_LEVEL:
                     return lv
-                # 读出个不在 1..10 的东西：面板多半不在城寨页（tab 切换失败）。
-                # 不猜也不钳制——静默钳制会把「读错对象」伪装成「等级就是 10」，
+                # 读出个不在 1..15 的东西：面板多半不在城寨页（tab 切换失败）。
+                # 不猜也不钳制——静默钳制会把「读错对象」伪装成「等级就是 15」，
                 # 正是最难查的那类问题。
-                logger.warning("[车头] 等级文本读出 %r（不在 1..10），视为读失败",
-                               raw)
+                logger.warning("[车头] 等级文本读出 %r（不在 %s..%s），视为读失败",
+                               raw, MIN_TARGET_LEVEL, MAX_TARGET_LEVEL)
             if attempt < _LEVEL_READ_ATTEMPTS - 1:
                 time.sleep(self._pause(None))
         return None
@@ -527,9 +536,10 @@ class LeaderStateMachine(StateMachine):
     def _set_level(self, target: int, current: int) -> int:
         """从 current 点差量到 target，返回实际点击次数（不写日志）。
 
-        不加次数上限：两个端点都落在 1..10（`_read_level` 校验读值，
-        `_current_level` 来自配置），差量天然有界。多一个上限只会让盲降
-        路径不再与改动前等价，而「最坏情况与现状相同」是本次设计的前提。
+        不加次数上限：两个端点都落在 1..15 且同区间（`_read_level` 校验
+        读值，`_current_level` 来自配置，`_verify_level` 挡掉跨区间的回读），
+        差量天然有界。多一个上限只会让盲降路径不再与改动前等价，而
+        「最坏情况与现状相同」是本次设计的前提。
         """
         delta = target - current
         btn = "level_plus" if delta > 0 else "level_minus"
@@ -542,30 +552,39 @@ class LeaderStateMachine(StateMachine):
             _LEVEL_CACHE[self._handle] = level
 
     def _blind_set_level(self, target: int) -> None:
-        """等级读不出时的降级路径 = 改动前 _select_level 的主体，逐字保留。
+        """等级读不出时的降级路径。
 
-        spec §4.4：**不删缓存**。缓存命中就只点差量，否则 12 连点降底再升。
-        这条路径只在 OCR 失败时走到，保留缓存才能兑现「最坏情况与改动前相同」。
-        与原实现的唯一差别是：每点一下的停顿不再由这里 sleep，改由
-        JitteringHandleSource 按 `rapid=True` 用 rapid_click_min/max 承担
-        （spec §5.2）——点击次数与顺序逐字未变。
+        与改动前逐字相同，只有两处随区间变化：降到底的点击数按区间跨度算，
+        起点是**本区间的下界**（1–10 降到 1，11–15 降到 11）。
+
+        缓存命中还必须**同区间**：切区间会把滑条重置到区间下界，跨区间的
+        旧缓存是谎话（拿 8 当起点去点 +5，在 11–15 区间会落到 16）。
+
+        spec §4.4：**不删缓存**——这条路径只在 OCR 失败时走到，保留缓存
+        才能兑现「最坏情况与改动前相同」。每点一下的停顿不再由这里 sleep，
+        改由 JitteringHandleSource 按 `rapid=True` 承担（spec §5.2）。
         """
         with _LEVEL_CACHE_LOCK:
             cached = _LEVEL_CACHE.get(self._handle)
         if cached == target:
             logger.info("[车头] 面板等级已是 %s 级，跳过调整", target)
             return
+        low, _ = level_range(target)
+        if cached is not None and level_range(cached)[0] != low:
+            logger.info("[车头] 缓存等级 %s 不在目标 %s 级的区间内，忽略缓存",
+                        cached, target)
+            cached = None
         if cached is None:
             logger.info("[车头] 面板等级未知，先降到底再升到 %s 级", target)
-            for _ in range(_LEVEL_BLIND_RESET):
+            for _ in range(_blind_reset_clicks(target)):
                 self._click("level_minus", rapid=True)
-            start = 1
+            start = low
         else:
             start = cached
         self._set_level(target, start)
         self._cache_level(target)
         logger.info("[车头] 面板等级 %s → %s 级（%s 次点击）", start, target,
-                    (_LEVEL_BLIND_RESET if cached is None else 0)
+                    (_blind_reset_clicks(target) if cached is None else 0)
                     + abs(target - start))
 
     def _verify_level(self, target: int) -> bool:
@@ -581,6 +600,14 @@ class LeaderStateMachine(StateMachine):
             if read == target:
                 logger.info("[车头] 等级回读确认 %s 级", target)
                 return True
+            if level_range(read)[0] != level_range(target)[0]:
+                # 跨区间的差量点击没有意义（从 8 点 + 到不了 13）。这多半是
+                # 区间没切过去，补点只会打在滑条端点上——判失败，交给
+                # no_result 计数兜住本轮。
+                logger.warning(
+                    "[车头] 等级回读 %s 级与目标 %s 级不在同一区间，放弃修正",
+                    read, target)
+                return False
             logger.warning("[车头] 等级回读 %s 级 ≠ 目标 %s 级，补点 %s 次",
                            read, target, abs(target - read))
             self._set_level(target, read)

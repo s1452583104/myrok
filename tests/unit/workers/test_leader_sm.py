@@ -879,7 +879,7 @@ def test_select_level_clicks_exact_delta_down():
 
 
 def test_out_of_range_readback_falls_back_to_blind():
-    sm, handle = _make_sm_with_level([15, 15, 15], target_levels=(7,))
+    sm, handle = _make_sm_with_level([16, 16, 16], target_levels=(7,))
     _to_select_level(sm)
     assert len(handle.clicks) == 1 + 1 + 12 + 6
 
@@ -1356,3 +1356,57 @@ def test_stale_target_ends_round_instead_of_reclicking_the_same_fortress():
     # 关键：红色集结按钮只被点了一次，没有反复点同一座寨子
     # （旧实现会把 5 个锁定名额全烧在这座寨子上）
     assert sm.history.count("CLICK_RED_RALLY") == 1
+
+
+# ---- 区间感知的盲降（2026-10-13）----
+
+def test_blind_reset_clicks_follow_the_range_span():
+    from rok_assistant.workers.leader_sm import _blind_reset_clicks
+    assert _blind_reset_clicks(7) == 12      # (10-1)+3，与改动前的常量逐字相同
+    assert _blind_reset_clicks(13) == 7      # (15-11)+3
+
+
+def test_blind_high_range_lands_on_eleven_not_one():
+    """11–15 目标读不出等级时降到底 = 11，不是 1。"""
+    sm, handle = _make_sm_with_level([None, None, None], target_levels=(13,))
+    _add_range_recs(sm)
+    _to_select_level(sm)
+    # search_icon 1 + tab 1 + level_range_high 1 + 降底 7 + 升到 13 点 2
+    assert len(handle.clicks) == 1 + 1 + 1 + 7 + 2
+
+
+def test_cross_range_cache_is_ignored():
+    """切区间会把滑条重置到区间下界，跨区间的旧缓存是谎话，不能当起点。"""
+    sm, handle = _make_sm_with_level([None, None, None], target_levels=(13,))
+    _add_range_recs(sm)
+    sm._cache_level(8)          # 上一轮留在 1–10 区间的缓存
+    _to_select_level(sm)
+    # 若误信缓存 8，就会从 8 点 +5；正确行为是降底 7 次再从 11 点 +2
+    assert len(handle.clicks) == 1 + 1 + 1 + 7 + 2
+
+
+def test_same_range_cache_is_still_reused():
+    """同区间缓存仍要复用（这是 _blind_set_level 存在的意义）。"""
+    sm, handle = _make_sm_with_level([None, None, None], target_levels=(7,))
+    _add_range_recs(sm)
+    sm._cache_level(4)          # 同区间
+    _to_select_level(sm)
+    # search_icon 1 + tab 1 + level_range_low 1 + 从 4 升到 7 点 3
+    assert len(handle.clicks) == 1 + 1 + 1 + 3
+
+
+def test_verify_gives_up_when_readback_is_in_another_range(caplog):
+    """回读落在另一个区间 = 区间没切过去，补点只会打在滑条端点上。
+
+    读序不能以 13 开头——初读就等于目标的话 _select_level 会直接跳过，
+    根本走不到 _verify_level。这里初读 11，故意让校验跑两轮。
+    """
+    # 读序：初读 11 → 补点后回读 11 → 再回读 8（区间没切过去）
+    sm, handle = _make_sm_with_level([11, 11, 8], target_levels=(13,))
+    _add_range_recs(sm)
+    with caplog.at_level(logging.WARNING):
+        _to_select_level(sm)
+    # search_icon 1 + tab 1 + level_range_high 1 + 初补 2 + 校验补 2；第二轮
+    # 发现跨区间，一次补点都不再打
+    assert len(handle.clicks) == 1 + 1 + 1 + 2 + 2
+    assert any("不在同一区间" in r.message for r in caplog.records)
