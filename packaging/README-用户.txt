@@ -33,7 +33,7 @@ rok-assistant —— 使用说明
    - 选中你正在用的那台（显示「● 运行中」的），再点「测试连接」
    - 看到「● 已连接，截图 1920x1080」才算通
 
-   如果自动探测没找到 MuMu 路径，在「全局设置」里点「自动检测 MuMu/adb 路径」，
+   如果自动探测没找到 MuMu 路径，在「公共配置」里点「自动检测 MuMu/adb 路径」，
    还不行就手动填：
      - MuMuManager.exe —— 在 MuMu 安装目录的 shell\ 子目录下
      - adb.exe —— 在 MuMu 安装目录的 nx_main\ 或 shell\ 下

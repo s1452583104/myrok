@@ -24,6 +24,20 @@ import traceback
 from pathlib import Path
 
 
+def _legacy_flat_instances_hint(cfg) -> str | None:
+    """顶层出现 instances（老格式 / 半迁移）→ 可操作迁移提示；正常配置返回 None。
+
+    判据与 config.py 的 RootConfig._reject_legacy_flat_instances **完全一致**
+    （同样不要求 zhaiduo 缺席）：半迁移配置（两键都在）会被 config.py 拒绝，
+    selftest 必须接住它、给出同一句，否则又变成误导性的泛泛诊断。
+    抽成独立函数是为了能在不跑完整重链路的前提下单测。
+    """
+    if isinstance(cfg, dict) and "instances" in cfg:
+        from .config import LEGACY_FLAT_INSTANCES_HINT
+        return LEGACY_FLAT_INSTANCES_HINT
+    return None
+
+
 def _run_checks() -> list[tuple[str, bool, str]]:
     """返回 [(检查项, 是否通过, 详情)]。每项独立捕获异常，一项挂不影响其它项。"""
     import numpy as np
@@ -195,7 +209,6 @@ def _run_checks() -> list[tuple[str, bool, str]]:
         import yaml
 
         from .app_paths import user_dir
-        from .config import LEGACY_FLAT_INSTANCES_HINT
         from ..core.handle_source import create_handle_source
 
         cfg_path = user_dir() / "config.yaml"
@@ -206,11 +219,11 @@ def _run_checks() -> list[tuple[str, bool, str]]:
         except Exception as e:
             return f"{cfg_path} 读不出来: {type(e).__name__}: {e}"
 
-        # 老格式（顶层 instances、没有 zhaiduo）：给可操作的迁移提示，而不是下面
-        # 那句误导性的「没有 instances」。升级用户按 CLAUDE.md 先跑 --selftest，
-        # 这里必须和 config.py 校验器给出同一句。
-        if "instances" in cfg and "zhaiduo" not in cfg:
-            return LEGACY_FLAT_INSTANCES_HINT
+        # 老格式（顶层出现 instances）就给可操作的迁移提示，而不是下面那句误导性的
+        # 「没有 instances」。升级用户按 CLAUDE.md 先跑 --selftest。
+        hint = _legacy_flat_instances_hint(cfg)
+        if hint is not None:
+            return hint
 
         app = cfg.get("app") or {}
         instances = (cfg.get("zhaiduo") or {}).get("instances") or []
