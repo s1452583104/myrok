@@ -73,6 +73,43 @@ def state_label(value: str | None) -> str:
     return STATE_LABELS.get(value, value)
 
 
+# ---- 运行状态的语义分类 ----
+# 只给「语义」（成功/进行中/需关注/失败/中性），**不给色值**——色值归 theme.py。
+# 状态标签的浅底+深字+圆点三件套由 theme.tag_style() 按这里返回的语义取值。
+STATE_KINDS = {
+    # 终态 / 正向
+    "done": "success",
+    "END": "success",
+    "DONE": "success",
+    "LEADER:END": "success",
+    "MEMBER:END": "success",
+    "JOIN_CHECKED": "success",
+    # 负向
+    "error": "error",
+    "RELOGIN": "error",
+    # 需关注
+    "paused": "warning",
+    "cooldown": "warning",
+    # 中性（歇着，没在跑）
+    "idle": "default",
+    "IDLE": "default",
+    "LEADER:IDLE": "default",
+}
+
+
+def state_kind(value: str | None) -> str:
+    """运行状态 → 标签语义（success / info / warning / error / default）。
+
+    映射表里**已知**的其余状态一律算「进行中」（info）；表里没有的未知状态回落到
+    default 而不是 info——认不出来的东西不该冒充「正在跑」。
+    """
+    if not value:
+        return "default"
+    if value in STATE_KINDS:
+        return STATE_KINDS[value]
+    return "info" if value in STATE_LABELS else "default"
+
+
 def role_label(value: str | None) -> str:
     if not value:
         return ""
@@ -89,7 +126,7 @@ LOC_LABELS = {
     "id": "ID",
     "name": "名字",
     "role": "分工",
-    "target_levels": "目标城寨等级",
+    "target_levels": "目标城寨等级 / 劫掠者寨子",
     "march_presets": "行军预设",
     "march_preset": "行军预设",
     "march_troop_types": "兵种",

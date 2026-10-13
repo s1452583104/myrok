@@ -53,7 +53,7 @@ class FakeController(QObject):
 def test_main_window_can_be_created(qapp):
     from rok_assistant.gui.main_window import MainWindow
     w = MainWindow(controller=FakeController())
-    assert w.windowTitle() == "rok-assistant"
+    assert w.windowTitle() == "RoK 助手"
 
 def test_main_window_default_controller_is_lazy(qapp, tmp_path):
     # 指向不存在的配置文件：构造不崩、不弹错误框（error_occurred 连接晚于建卡），
@@ -67,8 +67,9 @@ def test_main_window_default_controller_is_lazy(qapp, tmp_path):
 def test_main_window_has_start_stop_buttons(qapp):
     from rok_assistant.gui.main_window import MainWindow
     w = MainWindow(controller=FakeController())
-    assert w.start_btn.text() == "Start"
-    assert w.stop_btn.text() == "Stop"
+    # 2026-10-13 界面重构：顶栏文案统一中文（角色卡片早已中文化，顶栏却是英文）
+    assert w.start_btn.text() == "开始运行"
+    assert w.stop_btn.text() == "停止"
     assert not w.stop_btn.isEnabled()   # 初始未运行
 
 def test_cards_built_per_character(qapp):

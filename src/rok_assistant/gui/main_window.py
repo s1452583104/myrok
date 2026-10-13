@@ -4,12 +4,15 @@ import logging
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QComboBox, QScrollArea, QStatusBar, QMessageBox
+    QLabel, QComboBox, QFrame, QScrollArea, QStackedWidget,
+    QStatusBar, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
+from . import theme
 from .character_card import CharacterCard
 from .controller import GuiController
+from .flow_layout import FlowLayout, clear_layout
 from .license_dialog import LicenseDialog
 from .log_handler import QtLogHandler
 from ..infra.app_paths import config_path, ensure_user_files, user_dir
@@ -20,6 +23,7 @@ logger = get_logger(__name__)
 
 _WARN_DAYS = 7
 _NOTICE_FILE = ".roklicense-notice"
+_WINDOW_TITLE = "RoK 助手"
 
 
 def warn_key(status) -> str:
@@ -71,10 +75,32 @@ def _maybe_warn_expiring(parent):
             logger.warning("写入到期提醒标记失败：%s", marker)
 
 
+class _EmptyState(QWidget):
+    """卡片区空态：居中占位，不留白不提示（design-tokens §7「空数据」）。
+
+    刻意不放插画/图标——企业后台的空态靠文案说清「下一步做什么」就够。
+    """
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.addStretch(1)
+        title = QLabel("暂无角色")
+        title.setObjectName("emptyTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint = QLabel("请在 config.yaml 中配置角色，然后点击「刷新配置」")
+        hint.setObjectName("emptyHint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        layout.addSpacing(theme.SP_SM)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, controller: GuiController | None = None):
         super().__init__()
-        self.setWindowTitle("rok-assistant")
+        self.setWindowTitle(_WINDOW_TITLE)
         self.resize(1200, 800)
         self._controller = controller if controller is not None \
             else GuiController(config_path=config_path())
@@ -86,50 +112,114 @@ class MainWindow(QMainWindow):
         self._setup_refresh_timer()
 
     # ---------------- UI 骨架 ----------------
+    # 四段式：应用头 / 操作栏 / 卡片区 / 状态栏。分区靠 1px 弱分割线 + 留白，
+    # 不用色块（design-tokens §4.1「留白承担分区职责，分割线代替色块」）。
     def _build_ui(self):
         central = QWidget()
+        central.setObjectName("appRoot")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        # Top bar
-        top = QHBoxLayout()
-        self.start_btn = QPushButton("Start")
-        self.start_btn.clicked.connect(self._on_start)
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setEnabled(False)   # 初始未运行，Stop 不可用
-        self.stop_btn.clicked.connect(self._on_stop)
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["rally"])
-        self.refresh_btn = QPushButton("刷新配置")
-        self.refresh_btn.clicked.connect(self._on_refresh_config)
-        top.addWidget(self.start_btn)
-        top.addWidget(self.stop_btn)
-        top.addWidget(QLabel("Mode:"))
-        top.addWidget(self.mode_combo)
-        top.addWidget(self.refresh_btn)
-        self.config_btn = QPushButton("⚙ 配置")
-        self.config_btn.clicked.connect(self._open_config)
-        top.addWidget(self.config_btn)
-        top.addStretch()                      # 授权标签推到右边
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        root.addWidget(self._build_header())
+        root.addWidget(self._build_toolbar())
+        root.addWidget(self._build_content(), 1)
+
+        self.setStatusBar(QStatusBar())
+        self.statusBar().showMessage("就绪")
+        self._refresh_license_label()
+
+    def _build_header(self) -> QWidget:
+        """应用头：产品名 + 副标题（左），授权状态标签 + 激活入口（右）。"""
+        header = QFrame()
+        header.setObjectName("appHeader")
+        lay = QHBoxLayout(header)
+        lay.setContentsMargins(theme.SP_XL, theme.SP_LG, theme.SP_XL, theme.SP_LG)
+        lay.setSpacing(theme.SP_MD)
+
+        titles = QVBoxLayout()
+        titles.setContentsMargins(0, 0, 0, 0)
+        titles.setSpacing(2)
+        title = QLabel("RoK 助手")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("多模拟器集结与填兵自动化")
+        subtitle.setObjectName("appSubtitle")
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        lay.addLayout(titles)
+        lay.addStretch(1)                     # 授权区推到右边
+
         self.license_label = QLabel("")
-        top.addWidget(self.license_label)
+        self.license_label.setStyleSheet(theme.tag_style("default"))
+        lay.addWidget(self.license_label)
         self.activate_btn = QPushButton("激活")
         self.activate_btn.clicked.connect(self._open_license_dialog)
-        top.addWidget(self.activate_btn)
-        root.addLayout(top)
-        # Account area
-        self.account_area = QScrollArea()
+        lay.addWidget(self.activate_btn)
+        return header
+
+    def _build_toolbar(self) -> QWidget:
+        """操作栏：主操作（开始运行）在前，配置类弱操作靠右。
+
+        同一操作区主按钮**只有「开始运行」一个**（design-tokens §8）。
+        """
+        bar = QFrame()
+        bar.setObjectName("appToolbar")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(theme.SP_XL, theme.SP_MD, theme.SP_XL, theme.SP_MD)
+        lay.setSpacing(theme.SP_SM)
+
+        self.start_btn = QPushButton("开始运行")
+        theme.make_primary(self.start_btn)
+        self.start_btn.clicked.connect(self._on_start)
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setEnabled(False)   # 初始未运行，停止不可用
+        self.stop_btn.clicked.connect(self._on_stop)
+        lay.addWidget(self.start_btn)
+        lay.addWidget(self.stop_btn)
+        lay.addWidget(self._v_separator())
+        lay.addWidget(QLabel("模式"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.setMaximumWidth(160)
+        self.mode_combo.addItems(["rally"])
+        lay.addWidget(self.mode_combo)
+        lay.addStretch(1)
+
+        self.refresh_btn = QPushButton("刷新配置")
+        self.refresh_btn.clicked.connect(self._on_refresh_config)
+        self.config_btn = QPushButton("⚙ 配置")
+        self.config_btn.clicked.connect(self._open_config)
+        lay.addWidget(self.refresh_btn)
+        lay.addWidget(self.config_btn)
+        return bar
+
+    @staticmethod
+    def _v_separator() -> QFrame:
+        sep = QFrame()
+        sep.setObjectName("vSeparator")
+        sep.setFrameShape(QFrame.Shape.NoFrame)   # 线由 QSS 的背景色画，不叠两层
+        sep.setFixedWidth(1)
+        return sep
+
+    def _build_content(self) -> QWidget:
+        """卡片区：有角色时走自适应流式网格，没有时整块换成空态占位。"""
         # 内部容器必须随卡片撑开，否则真机窗口里卡片区一片空白
         # （离屏测试只断言卡片对象存在，测不出不可见——2026-09-11 实机验收发现）
+        self.account_area = QScrollArea()
+        self.account_area.setObjectName("cardArea")
         self.account_area.setWidgetResizable(True)
+        self.account_area.setFrameShape(QFrame.Shape.NoFrame)
         self.account_widget = QWidget()
-        self.account_layout = QVBoxLayout(self.account_widget)
-        self.account_layout.addStretch()
+        self.account_layout = FlowLayout(self.account_widget,
+                                         margin=theme.SP_XL,
+                                         h_spacing=theme.SP_LG,
+                                         v_spacing=theme.SP_LG)
         self.account_area.setWidget(self.account_widget)
-        root.addWidget(self.account_area)
-        # Status bar
-        self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Ready")
-        self._refresh_license_label()
+
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(self.account_area)   # 0：卡片网格
+        self._content_stack.addWidget(_EmptyState())       # 1：空态
+        return self._content_stack
 
     def _connect_controller(self):
         # worker 线程经信号跨线程送达（Qt 自动排队），槽内访问控件是主线程安全的
@@ -172,17 +262,14 @@ class MainWindow(QMainWindow):
 
     # ---------------- 角色卡片 ----------------
     def _rebuild_cards(self):
-        # 清空旧卡片
-        while self.account_layout.count() > 1:   # 末尾是 stretch
-            item = self.account_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        clear_layout(self.account_layout)
         self._cards.clear()
         for info in self._controller.characters():
             card = CharacterCard(info["char_name"], info["role"])
             self._cards[info["char_id"]] = card
-            self.account_layout.insertWidget(self.account_layout.count() - 1, card)
+            self.account_layout.addWidget(card)
+        # 空数据不留白：整块换成居中占位（design-tokens §7「空数据」）
+        self._content_stack.setCurrentIndex(0 if self._cards else 1)
         if not self._cards:
             self.statusBar().showMessage("未加载到角色：请检查 config.yaml 后点击「刷新配置」")
 
@@ -273,11 +360,13 @@ class MainWindow(QMainWindow):
         except Exception:                      # noqa: BLE001 - 授权坏了不该拖垮界面
             logger.exception("读取授权状态失败")
             self.license_label.setText("授权状态未知")
+            self.license_label.setStyleSheet(theme.tag_style("default"))
 
     def _apply_license_label(self, status):
         self.license_label.setText(status.label())
+        # 标准状态标签（浅底 + 深字），不再用裸彩色文字
         self.license_label.setStyleSheet(
-            "color:#27ae60;" if status.allows_run else "color:#c0392b;")
+            theme.tag_style("success" if status.allows_run else "error"))
 
     def _license_ok(self) -> bool:
         """Start 前的授权闸门：不允许就弹激活窗、拒绝启动（按钮保持可点，spec §8.1）。
@@ -291,6 +380,7 @@ class MainWindow(QMainWindow):
         except Exception:                      # noqa: BLE001 - 授权坏了不该拖垮界面
             logger.exception("读取授权状态失败，拒绝启动")
             self.license_label.setText("授权状态未知")
+            self.license_label.setStyleSheet(theme.tag_style("default"))
             self.statusBar().showMessage("授权状态未知，无法启动任务")
             return False
         self._apply_license_label(status)
@@ -351,6 +441,9 @@ def main():
 
     try:
         app = QApplication(sys.argv)
+        # 主题必须在**建控件之前**装：QSS 在 polish 时读动态属性，
+        # 控件先建好再上样式，主按钮的 [primary="true"] 选择器不生效。
+        theme.apply_theme(app)
         w = MainWindow()
         w.show()
         _maybe_warn_expiring(w)                # 到期前 7 天提醒一次（spec §8.1）
