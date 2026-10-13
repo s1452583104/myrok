@@ -15,31 +15,37 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from pydantic import ValidationError
 
 from rok_assistant.core.handle_source import create_handle_source
 from rok_assistant.infra.config import (MAX_MARCH_PRESETS, MAX_TARGET_LEVELS,
-                                        RootConfig, load_config)
+                                        MAX_TARGET_LEVEL, MIN_TARGET_LEVEL,
+                                        RANGE_BOUNDARY, level_range,
+                                        RAIDER_LABEL, RAIDER_TARGET, RootConfig,
+                                        load_config, target_short)
 from rok_assistant.infra.mumu import (
     MumuLocatorError, MumuNotRunningError, list_instances,
 )
+from rok_assistant.gui import theme
 from rok_assistant.gui.labels import (
     LABEL_ROLES, ROLE_LABELS, TROOP_LABELS, humanize_loc,
 )
 
-ERR_STYLE = "border: 1px solid red;"
+# 校验失败标红：用令牌里的错误色，不用裸 `red`（design-tokens §4.2 状态色只承载语义）
+ERR_STYLE = f"border: 1px solid {theme.ERROR}; border-radius:{theme.RADIUS_MD}px;"
 
 
 class ConfigDialog(QDialog):
     def __init__(self, config_path: Path, parent=None):
         super().__init__(parent)
         self.setWindowTitle("rok-assistant 配置")
-        self.resize(880, 620)
+        self.resize(1040, 720)
         self._path = Path(config_path)
         self._data = load_config(self._path).model_dump(mode="json")
         self._widgets: dict[tuple, QWidget] = {}
@@ -66,29 +72,74 @@ class ConfigDialog(QDialog):
     # ---------------- UI 骨架 ----------------
     def _build_ui(self):
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
         body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
         root.addLayout(body, 1)
 
         self._tree = QTreeWidget()
+        self._tree.setObjectName("configTree")
         self._tree.setHeaderHidden(True)
-        self._tree.setMinimumWidth(190)
+        self._tree.setMinimumWidth(200)
+        self._tree.setFrameShape(QFrame.Shape.NoFrame)   # 描边交给 QSS 画右侧分割线
         self._tree.currentItemChanged.connect(self._on_tree_change)
         body.addWidget(self._tree)
 
         self._stack = QStackedWidget()
         body.addWidget(self._stack, 1)
 
+        root.addWidget(self._footer())
+        self._reload_tree()
+
+    def _footer(self) -> QWidget:
+        """底部操作栏：1px 分割线 + 右对齐的「取消」（次）/「保存」（主）。"""
+        footer = QWidget()
+        outer = QVBoxLayout(footer)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        line = QFrame()
+        line.setObjectName("hSeparator")
+        line.setFrameShape(QFrame.Shape.NoFrame)
+        line.setFixedHeight(1)
+        outer.addWidget(line)
+
         buttons = QHBoxLayout()
-        save_btn = QPushButton("保存")
-        save_btn.clicked.connect(self._on_save)
+        buttons.setContentsMargins(theme.SP_XL, theme.SP_MD, theme.SP_XL, theme.SP_MD)
+        buttons.setSpacing(theme.SP_SM)
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("保存")
+        theme.make_primary(save_btn)          # 本屏唯一主操作
+        save_btn.clicked.connect(self._on_save)
         buttons.addStretch(1)
-        buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
-        root.addLayout(buttons)
+        buttons.addWidget(save_btn)
+        outer.addLayout(buttons)
+        return footer
 
-        self._reload_tree()
+    @staticmethod
+    def _scroll(widget: QWidget) -> QScrollArea:
+        """把页面内容套进滚动区。
+
+        重构前各页直接进 QStackedWidget，窗口一矮（或高 DPI 缩放）底部控件就被
+        裁掉且够不着——全局页尤其明显。
+        """
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setWidget(widget)
+        return area
+
+    @staticmethod
+    def _padded(widget: QWidget, margin: int = theme.SP_XL) -> QWidget:
+        """给裸控件套一层统一留白（YAML 预览页用）。"""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(margin, margin, margin, margin)
+        lay.addWidget(widget)
+        return box
 
     def _reload_tree(self):
         current = self._tree.currentItem()
@@ -112,21 +163,22 @@ class ConfigDialog(QDialog):
         g = QTreeWidgetItem(["全局设置"])
         g.setData(0, Qt.ItemDataRole.UserRole, ("page", "global"))
         self._tree.addTopLevelItem(g)
-        self._stack.addWidget(self._make_global_page())
+        self._stack.addWidget(self._scroll(self._make_global_page()))
 
         y = QTreeWidgetItem(["YAML 源码"])
         y.setData(0, Qt.ItemDataRole.UserRole, ("page", "yaml"))
         self._tree.addTopLevelItem(y)
         self._yaml_view = QPlainTextEdit()
+        self._yaml_view.setObjectName("yamlView")
         self._yaml_view.setReadOnly(True)
-        self._stack.addWidget(self._yaml_view)
+        self._stack.addWidget(self._padded(self._yaml_view))
 
         for idx, inst in enumerate(self._data["instances"]):
             label = inst.get("name") or inst["id"]
             item = QTreeWidgetItem([f"模拟器  {label}"])
             item.setData(0, Qt.ItemDataRole.UserRole, ("page", idx))
             self._tree.addTopLevelItem(item)
-            self._stack.addWidget(self._make_instance_page(idx))
+            self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
 
         # 重建后恢复先前的选中项（不存在则回落到全局设置）
         target = g
@@ -165,6 +217,9 @@ class ConfigDialog(QDialog):
     def _spin(self, path: tuple, value, lo, hi, double=False) -> QWidget:
         w = QDoubleSpinBox() if double else QSpinBox()
         w.setRange(lo, hi)
+        # 数值字段保持紧凑：不限制的话 QFormLayout 会把它们拉到整行宽
+        # （实测 582px 一根），既难读数也把表单撑出横向滚动条
+        w.setMaximumWidth(180)
         original = value
         if double:
             w.setDecimals(2)
@@ -202,7 +257,12 @@ class ConfigDialog(QDialog):
     def _make_global_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
+        outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        outer.setSpacing(theme.SP_LG)
         form = QFormLayout()
+        form.setSpacing(theme.SP_SM)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
         app = self._data["app"]
 
         mumu = self._line(("app", "mumu_manager_path"), app.get("mumu_manager_path", ""))
@@ -233,6 +293,7 @@ class ConfigDialog(QDialog):
         # （infra/config.py），但界面上一直没暴露，只能手改 yaml。
         run = QGroupBox("运行")
         rf = QFormLayout(run)
+        rf.setSpacing(theme.SP_SM)
         rf.addRow("最多轮数", self._spin(("app", "max_rounds"),
                                         app["max_rounds"], 1, 9999))
         rf.addRow("连续失败上限", self._spin(("app", "max_consecutive_failures"),
@@ -242,6 +303,7 @@ class ConfigDialog(QDialog):
         anti = self._data["app"]["anti_detection"]
         group = QGroupBox("防检测参数")
         af = QFormLayout(group)
+        af.setSpacing(theme.SP_SM)
         af.addRow("点击偏移(px)", self._spin(("app", "anti_detection", "click_offset_px"),
                                              anti["click_offset_px"], 0, 50))
         af.addRow("动作延迟下限(s)", self._spin(("app", "anti_detection", "action_delay_min"),
@@ -285,13 +347,19 @@ class ConfigDialog(QDialog):
         inst = self._data["instances"][idx]
         page = QWidget()
         outer = QVBoxLayout(page)
+        outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        outer.setSpacing(theme.SP_LG)
         form = QFormLayout()
+        form.setSpacing(theme.SP_SM)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
 
         outer.addWidget(QLabel(f"模拟器 ID：{inst['id']}"))
         name = self._line(("instances", idx, "name"), inst.get("name", ""))
         form.addRow("显示名", name)
 
         mode = QComboBox()
+        mode.setMaximumWidth(220)
         mode.addItems(["按模拟器选择", "手动填 adb 地址"])
         self._mode_combos[idx] = mode
         stack = QStackedWidget()
@@ -345,7 +413,17 @@ class ConfigDialog(QDialog):
         outer.addWidget(QLabel("角色阵容（双击行编辑）"))
         table = QTableWidget(0, 5)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        # 关网格线、去行号列：表头底色 + 行分隔线分区，比满屏网格干净（design-tokens §7）
+        table.setShowGrid(False)
+        table.setAlternatingRowColors(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(36)
         table.setHorizontalHeaderLabels(["名字", "分工", "目标等级", "预设", "兵种 / 填兵目标"])
+        header = table.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setStretchLastSection(True)
         self._tables[idx] = table
         for c in inst["characters"]:
             self._append_char_row(table, c)
@@ -354,23 +432,29 @@ class ConfigDialog(QDialog):
         outer.addWidget(table, 1)
 
         btns = QHBoxLayout()
-        add_btn = QPushButton("＋ 添加角色")
-        add_btn.clicked.connect(lambda _c, i=idx, t=table: self._edit_character(i, -1))
-        del_btn = QPushButton("删除选中角色")
-        del_btn.clicked.connect(lambda _c, i=idx, t=table: self._delete_character(i, t.currentRow()))
-        add_inst_btn = QPushButton("＋ 添加模拟器")
-        add_inst_btn.clicked.connect(lambda _c: self._add_instance())
-        del_inst_btn = QPushButton("删除本模拟器")
-        del_inst_btn.clicked.connect(lambda _c, i=idx: self._delete_instance(i))
+        btns.setSpacing(theme.SP_SM)
         test_btn = QPushButton("测试连接")
         test_btn.clicked.connect(lambda _c, i=idx: self._test_connection(i))
+        add_btn = QPushButton("＋ 添加角色")
+        theme.make_dashed(add_btn)
+        add_btn.clicked.connect(lambda _c, i=idx, t=table: self._edit_character(i, -1))
+        del_btn = QPushButton("删除选中角色")
+        theme.make_danger(del_btn)
+        del_btn.clicked.connect(lambda _c, i=idx, t=table: self._delete_character(i, t.currentRow()))
+        add_inst_btn = QPushButton("＋ 添加模拟器")
+        theme.make_dashed(add_inst_btn)
+        add_inst_btn.clicked.connect(lambda _c: self._add_instance())
+        del_inst_btn = QPushButton("删除本模拟器")
+        theme.make_danger(del_inst_btn)
+        del_inst_btn.clicked.connect(lambda _c, i=idx: self._delete_instance(i))
         btns.addWidget(test_btn)
         for b in (add_btn, del_btn, add_inst_btn, del_inst_btn):
             btns.addWidget(b)
         btns.addStretch(1)
         outer.addLayout(btns)
-        self._status_labels[idx] = QLabel("○ 未测试")
+        self._status_labels[idx] = QLabel()
         outer.addWidget(self._status_labels[idx])
+        self._set_inst_status(idx, "○ 未测试")
         self._preview_labels[idx] = QLabel()
         outer.addWidget(self._preview_labels[idx])
         return page
@@ -391,7 +475,9 @@ class ConfigDialog(QDialog):
             f"{p['preset']}（{'/'.join(TROOP_LABELS[t] for t in p['troops'])}）"
             for p in presets) or "—"
         summary = f"填: {fills}" if fills else ""
-        levels = "→".join(str(v) for v in c["target_levels"])
+        # 哨兵值 0 要写成人话，别在表格里摊出一个「0 级」；普通等级仍保持
+        # 既有的紧凑写法（8→7→6），不加「级」字
+        levels = "→".join(target_short(v) for v in c["target_levels"])
         for col, text in enumerate([c["name"], ROLE_LABELS[c["role"]],
                                     levels, preset_text, summary]):
             table.setItem(row, col, QTableWidgetItem(text))
@@ -550,15 +636,33 @@ class ConfigDialog(QDialog):
         return ""
 
     # ---------------- 连接测试 / 在线检测 ----------------
+    def _set_inst_status(self, idx: int, text: str) -> None:
+        """写连接状态并按语义上色（● 走成功/进行色，○ 走中性/警告）。
+
+        **文案一字不改**——测试按子串断言「如愿-2」「没有启动」「自动检测」
+        「没有响应」「连接失败」「未配置」等，这里只加颜色。
+        """
+        label = self._status_labels.get(idx)
+        if label is None:
+            return
+        label.setText(text)
+        if text.startswith("●"):
+            kind = "info" if "测试中" in text else "success"
+        elif text.startswith("○") and "未配置" in text:
+            kind = "warning"
+        else:
+            kind = "default"
+        label.setStyleSheet(f"color:{theme.TAG_FG[kind]};")
+
     def _test_connection(self, idx: int):
         """spec §5：查模拟器在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
         import cv2
         inst = self._data["instances"][idx]
         if inst.get("mumu_index") is None and not inst.get("adb_address"):
-            self._status_labels[idx].setText(
-                "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
+            self._set_inst_status(
+                idx, "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
             return
-        self._status_labels[idx].setText("● 测试中…")
+        self._set_inst_status(idx, "● 测试中…")
         QApplication.processEvents()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -569,13 +673,13 @@ class ConfigDialog(QDialog):
                 adb_path=self._data["app"].get("adb_path", "adb"))
             img = handle.capture()
         except Exception as e:  # 连不上/截图失败都要给非程序员能读懂的提示
-            self._status_labels[idx].setText(f"○ {self._explain_connect_error(inst, e)}")
+            self._set_inst_status(idx, f"○ {self._explain_connect_error(inst, e)}")
             self._preview_labels[idx].clear()
             return
         finally:
             QApplication.restoreOverrideCursor()
-        self._status_labels[idx].setText(
-            f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
+        self._set_inst_status(
+            idx, f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w, _ = rgb.shape
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
@@ -713,38 +817,72 @@ class CharacterEditDialog(QDialog):
     def __init__(self, parent, character: dict | None, candidates: list[dict]):
         super().__init__(parent)
         self.setWindowTitle("角色编辑")
-        self.resize(460, 520)
+        # 宽度留够：表单自然最小宽 ~562px，窄一点就会挤出横向滚动条
+        self.resize(600, 700)
         self._character = dict(character) if character else None
         self._candidates = candidates
-        form = QFormLayout(self)
+
+        # 表单进滚动区：目标等级 / 行军预设 / 填兵目标三块加起来很高，
+        # 固定窗口下小屏会够不着底部的「确定」。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        content = QWidget()
+        form = QFormLayout(content)
+        form.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        form.setSpacing(theme.SP_MD)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignTop)
+        outer.addWidget(ConfigDialog._scroll(content), 1)
 
         self.name_edit = QLineEdit((character or {}).get("name", ""))
         form.addRow("角色名（须与游戏内一致）", self.name_edit)
 
         self.role_combo = QComboBox()
+        self.role_combo.setMaximumWidth(220)
         for r in ("leader", "member", "either"):
             self.role_combo.addItem(ROLE_LABELS[r])
         if (character or {}).get("role"):
             self.role_combo.setCurrentText(ROLE_LABELS[character["role"]])
         form.addRow("分工", self.role_combo)
 
-        # 目标城寨等级（2026-10-04 用户要求）：1–10 复选框，最多勾 3 个。
+        # 目标城寨等级（2026-10-04 用户要求）：1–15 复选框，最多勾 3 个。
         # 勾选**顺序即搜索顺序**（用户明确要求完全自由，例如 6→4→5），
         # 而复选框本身表达不了顺序，故下面挂一个标签实时显示结果；用户
         # 想调整顺序就取消重勾（新勾的排到最后）。
+        #
+        # 2026-10-11 新增「劫掠者寨子」（RAIDER_TARGET）：与等级**并列**
+        # 但互斥——它是不分等级的特殊寨子，选了它就等于换了一类搜索目标，
+        # 再叠等级没有意义（config 层的 _check_levels 也这么判）。互斥在
+        # 这里做成「勾一个自动清空/禁用另一组」，比弹窗提示轻，且状态永远
+        # 合法——与 _on_level_toggle 超上限时撤销勾选同一套做法。
+        #
+        # 2026-10-13 扩到 1–15：1–10 与 11–15 是**两个互斥区间**（面板上由
+        # 一个独立的区间控件切换），所以第 2 行留白放一条分割线，11–15 落到
+        # 第 3 行；区间互斥与劫掠者互斥同法处理。
         self._level_order: list[int] = list((character or {}).get("target_levels", [7]))
         self.level_checks: dict[int, QCheckBox] = {}
         level_grid = QGridLayout()
         level_grid.setContentsMargins(0, 0, 0, 0)
-        for i, lv in enumerate(range(1, 11)):
+        for i, lv in enumerate(range(MIN_TARGET_LEVEL, MAX_TARGET_LEVEL + 1)):
             cb = QCheckBox(str(lv))
             cb.setChecked(lv in self._level_order)
             self.level_checks[lv] = cb
-            level_grid.addWidget(cb, i // 5, i % 5)
+            row = i // 5 if i < 10 else i // 5 + 1     # 第 2 行留给区间分割线
+            level_grid.addWidget(cb, row, i % 5)
+        range_sep = QFrame()
+        range_sep.setObjectName("hSeparator")
+        range_sep.setFrameShape(QFrame.Shape.NoFrame)
+        range_sep.setFixedHeight(1)
+        level_grid.addWidget(range_sep, 2, 0, 1, 5)
+        self.raider_check = QCheckBox(f"{RAIDER_LABEL}（不分等级）")
+        self.raider_check.setChecked(RAIDER_TARGET in self._level_order)
+        level_grid.addWidget(self.raider_check, 4, 0, 1, 5)
         # 信号在 setChecked 之后再接：否则初始化会把 _level_order 重排成
         # 勾选回调的顺序（配置里存的顺序就丢了）
         for lv, cb in self.level_checks.items():
             cb.toggled.connect(lambda on, v=lv: self._on_level_toggle(v, on))
+        self.raider_check.toggled.connect(self._on_raider_toggle)
         self.level_order_label = QLabel()
         level_box = QVBoxLayout()
         level_box.setContentsMargins(0, 0, 0, 0)
@@ -798,6 +936,8 @@ class CharacterEditDialog(QDialog):
         lists = QHBoxLayout()
         self.cand_list = QListWidget()
         self.sel_list = QListWidget()
+        self.cand_list.setMinimumHeight(160)
+        self.sel_list.setMinimumHeight(160)
         selected = {(f["instance"], f["name"])
                     for f in (character or {}).get("fill_target_leaders", [])}
         for c in candidates:
@@ -821,32 +961,78 @@ class CharacterEditDialog(QDialog):
         lists.addWidget(self.sel_list)
         form.addRow(ConfigDialog._wrap(lists))
 
-        ok = QPushButton("确定")
-        ok.clicked.connect(self._on_ok)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        btns = QHBoxLayout()
-        btns.addStretch(1)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
-        form.addRow(ConfigDialog._wrap(btns))
+        outer.addWidget(self._footer())
 
         self.role_combo.currentTextChanged.connect(
             lambda _t: self.sel_list.setEnabled(
                 self.role_combo.currentText() != ROLE_LABELS["leader"]))
         self.sel_list.setEnabled(self.role_combo.currentText() != ROLE_LABELS["leader"])
 
+    def _footer(self) -> QWidget:
+        """底部操作栏：1px 分割线 + 右对齐的「取消」（次）/「确定」（主）。"""
+        footer = QWidget()
+        lay = QVBoxLayout(footer)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        line = QFrame()
+        line.setObjectName("hSeparator")
+        line.setFrameShape(QFrame.Shape.NoFrame)
+        line.setFixedHeight(1)
+        lay.addWidget(line)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(theme.SP_XL, theme.SP_MD, theme.SP_XL, theme.SP_MD)
+        row.setSpacing(theme.SP_SM)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("确定")
+        theme.make_primary(ok)
+        ok.clicked.connect(self._on_ok)
+        row.addStretch(1)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+        return footer
+
     def _on_level_toggle(self, level: int, checked: bool) -> None:
         if checked:
             if level in self._level_order:
                 return
-            if len(self._level_order) >= MAX_TARGET_LEVELS:
+            low = level_range(level)[0]
+            cross = [o for o, cb in self.level_checks.items()
+                     if o != level and level_range(o)[0] != low and cb.isChecked()]
+            if cross:
+                # 换区间 = 换了一整组目标：先把另一区间清空。它们本来也不可能
+                # 同时生效（面板同一时刻只停在一个区间上，config 层也这么判），
+                # 与其让用户先手动取消再勾，不如直接换过去。
+                for o in cross:
+                    cb = self.level_checks[o]
+                    cb.blockSignals(True)      # 清空不应触发本回调
+                    cb.setChecked(False)
+                    cb.blockSignals(False)
+                    self._level_order.remove(o)
+            elif len(self._level_order) >= MAX_TARGET_LEVELS:
                 # 超上限：撤销这次勾选。比弹窗打断轻，且状态立刻回到合法
                 self.level_checks[level].setChecked(False)
                 return
+            if self.raider_check.isChecked():
+                # 勾了等级 → 劫掠者寨子自动让位（互斥的另一半）
+                self.raider_check.setChecked(False)
             self._level_order.append(level)
         elif level in self._level_order:
             self._level_order.remove(level)
+        self._refresh_level_order()
+
+    def _on_raider_toggle(self, checked: bool) -> None:
+        """劫掠者寨子只能单选：勾上就清空并禁用 1–10 级。"""
+        if checked:
+            self._level_order = [RAIDER_TARGET]
+            for cb in self.level_checks.values():
+                cb.blockSignals(True)     # 清空不应触发 _on_level_toggle
+                cb.setChecked(False)
+                cb.blockSignals(False)
+        elif RAIDER_TARGET in self._level_order:
+            self._level_order = []        # 取消勾选 → 回到「至少要选一个」
         self._refresh_level_order()
 
     def _refresh_level_order(self) -> None:
@@ -855,14 +1041,25 @@ class CharacterEditDialog(QDialog):
         顺序是隐性状态（只存在于点击先后里），不显式显示的话用户无法
         确认 6→4→5 有没有生效。
         """
-        if self._level_order:
+        raider = RAIDER_TARGET in self._level_order
+        if raider:
+            self.level_order_label.setText(
+                f"搜索目标：{RAIDER_LABEL}（不分等级，只能单选）")
+        elif self._level_order:
             self.level_order_label.setText(
                 "搜索顺序：" + " → ".join(str(v) for v in self._level_order))
         else:
             self.level_order_label.setText("搜索顺序：（至少勾一个等级）")
         full = len(self._level_order) >= MAX_TARGET_LEVELS
+        # 选满 3 个时只锁**同区间**的未选框：另一区间的框要留着能点——
+        # 点它就是换区间（_on_level_toggle 会清空本区间），锁掉等于不让人换。
+        cur_low = level_range(self._level_order[0])[0] if self._level_order else None
         for lv, cb in self.level_checks.items():
-            cb.setEnabled(cb.isChecked() or not full)
+            same_range = cur_low is None or level_range(lv)[0] == cur_low
+            cb.setEnabled(
+                not raider and (cb.isChecked() or not (full and same_range)))
+        # 勾了等级就锁住劫掠者寨子，反向同理；两边都空时都可点
+        self.raider_check.setEnabled(raider or not self._level_order)
 
     def _move_to_selected(self):
         for item in self.cand_list.selectedItems():

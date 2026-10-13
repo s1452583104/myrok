@@ -170,6 +170,44 @@ def test_character_edit_dialog_rejects_member_without_fills(qapp):
     assert dlg.validate() is not None  # 返回错误信息（非 None）
 
 
+# ---- 劫掠者寨子（2026-10-11）：与 1–10 级并列但互斥 --------------------
+
+def _raider_dlg(target_levels=(7,)):
+    char = {"id": "c1", "name": "H", "role": "leader",
+            "target_levels": list(target_levels), "march_preset": 1,
+            "march_troop_types": ["infantry"]}
+    return CharacterEditDialog(None, char, [])
+
+
+def test_raider_checkbox_clears_and_locks_levels(qapp):
+    dlg = _raider_dlg((7,))
+    dlg.raider_check.setChecked(True)
+    assert dlg._level_order == [0]
+    assert not any(cb.isChecked() for cb in dlg.level_checks.values())
+    assert not any(cb.isEnabled() for cb in dlg.level_checks.values())
+    assert dlg.validate() is None          # [0] 本身是合法配置
+    assert dlg.get_result()["target_levels"] == [0]
+
+
+def test_checking_a_level_releases_raider(qapp):
+    """互斥的另一半：勾等级 → 劫掠者自动让位，不会留下 [0, 7] 这种非法组合。"""
+    dlg = _raider_dlg((7,))
+    dlg.raider_check.setChecked(True)
+    dlg.level_checks[5].setChecked(True)   # 被禁用状态下也要自洽（代码兜底）
+    assert dlg._level_order == [5]
+    assert not dlg.raider_check.isChecked()
+    assert not dlg.raider_check.isEnabled()   # 已选等级 → 劫掠者不可再点
+    assert dlg.validate() is None
+
+
+def test_unchecking_raider_asks_for_a_level_again(qapp):
+    dlg = _raider_dlg((0,))
+    assert dlg.raider_check.isChecked()
+    dlg.raider_check.setChecked(False)
+    assert dlg._level_order == []
+    assert dlg.validate() is not None      # 「至少勾一个目标城寨等级」
+
+
 def test_delete_character(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
@@ -634,6 +672,50 @@ def test_level_recheck_moves_to_end(qapp):
     dlg.level_checks[5].setChecked(False)
     dlg.level_checks[5].setChecked(True)
     assert dlg._level_order == [6, 4, 5]
+
+
+# ---- 等级区间 1–10 / 11–15（2026-10-13）----
+
+def test_level_boxes_cover_one_to_fifteen(qapp):
+    dlg = CharacterEditDialog(None, _char([7]), [])
+    assert sorted(dlg.level_checks) == list(range(1, 16))
+
+
+def test_checking_a_high_level_clears_the_low_range(qapp):
+    """两区间互斥：勾 11–15 就把 1–10 的勾选清掉，状态永远合法。"""
+    dlg = CharacterEditDialog(None, _char([7, 6]), [])
+    dlg.level_checks[13].setChecked(True)
+    assert dlg._level_order == [13]
+    assert _checked(dlg) == [13]
+    assert dlg.validate() is None
+
+
+def test_checking_a_low_level_clears_the_high_range(qapp):
+    dlg = CharacterEditDialog(None, _char([13, 12]), [])
+    dlg.level_checks[7].setChecked(True)
+    assert dlg._level_order == [7]
+    assert _checked(dlg) == [7]
+
+
+def test_high_range_boxes_stay_clickable_when_low_range_is_full(qapp):
+    """选满 3 个低区间等级后，高区间的框仍要点得动——点它就是换区间。"""
+    dlg = CharacterEditDialog(None, _char([7]), [])
+    dlg.level_checks[7].setChecked(False)
+    for lv in (8, 6, 5):
+        dlg.level_checks[lv].setChecked(True)
+    assert dlg._level_order == [8, 6, 5]
+    assert dlg.level_checks[4].isEnabled() is False    # 同区间，锁住
+    assert dlg.level_checks[11].isEnabled() is True    # 另一区间，可点
+    dlg.level_checks[11].setChecked(True)
+    assert dlg._level_order == [11]
+
+
+def test_raider_still_clears_all_fifteen_levels(qapp):
+    dlg = CharacterEditDialog(None, _char([13]), [])
+    dlg.raider_check.setChecked(True)
+    assert dlg._level_order == [0]
+    assert not any(cb.isChecked() for cb in dlg.level_checks.values())
+    assert not any(cb.isEnabled() for cb in dlg.level_checks.values())
 
 
 def test_edit_dialog_rejects_no_level_selected(qapp):
