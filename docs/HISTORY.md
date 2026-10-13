@@ -2388,7 +2388,8 @@ config.example.yaml 重新生成一份。」放在 `mode="before"` 而不是 `lo
 
 **② 模式是界面概念，不是运行时概念。** `config.yaml` 里**没有 `mode` 键**——模式不落盘，
 固定开在寨多多（早先设计过的 `save_app_mode` 逐行回写配置那套机制整个删掉）。
-`RuntimeCoordinator` 只跑寨多多（只有它实现了），内部读 `config.zhaiduo.instances`（4 处）。
+`RuntimeCoordinator` 只跑寨多多（只有它实现了），取实例走 `config.instances_for(AppMode.ZHAIDUO)`
+（2 处）——**模式 → 配置段的映射收敛在 `instances_for()` 这一处**，协调器不直读 `.zhaiduo.instances`。
 `AppMode(str, Enum)` = `zhaiduo` / `gem` / `quiz`，中文标签 `MODE_LABELS` 放 `infra/config.py`
 （跟 `RAIDER_LABEL` 同一先例：GUI 与协调器跨层共用中文文案）。
 `IMPLEMENTED_MODES = frozenset({AppMode.ZHAIDUO})` 是「某模式做完了」的唯一开关。
