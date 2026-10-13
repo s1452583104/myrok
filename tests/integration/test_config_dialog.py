@@ -118,6 +118,17 @@ def test_tree_navigation_switches_stack(tmp_path, qapp, monkeypatch):
     assert dlg._stack.currentIndex() == 4
 
 
+def test_switching_to_yaml_refreshes_preview(tmp_path, qapp, monkeypatch):
+    """切到 YAML 页必须刷新预览，否则用户改完字段看到的是改动前的快照。"""
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))      # 先离开 YAML 页
+    calls = []
+    monkeypatch.setattr(dlg, "_refresh_yaml_preview", lambda: calls.append(1))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(4))      # 切到 YAML
+    assert calls, "切到 YAML 页必须刷新预览"
+
+
 def test_on_save_accepts_only_when_valid(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)

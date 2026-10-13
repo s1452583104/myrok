@@ -214,11 +214,19 @@ class ConfigDialog(QDialog):
         self._tree.setCurrentItem(target)
         self._refresh_yaml_preview()
 
+    # YAML 源码页在 _stack 里的固定索引（见 _reload_tree 的 0..4 契约）
+    _YAML_PAGE_INDEX = 4
+
     def _on_tree_change(self, cur, _prev):
         if cur is None:
             return
         kind, key = cur.data(0, Qt.ItemDataRole.UserRole)
         if kind == "page":
+            if key == self._YAML_PAGE_INDEX:
+                # 切到 YAML 页必须先刷新：_data 是内存里的当前编辑态，
+                # 而 _yaml_view 只在 _reload_tree / save() 时刷新。
+                # 不刷新的话，用户改完一个字段直接点 YAML 看到的是改动前的快照。
+                self._refresh_yaml_preview()
             self._stack.setCurrentIndex(key)
         elif kind == "instance":
             self._stack.setCurrentIndex(5 + key)
