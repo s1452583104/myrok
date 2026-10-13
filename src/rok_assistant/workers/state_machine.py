@@ -135,6 +135,24 @@ class StateMachine:
                   interval: float | None = None) -> bool:
         return self._wait_for_result(rec_id, timeout=timeout, interval=interval) is not None
 
+    def _wait_for_gone(self, rec_id: str, timeout: float = 10.0,
+                       interval: float | None = None) -> bool:
+        """等某个识别器**消失**（与 `_wait_for` 对偶）。
+
+        关面板这类动作只有「目标还在不在」这一个可观测量：点完就走的话，
+        关没关掉只能靠后面某一步偶然报错来发现（2026-10-12 用户报的
+        「卡在体力界面」「一直卡在同一座寨子上」都是这么来的）。
+        """
+        deadline = time.time() + timeout
+        while True:
+            if self._find(rec_id) is None:
+                return True
+            if time.time() >= deadline:
+                return False
+            pause = self._pause(interval)
+            if pause > 0:
+                time.sleep(min(pause, max(0.0, deadline - time.time())))
+
     def _wait_click(self, rec_id: str, timeout: float = 15.0,
                     interval: float | None = None) -> bool:
         r = self._wait_for_result(rec_id, timeout=timeout, interval=interval)
@@ -169,23 +187,42 @@ class StateMachine:
             return False
         self._handle.click(*self._AP_CLAIM_DAILY)
         time.sleep(self._human.jitter(1.5))
+        eaten = 0
         for _ in range(self._AP_EAT_MAX):
             if self._find("ap_refill") is None:
                 break
             self._handle.click(*self._AP_USE_ROW2)
+            eaten += 1
             time.sleep(self._human.jitter(1.5))
-        return self._close_ap_dialog()
+        closed = self._close_ap_dialog()
+        # 2026-10-12：以前这条路一行日志都没有（`_normalize_view` 里那次补
+        # 体力尤其），实机复盘时看不见补了几口、弹窗到底关没关。用户报
+        # 「能加体力但卡在体力界面」时，第一件要能回答的就是这两个数。
+        logger.info("补行动力：点第 1 行「领取/使用」1 次 + 第 2 行「使用」%s 次"
+                    "（上限 %s），弹窗%s", eaten, self._AP_EAT_MAX,
+                    "已关闭" if closed else "仍在场")
+        return closed
 
     def _close_ap_dialog(self) -> bool:
         """关行动力补充弹窗：X 点击可能被领取/使用的 toast 动画吞掉
         （2026-09-18 run10 实机：单次 X 后弹窗残留，mumu0 卡死 LAUNCH
-        六连异常），点一次确认一次，最多 4 次。"""
+        六连异常），点一次确认一次，最多 4 次。
+
+        **一次失配不判「已关」**：`ap_refill` 的 ROI 只有 [800,90,1300,170]
+        一条窄带（标题「行动力补充」），模板失配时调用方会以为弹窗没了，
+        于是再也不点 X，转头去怪 march_btn（2026-10-12 复查发现的口子）。
+        复核一次再下结论——代价是一次 `_find`。
+        """
         for _ in range(4):
-            if self._find("ap_refill") is None:
+            if self._find("ap_refill") is None \
+                    and self._find("ap_refill") is None:
                 return True
             self._handle.click(*self._AP_DIALOG_X)
             time.sleep(self._human.jitter(1.2))
-        return self._find("ap_refill") is None
+        closed = self._find("ap_refill") is None
+        if not closed:
+            logger.warning("行动力补充弹窗点了 4 次右上角 X 仍在场（弹窗关不掉）")
+        return closed
 
     # 断网弹框「确定」按钮中心（2026-10-09 实机截图实测 bbox
     # (779,666)-(1142,757)，中心 (960,711)）

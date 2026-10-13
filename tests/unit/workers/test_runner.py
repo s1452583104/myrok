@@ -2,7 +2,7 @@
 import time
 import numpy as np
 from unittest.mock import MagicMock
-from rok_assistant.workers.runner import WorkerRunner
+from rok_assistant.workers.runner import WorkerRunner, _NO_AP_COOLDOWN
 from rok_assistant.workers.member_sm import MemberStateMachine
 from rok_assistant.core.handle_source import MockHandleSource
 from rok_assistant.coordination.event_bus import EventBus
@@ -296,6 +296,80 @@ def test_runner_default_profile_keeps_deterministic_waits():
                      event_bus=None, poll_interval=0.01, restart_cooldown=0.05)
     assert r._human.jitter(30.0) == 30.0
     assert r._human.jitter(2.0) == 2.0
+
+
+class _EnvAbortSM:
+    """终态 + 环境类 fail_reason 的假 SM：一轮「干不下去了」。"""
+
+    last_image = None
+
+    def __init__(self, reason):
+        self.current = "END"
+        self.fail_reason = reason
+
+    def is_terminal(self):
+        return True
+
+    def step(self):
+        pass
+
+
+def test_runner_keeps_running_after_ui_stuck_aborts():
+    """环境/UI 类中止（弹窗收不掉）不算「连续失败」：连续 4 轮都不该收工。
+
+    2026-10-12 用户报「一直重试，最后失败退出程序」——连续 3 轮这种原因就停
+    worker，等于把一次弹窗卡顿升级成收工，而它下一轮本来能自愈。
+    """
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=lambda: _EnvAbortSM("stale_fortress_target"),
+                     handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.01,
+                     max_consecutive_failures=2)
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and r.rounds_done < 4:
+        time.sleep(0.02)
+    r.stop()
+    assert r.rounds_done >= 4          # max_consecutive_failures=2 也没停
+    assert r._fail_streak == 0
+    assert r.stopped_reason is None
+
+
+def test_runner_waits_long_when_out_of_action_points():
+    """体力不足等**自然恢复**：冷却用 _NO_AP_COOLDOWN 而不是 30s，且不计失败。"""
+    seen = []
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=lambda: _EnvAbortSM("no_action_points"),
+                     handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.01,
+                     max_consecutive_failures=2,
+                     human=_recording_profile(seen))
+    r.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and r.rounds_done < 3:
+        time.sleep(0.02)
+    r.stop()
+    assert _NO_AP_COOLDOWN in seen, f"体力不足未走长冷却，记录={seen[:8]}"
+    assert r._fail_streak == 0
+    assert r.stopped_reason is None
+
+
+def test_env_fail_reasons_cover_every_leader_abort_reason():
+    """runner 的环境类豁免名单必须**覆盖** leader_sm 实际写出的每个中止原因。
+
+    两边靠字符串字面量对齐（leader_sm 写 ctx["fail_reason"]，runner 按值查表），
+    任一侧改名都不会有任何编译期错误——只会安静地退回「计入连续失败」，
+    也就是用户报的「最后失败退出程序」原样复现。这条测试就是那个缺口的哨兵。
+    """
+    from rok_assistant.workers import leader_sm
+    from rok_assistant.workers.runner import _ENV_FAIL_REASONS
+    for name in ("_NO_AP_REASON", "_AP_STUCK_REASON", "_STALE_TARGET_REASON"):
+        reason = getattr(leader_sm, name)
+        assert reason in _ENV_FAIL_REASONS, (
+            f"{name}={reason!r} 不在 runner._ENV_FAIL_REASONS 里："
+            "这条中止会被算成连续失败，攒够 3 轮就收工")
 
 
 def test_runner_stops_after_consecutive_step_errors():

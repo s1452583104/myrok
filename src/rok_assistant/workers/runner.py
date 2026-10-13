@@ -56,6 +56,26 @@ def _zh(state: str) -> str:
     return _STATE_ZH.get(state, state)
 
 
+# 「本轮干不下去了」类 fail_reason（leader_sm 写入 ctx["fail_reason"]）：不是
+# 「附近没城寨了」这种真失败，而是环境/资源挡路——行动力弹窗收不掉、上一座
+# 寨子的详情收不掉、体力补不动。
+#
+# 为什么单独拎出来（2026-10-12 用户报「一直重试，最后失败退出程序」）：
+# `_check_stop_conditions` 连续 `_max_fail_streak`(=3) 轮失败就收工。这三种
+# 原因本身都**会在下一轮自愈**——重建 SM 后 NORMALIZE 会再收一次弹窗，寨子
+# 也会随时间消失——所以把它们算成「连续失败」等于把一次弹窗卡顿升级成收工。
+# 不计入连续失败、冷却后接着跑；每轮照常打警告日志，fail_reason 也随
+# status_update 带给 GUI，用户看得见。
+_ENV_FAIL_REASONS = frozenset({
+    "no_action_points", "ap_dialog_stuck", "stale_fortress_target"})
+
+# 体力不足要靠**自然恢复**（道具吃完了就只能等），不是等 30s 冷却：一轮搜完
+# 才发现体力不够，等几分钟再试才有意义。其余环境原因用正常冷却——下一轮的
+# NORMALIZE 立刻就能重收弹窗，没必要干等。
+_NO_AP_REASON = "no_action_points"
+_NO_AP_COOLDOWN = 300.0
+
+
 class WorkerRunner:
     """每角色一个线程：循环 step 状态机、发布状态、异常截图、终态冷却重建。
 
@@ -102,7 +122,8 @@ class WorkerRunner:
         self._error_backoff = error_backoff
         self._pause_poll = pause_poll
         self._screenshot_dir = Path(screenshot_dir) if screenshot_dir else Path("recordings")
-        # 轮次与停止条件（2026-09-11 验收目标：跑满 N 轮或体力耗尽即收工）
+        # 轮次与停止条件（2026-09-11 验收目标：跑满 N 轮或连续失败即收工）。
+        # 环境/资源类中止（_ENV_FAIL_REASONS）不计入连续失败——见常量注释
         self._max_rounds = max_rounds
         self._max_fail_streak = max_consecutive_failures
         self._max_error_streak = max_consecutive_failures * 2
@@ -153,7 +174,15 @@ class WorkerRunner:
                     self._reached_terminal = True
                     reason = getattr(self.sm, "fail_reason", None)
                     self.rounds_done += 1
-                    if reason:
+                    if reason in _ENV_FAIL_REASONS:
+                        # 环境/资源挡路（见 _ENV_FAIL_REASONS）：不算失败，
+                        # 冷却后接着跑，别把它升级成「连续 N 轮失败，收工」
+                        self._fail_streak = 0
+                        logger.warning("worker %s/%s[%s] 第 %s 轮中止：%s"
+                                       "（环境/资源问题，不计入连续失败）",
+                                       self.instance_id, self.char_id,
+                                       self.char_name, self.rounds_done, reason)
+                    elif reason:
                         self._fail_streak += 1
                         logger.warning("worker %s/%s[%s] 第 %s 轮失败结束：%s"
                                        "（连续失败 %s/%s）",
@@ -170,7 +199,9 @@ class WorkerRunner:
                     if stop:
                         break
                     self._set_status("cooldown")
-                    self._stop_event.wait(self._human.jitter(self._cooldown))
+                    cooldown = (_NO_AP_COOLDOWN if reason == _NO_AP_REASON
+                                else self._cooldown)
+                    self._stop_event.wait(self._human.jitter(cooldown))
                     if self._stop_event.is_set():
                         break
                     self.sm = self._sm_factory()   # 冷却后重建，进入下一轮
@@ -215,8 +246,10 @@ class WorkerRunner:
         if self._max_rounds is not None and self.rounds_done >= self._max_rounds:
             self.stopped_reason = f"已完成 {self.rounds_done} 轮，达到轮数上限"
         elif self._fail_streak >= self._max_fail_streak:
+            # 只统计「找不到可打的城寨」这类真失败；体力/弹窗类中止已在
+            # _run 里排除（见 _ENV_FAIL_REASONS），不会走到这里
             self.stopped_reason = (f"连续 {self._fail_streak} 轮失败"
-                                   "（疑似体力耗尽或环境异常），停止")
+                                   "（附近没有可集结的城寨），停止")
         if self.stopped_reason is None:
             return False
         logger.info("worker %s/%s[%s] %s", self.instance_id, self.char_id,
