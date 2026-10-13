@@ -1,11 +1,13 @@
 """激活对话框：机器码（等宽 + 复制）、激活码输入、结果提示。"""
 from __future__ import annotations
 
-from PyQt6.QtGui import QFont, QGuiApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -14,6 +16,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from . import theme
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,42 +27,71 @@ class LicenseDialog(QDialog):
         super().__init__(parent)
         self._guard = guard
         self.setWindowTitle("激活")
-        self.resize(600, 320)
+        self.resize(640, 400)
         self._build_ui()
         self._refresh_status()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        form = QFormLayout()
+        root.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        root.setSpacing(theme.SP_LG)
 
+        # 标题区：说清这个窗口是干什么的，不靠用户从「机器码」三个字里猜
+        title = QLabel("激活产品")
+        title.setObjectName("dialogTitle")
+        hint = QLabel("把下面的机器码发给作者换取激活码，粘贴激活码后点「激活」。")
+        hint.setObjectName("dialogHint")
+        hint.setWordWrap(True)
+        root.addWidget(title)
+        root.addWidget(hint)
+
+        form = QFormLayout()
+        form.setSpacing(theme.SP_SM)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        # 等宽字体：机器码靠用户手抄或截图转述，等宽能显著降低抄错率。
+        # 走 theme.make_mono（光 setFont 会被全局 QSS 的 font-family 盖掉）。
         self.machine_code_edit = QLineEdit(self._guard.machine_code())
         self.machine_code_edit.setReadOnly(True)
-        # 等宽字体：机器码靠用户手抄或截图转述，等宽能显著降低抄错率
-        self.machine_code_edit.setFont(QFont("Consolas", 11))
+        theme.make_mono(self.machine_code_edit)
         copy_btn = QPushButton("复制")
         copy_btn.clicked.connect(self._copy_machine_code)
         row = QHBoxLayout()
-        row.addWidget(self.machine_code_edit)
+        row.setSpacing(theme.SP_SM)
+        row.addWidget(self.machine_code_edit, 1)
         row.addWidget(copy_btn)
         form.addRow("机器码", row)
 
         # 激活码 122 字符，用多行框 + 等宽字体，粘贴时自动折行
         self.code_edit = QPlainTextEdit()
-        self.code_edit.setFont(QFont("Consolas", 10))
+        theme.make_mono(self.code_edit)
+        self.code_edit.setMinimumHeight(120)
         self.code_edit.setPlaceholderText("粘贴激活码（连字符可有可无）")
         form.addRow("激活码", self.code_edit)
 
         root.addLayout(form)
+        root.addStretch(1)
 
+        # 结果提示：默认中性态，激活成功/失败时由 _on_activate 换成对应语义色
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(theme.tag_style("default"))
         root.addWidget(self.status_label)
+
+        line = QFrame()
+        line.setObjectName("hSeparator")
+        line.setFrameShape(QFrame.Shape.NoFrame)
+        line.setFixedHeight(1)
+        root.addWidget(line)
 
         buttons = QDialogButtonBox()
         # 用 ActionRole 而不是 AcceptRole：AcceptRole 会自动 accept 关窗，
         # 激活失败时用户就得重新打开对话框再贴一次码。
         self.activate_btn = buttons.addButton(
             "激活", QDialogButtonBox.ButtonRole.ActionRole)
+        theme.make_primary(self.activate_btn)     # 本屏唯一主操作
         self.activate_btn.clicked.connect(self._on_activate)
         buttons.addButton("关闭", QDialogButtonBox.ButtonRole.RejectRole)
         root.addWidget(buttons)
@@ -88,8 +120,16 @@ class LicenseDialog(QDialog):
             logger.exception("激活失败")
             ok = False
             message = "激活失败：授权组件异常，请把 --selftest 的输出发给作者"
+        if ok:
+            # 把**结果状态**一并说出来：「激活成功」不足以说明白——重复输入已用过的
+            # 码、或记录被判篡改时，激活本身成功但状态可能仍是到期（2026-11-01 反馈）。
+            # 单独 try：激活已经成功，读状态失败不该反过来报成「激活失败」。
+            try:
+                message = f"{message}（当前：{self._guard.status().label()}）"
+            except Exception:                  # noqa: BLE001
+                logger.exception("激活后读取授权状态失败")
         self.status_label.setText(message)
         self.status_label.setStyleSheet(
-            "color:#27ae60;" if ok else "color:#c0392b;")
+            theme.tag_style("success" if ok else "error"))
         if ok:
             self.accept()

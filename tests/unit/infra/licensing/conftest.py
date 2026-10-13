@@ -46,8 +46,9 @@ DAY = 86400
 def base_time() -> int:
     """真实当前时间。
 
-    **不要用写死的时间戳**：存储文件的 mtime 是真实时间，拿一个 2023 年的
-    假时钟去跑，`Guard._mtime_in_future` 会把「mtime 在未来」误判成篡改。
+    **不要用写死的时间戳**：存储文件的 mtime 是真实时间，假时钟与它差太远时
+    写盘/读盘的行为和真实场景对不上（例如 `test_future_file_mtime_is_not_tamper`
+    就是靠真实 mtime 与假时钟的差来构造现场的）。
     """
     return int(time.time())
 

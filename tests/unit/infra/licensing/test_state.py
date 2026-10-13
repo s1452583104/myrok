@@ -104,14 +104,7 @@ def test_code_for_other_machine_is_discarded(sign_code, test_public_b64):
     assert ev.kind == "trial"
 
 
-# ---- used_serials / apply_activation ----
-
-def test_used_serials_only_counts_valid_codes(sign_code, test_public_b64):
-    good = sign_code(FP, kind=codec.KIND_EXTEND, days=1, serial=9)
-    rec = _rec(licenses=[{"code": good, "applied_at": T0},
-                         {"code": "坏的", "applied_at": T0}])
-    assert state.used_serials(rec, FP, test_public_b64) == {9}
-
+# ---- apply_activation（幂等 = 防重放的唯一手段）----
 
 def test_apply_activation_is_idempotent(sign_code, test_public_b64):
     code = sign_code(FP, kind=codec.KIND_EXTEND, days=30, serial=3)
@@ -140,10 +133,3 @@ def test_apply_activation_keeps_trial_start(sign_code, test_public_b64):
 def test_effective_now_never_goes_backwards():
     assert state.effective_now(100, 500) == 500
     assert state.effective_now(900, 500) == 900
-
-
-def test_clock_rolled_back_has_24h_tolerance():
-    assert state.clock_rolled_back(500, 1000) is False           # 容差内
-    assert state.clock_rolled_back(0, 48 * 3600) is True         # 超过 24h
-    assert state.clock_rolled_back(1, 48 * 3600) is True
-    assert state.clock_rolled_back(48 * 3600, 48 * 3600) is False

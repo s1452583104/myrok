@@ -26,9 +26,10 @@ from gen_license_keypair import (            # noqa: E402
     DEFAULT_PUB,
     write_keypair,
 )
+from rok_assistant.gui import theme                 # noqa: E402
 from rok_assistant.infra.licensing import codec, fingerprint, verify  # noqa: E402
 
-from PyQt6.QtGui import QFont, QGuiApplication  # noqa: E402
+from PyQt6.QtGui import QGuiApplication  # noqa: E402
 from PyQt6.QtWidgets import (                   # noqa: E402
     QApplication,
     QComboBox,
@@ -92,8 +93,9 @@ def used_serials(rows: list[dict]) -> set[int]:
     """已用过的 serial 集合。
 
     畸形行**必须报错，不能静默跳过**：被跳过的若正好是当前最大号，
-    `next_serial` 就会回退，把已卖出的号再发一次——客户机上 `check_code`
-    会以「该激活码已被使用」拒掉作者刚发的码，来回一轮就是一次售后。
+    `next_serial` 就会回退，把已卖出的号再发一次——客户机上那个 serial 已经
+    被占着，新码加不上任何时间（表现为「该激活码已在本机激活过，授权时间
+    未变」），来回一轮就是一次售后。
     """
     out: set[int] = set()
     for lineno, row in enumerate(rows, start=2):   # 第 1 行是表头
@@ -147,7 +149,7 @@ class LicenseTool(QWidget):
         form = QFormLayout()
 
         self.machine_edit = QLineEdit()
-        self.machine_edit.setFont(QFont("Consolas", 11))
+        theme.make_mono(self.machine_edit)
         self.machine_edit.setPlaceholderText("XXXX-XXXX-XXXX-XXXX-C")
         form.addRow("机器码", self.machine_edit)
 
@@ -169,7 +171,7 @@ class LicenseTool(QWidget):
 
         self.code_view = QPlainTextEdit()
         self.code_view.setReadOnly(True)
-        self.code_view.setFont(QFont("Consolas", 10))
+        theme.make_mono(self.code_view, 10)
         root.addWidget(self.code_view)
 
         row = QHBoxLayout()
@@ -232,6 +234,9 @@ class LicenseTool(QWidget):
 
 def main(argv: list[str] | None = None) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
+    # 与主界面同一套令牌（发码工具不进发行包，但没必要长得像另一个产品）。
+    # 必须在建控件之前装——QSS 在 polish 时读动态属性。
+    theme.apply_theme(app)
     if not DEFAULT_KEY.exists():
         answer = QMessageBox.question(
             None, "首次运行",

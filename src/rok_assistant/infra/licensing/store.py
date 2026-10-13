@@ -87,9 +87,6 @@ class _RegistrySlot:
         except OSError:
             logger.warning("注册表写入失败，跳过这一处：%s", self._path)
 
-    def mtime(self) -> float | None:
-        return None                       # 注册表没有 mtime，时钟校验跳过它
-
 
 class _FileSlot:
     def __init__(self, path: Path, attrs: int):
@@ -115,12 +112,6 @@ class _FileSlot:
             logger.warning("授权记录写入失败，跳过这一处：%s", self._path)
             return
         _set_attrs(self._path, self._attrs)
-
-    def mtime(self) -> float | None:
-        try:
-            return self._path.stat().st_mtime
-        except OSError:
-            return None
 
 
 @dataclass(frozen=True)
@@ -309,7 +300,3 @@ class Store:
         text = _serialize(rec, fp_main)
         for slot in self._slots:
             slot.save(text)               # 单处失败已在 slot 内静默
-
-    def newest_mtime(self) -> float | None:
-        times = [t for t in (s.mtime() for s in self._slots) if t is not None]
-        return max(times) if times else None

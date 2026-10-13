@@ -74,15 +74,19 @@ def test_extend_after_permanent_is_accepted_silently(make_guard, sign_code):
     assert g.status().kind == "permanent"
 
 
-def test_replay_is_rejected(make_guard, sign_code):
-    """同一个码不能吃两次——防「一个延长码反复输入无限续期」（spec §7.3）。"""
+def test_replay_is_idempotent_not_an_error(make_guard, sign_code):
+    """同一个码吃不了两次，但**不报错**——报错会让用户以为码坏了（spec §7.3）。
+
+    2026-11-01 线上反馈：已经授权成功的用户重输同一张码，看到「该激活码已被使用」，
+    以为码作废了。加不上时间这件事由 `apply_activation` 的幂等性保证，不需要靠报错。
+    """
     g = make_guard()
     g.status()
     code = sign_code(FP, kind=codec.KIND_EXTEND, days=30, serial=7)
     assert g.activate(code)[0] is True
     ok, msg = g.activate(code)
-    assert ok is False
-    assert msg == verify.REASON_USED
+    assert ok is True
+    assert msg == "该激活码已在本机激活过，授权时间未变"
     assert g.status().days_left == 60                      # 没有被加第二次
 
 

@@ -48,20 +48,6 @@ def test_wrong_format_version_reports_format(test_private_seed, test_public_b64)
     assert reason == verify.REASON_FORMAT
 
 
-def test_check_code_rejects_used_serial(sign_code, test_public_b64):
-    code = sign_code(FP, kind=codec.KIND_EXTEND, days=30, serial=5)
-    payload, reason = verify.check_code(code, FP, {5}, test_public_b64)
-    assert payload is None
-    assert reason == verify.REASON_USED
-    payload, reason = verify.check_code(code, FP, {6}, test_public_b64)
-    assert reason is None
-
-
-def test_check_code_still_reports_format_before_serial(sign_code, test_public_b64):
-    _, reason = verify.check_code("坏的", FP, {5}, test_public_b64)
-    assert reason == verify.REASON_FORMAT
-
-
 def test_embedded_public_key_loads():
     """内嵌公钥必须能加载，且是 32 字节的 Ed25519 公钥。
 

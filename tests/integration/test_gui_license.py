@@ -258,6 +258,15 @@ def test_dialog_accepts_on_success(qapp):
     assert dlg.result() == int(QDialog.DialogCode.Accepted)
 
 
+def test_dialog_success_message_reports_resulting_status(qapp):
+    """激活成功必须带上**结果状态**：重复输入/判篡改时「激活成功」本身会骗人。"""
+    from rok_assistant.gui.license_dialog import LicenseDialog
+    dlg = LicenseDialog(_StubGuard("expired", activate_ok=True))
+    dlg.code_edit.setPlainText("码")
+    dlg.activate_btn.click()
+    assert dlg.status_label.text() == "激活成功（当前：试用已结束，请输入激活码）"
+
+
 def test_dialog_does_not_crash_when_guard_raises(qapp):
     """激活窗是授权出问题时**唯一**的自救入口：读不出状态要能开，激活抛了不能崩。
 

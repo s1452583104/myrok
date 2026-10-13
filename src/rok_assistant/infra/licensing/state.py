@@ -14,8 +14,17 @@ from datetime import date, datetime
 from . import codec, verify
 from .store import Record
 
-TRIAL_DAYS = 30                    # **代码常量，绝不进 config.yaml**（spec §5.5）
-TAMPER_TOLERANCE_SECONDS = 24 * 3600
+# 试用期天数：**代码常量，绝不进 config.yaml**（spec §5.5）——配置是用户能直接
+# 编辑的文本文件，放进去等于送一个「一键改试用期」的开关。
+# 打包时可用 `tools/build_package.py --trial-days N` 注入：构建脚本在 PyInstaller
+# 之前生成下面这个模块（生成物，.gitignore 忽略），源码运行 / 未指定时走默认 30。
+try:
+    from ._trial_override import TRIAL_DAYS
+except ImportError:
+    # 只吞 ImportError：文件不存在=没注入，用默认值。文件存在但坏了（语法错等）
+    # **照常抛**——静默退回 30 会把试用期变长，是反向失效。
+    TRIAL_DAYS = 30
+
 _SECONDS_PER_DAY = 86400
 
 
@@ -27,16 +36,13 @@ class Evaluation:
 
 
 def effective_now(now: int, last_seen: int) -> int:
-    """把系统时间调回过去不给任何好处（spec §5.4）。"""
-    return max(int(now), int(last_seen))
+    """把系统时间调回过去不给任何好处（spec §5.4）。
 
-
-def clock_rolled_back(now: int, last_seen: int) -> bool:
-    """回拨超过 24h 容差 → 判篡改。
-
-    24h 容差是为了不误伤时区 / 夏令时 / NTP 微调 / 用户手动校时。
+    **只此一条**：回拨本身不再判篡改（2026-11-01 改，见 spec §5.4）——到期日是
+    绝对日期、`applied_at` 又被 `last_seen` 夹住，所以「不给好处」已经足够，
+    判死只会误伤（而且会把记录锚点钉在未来，真实时间追上前连买码都救不回来）。
     """
-    return int(now) < int(last_seen) - TAMPER_TOLERANCE_SECONDS
+    return max(int(now), int(last_seen))
 
 
 def _to_date(ts: int) -> date:
@@ -80,9 +86,15 @@ def apply_activation(rec: Record, *, code_text: str, payload: dict,
                      now: int, last_seen: int) -> Record:
     """把一条**已验签**的码并入记录。幂等：serial 已在列表里则原样返回。
 
-    幂等是刻意的——用户可能重复购买，报错会引发售后（spec §7.3）。
+    幂等是刻意的——用户可能重复购买，报错会引发售后（spec §7.3）。**防重放
+    就靠这一条**：同一个 serial 加不上第二次时间（没有别的地方拦「已用过的
+    serial」，`verify` 只管解码/验签/比对本机，见 spec §6.4）。
     `applied_at` 记激活当时的 `effective_now`；计算到期日时它会被
     `last_seen` 夹住，所以这里不需要额外钳制。
+
+    去重用的是 `codec.serial_of`（**不验签**）：伪造条目要先有记录里的 HMAC
+    密钥（已知局限 3），而伪造的后果只是自己那条 serial 占位、加不上真码——
+    伤不到别人，不值得为它每次激活都多验一遍签。
     """
     serial = payload["serial"]
     for item in rec.licenses:
@@ -92,19 +104,4 @@ def apply_activation(rec: Record, *, code_text: str, payload: dict,
                   last_seen=rec.last_seen,
                   licenses=list(rec.licenses) + [{"code": code_text,
                                                   "applied_at": int(now)}])
-
-
-def used_serials(rec: Record, fp_main: bytes,
-                 public_key_b64: str | None = None) -> set[int]:
-    """已用过的 serial 集合——防「一个延长码反复输入无限续期」（spec §7.3）。
-
-    只统计**验签通过**的码：验不过的本来就加不上时间，没必要占着 serial
-    把用户后来的真码拒掉。
-    """
-    out: set[int] = set()
-    for item in rec.licenses:
-        payload, _reason = verify.verify_code(item["code"], fp_main,
-                                              public_key_b64)
-        if payload is not None:
-            out.add(payload["serial"])
     return out

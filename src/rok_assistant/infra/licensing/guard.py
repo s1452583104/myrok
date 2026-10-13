@@ -60,18 +60,9 @@ class Guard:
     def _expired(self) -> LicenseStatus:
         return LicenseStatus("expired", None, None, self._fp.machine_code)
 
-    def _mtime_in_future(self, now: int) -> bool:
-        """交叉校验：任一存储文件的 mtime 比当前时间晚 24h 以上（spec §5.4）。"""
-        newest = self._store.newest_mtime()
-        return newest is not None and newest > now + state.TAMPER_TOLERANCE_SECONDS
-
     def status(self) -> LicenseStatus:
         now = int(self._clock())
         fp = self._fp.fp_main
-        # 必须在 read() 之前采样：read() 会把合并后的记录补写回三处，
-        # 那次写入会把每个文件的 mtime 刷成当前时间，之后再看就永远是
-        # 「不在未来」——spec §5.4 的 mtime 交叉校验会变成死代码。
-        mtime_future = self._mtime_in_future(now)
         res = self._store.read(fp)
 
         if res.tampered:
@@ -84,11 +75,13 @@ class Guard:
             rec = store_mod.Record(trial_start=now, last_seen=now, licenses=[])
             self._store.write(fp, rec)
 
-        if state.clock_rolled_back(now, rec.last_seen) or mtime_future:
-            logger.warning("时钟回拨超过容差，判定为篡改")
-            return self._expired()
-
         eff = state.effective_now(now, rec.last_seen)
+        if eff > now:
+            # 系统时间被调回：不给任何好处，但**不判篡改**（spec §5.4，
+            # 2026-11-01 改）。判死会误伤主板电池没电 / 校时 / 拿错时间的用户，
+            # 而到期日本来就是绝对日期、applied_at 又被 last_seen 夹住——
+            # 「只增不减」这一条已经堵死了唯一的获利路径，判死只剩误伤。
+            logger.info("系统时间比记录锚点早 %d 秒，按锚点计", eff - now)
         if eff != rec.last_seen:               # last_seen 只增不减
             rec = replace(rec, last_seen=eff)
             self._store.write(fp, rec)
@@ -113,12 +106,10 @@ class Guard:
             rec = res.record or store_mod.Record(trial_start=now, last_seen=now,
                                                  licenses=[])
 
-        # 时钟回拨**不拦激活**：主板电池没电的用户会被误判篡改，但必须还能
-        # 靠买码自救（spec §12 已知局限 4）。effective_now 已经保证回拨不给好处。
+        # 时钟回拨不拦激活（回拨本身也不再判篡改，spec §5.4）；effective_now
+        # 保证回拨不给好处，applied_at 也会被 last_seen 夹住。
         eff = state.effective_now(now, rec.last_seen)
-        payload, reason = verify.check_code(code_text, fp,
-                                            state.used_serials(rec, fp, self._key),
-                                            self._key)
+        payload, reason = verify.verify_code(code_text, fp, self._key)
         if payload is None:
             return False, reason
 
@@ -126,8 +117,17 @@ class Guard:
                                         code_text=codec.clean_input(code_text),
                                         payload=payload, now=eff,
                                         last_seen=rec.last_seen)
+        # `apply_activation` 幂等：serial 已在列表里就原样返回——防「一个延长码
+        # 反复输入无限续期」靠的就是它（spec §7.3）。所以「已在本机用过的码」
+        # **不是错误**，只是一次没加时间的成功；报「该激活码已被使用」会让用户
+        # 以为码坏了（2026-11-01 线上反馈：明明已授权，重输却报已被使用）。
+        replay = len(merged.licenses) == len(rec.licenses)
         merged = replace(merged, last_seen=eff)
         self._store.write(fp, merged)
+        if replay:
+            logger.info("重复输入已在本机激活过的码：serial=%s（未加时间）",
+                        payload["serial"])
+            return True, "该激活码已在本机激活过，授权时间未变"
         logger.info("激活成功：kind=%s serial=%s", payload["kind"],
                     payload["serial"])
         return True, "激活成功"

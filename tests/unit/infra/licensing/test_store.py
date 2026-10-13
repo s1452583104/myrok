@@ -212,12 +212,6 @@ def test_cached_fp_main_ignores_non_string_fp(st, loc):
     assert st.cached_fp_main() is None
 
 
-def test_newest_mtime(st, loc):
-    assert st.newest_mtime() is None
-    st.write(FP, _rec())
-    assert st.newest_mtime() is not None
-
-
 # ---- 注册表那一处（真跑一次）----
 
 @pytest.mark.skipif(os.name != "nt", reason="注册表是 Windows 专有")
