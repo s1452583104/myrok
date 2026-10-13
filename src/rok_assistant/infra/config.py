@@ -13,6 +13,27 @@ class RoleEnum(str, Enum):
     EITHER = "either"
 
 
+class AppMode(str, Enum):
+    """软件模式。值用于内部标识（ASCII），中文标签见 MODE_LABELS。"""
+    ZHAIDUO = "zhaiduo"
+    GEM = "gem"
+    QUIZ = "quiz"
+
+
+# 中文标签放这里而不是 gui/labels.py，跟 RAIDER_LABEL 走同一先例：它同时被
+# GUI（导航项、页头）和协调器（拒绝启动的报错）用到，跨层共用的中文文案在
+# 本仓库放 config.py。
+MODE_LABELS = {
+    AppMode.ZHAIDUO: "寨多多模式",
+    AppMode.GEM: "宝石模式",
+    AppMode.QUIZ: "答题模式",
+}
+
+# 已实现的模式。加模式时把它的枚举成员挪进来即可——这是「某个模式做完了」
+# 的唯一开关，界面据此决定开始按钮是否可点、内容区是卡片还是占位。
+IMPLEMENTED_MODES = frozenset({AppMode.ZHAIDUO})
+
+
 class FillLeader(BaseModel):
     instance: str
     name: str = Field(min_length=1)
@@ -212,30 +233,19 @@ class InstanceConfig(BaseModel):
         return self
 
 
-class AppConfig(BaseModel):
-    screen_width: int = 1920
-    screen_height: int = 1080
-    locale: str = "zh-CN"
-    mumu_manager_path: str = ""   # 全局；MuMuManager.exe 完整路径
-    adb_path: str = "adb"         # 全局；adb.exe 完整路径
-    log_dir: Path = Path("./logs")
-    template_dir: Path = Path("./templates")
-    # YOLO 权重路径（可选）。配置后每个模板 id 装配 Chain(模板匹配→YOLO 兜底)：
-    # 校准过的模板先行，YOLO 只在模板未命中时接住动画帧/背景偏移。
-    # 未配置=纯模板匹配（与旧版行为一致）
-    yolo_model: Path | None = None
-    # fill_<名字> 模板未命中时的 OCR 兜底（RapidOCR，账号无关名字识别）
-    ocr_name_fallback: bool = True
-    # 每个角色最多完成多少轮（开集结+填兵+返城算一轮）后自动停止
-    max_rounds: int = Field(default=10, ge=1)
-    # 连续多少轮以失败终态（no_fortress_found/locked_fortress/no_rally_found）
-    # 后自动停止；连续 step 异常则按此数的 2 倍计（异常不走终态）
-    max_consecutive_failures: int = Field(default=3, ge=1)
-    anti_detection: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
+class ModeConfig(BaseModel):
+    """一个模式的专属配置。宝石/答题现在是空壳，所以允许空。"""
+    instances: list[InstanceConfig] = Field(default_factory=list)
 
 
-class RootConfig(BaseModel):
-    app: AppConfig = Field(default_factory=AppConfig)
+class ZhaiduoConfig(ModeConfig):
+    """寨多多模式：唯一实现了的模式，所以它的校验最严。
+
+    **校验跟着数据走，不跟着模式走**：原来挂在 RootConfig 上的 _cross_checks
+    整块搬到这里，因为「至少一个 leader/either」「填兵目标互相指向」这些规则
+    说的是**角色之间**的关系，而角色只存在于某个模式里。宝石/答题现在没有角色，
+    硬套「至少一个 leader」会让它们当场加载失败。
+    """
     instances: list[InstanceConfig] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -273,7 +283,58 @@ class RootConfig(BaseModel):
         return self
 
 
-def find_level_collisions(config: RootConfig) -> list[str]:
+class AppConfig(BaseModel):
+    screen_width: int = 1920
+    screen_height: int = 1080
+    locale: str = "zh-CN"
+    mumu_manager_path: str = ""   # 全局；MuMuManager.exe 完整路径
+    adb_path: str = "adb"         # 全局；adb.exe 完整路径
+    log_dir: Path = Path("./logs")
+    template_dir: Path = Path("./templates")
+    # YOLO 权重路径（可选）。配置后每个模板 id 装配 Chain(模板匹配→YOLO 兜底)：
+    # 校准过的模板先行，YOLO 只在模板未命中时接住动画帧/背景偏移。
+    # 未配置=纯模板匹配（与旧版行为一致）
+    yolo_model: Path | None = None
+    # fill_<名字> 模板未命中时的 OCR 兜底（RapidOCR，账号无关名字识别）
+    ocr_name_fallback: bool = True
+    # 每个角色最多完成多少轮（开集结+填兵+返城算一轮）后自动停止
+    max_rounds: int = Field(default=10, ge=1)
+    # 连续多少轮以失败终态（no_fortress_found/locked_fortress/no_rally_found）
+    # 后自动停止；连续 step 异常则按此数的 2 倍计（异常不走终态）
+    max_consecutive_failures: int = Field(default=3, ge=1)
+    anti_detection: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
+
+
+class RootConfig(BaseModel):
+    app: AppConfig = Field(default_factory=AppConfig)
+    zhaiduo: ZhaiduoConfig
+    gem: ModeConfig = Field(default_factory=ModeConfig)
+    quiz: ModeConfig = Field(default_factory=ModeConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_flat_instances(cls, data):
+        """老格式（顶层 instances）→ 可操作的报错。
+
+        pydantic 默认忽略多余键，直接后果是用户看到一句光秃秃的
+        `zhaiduo / Field required`，不知道该干什么。**这是报错，不是迁移**：
+        经确认不做自动迁移，老配置报错、用户重配。
+
+        必须放在 RootConfig 的 mode="before" 里，不能挂在 load_config() 上——
+        GuiController.load_config 自己走 model_validate，不经过 load_config()。
+        """
+        if isinstance(data, dict) and "instances" in data and "zhaiduo" not in data:
+            raise ValueError(
+                "配置格式已更新：instances 现在挂在 zhaiduo 模式下。"
+                "请删除 config.yaml 后重启，程序会从 config.example.yaml 重新生成一份。")
+        return data
+
+    def instances_for(self, mode: AppMode) -> list[InstanceConfig]:
+        """该模式的实例列表。模式 → 配置段的映射只有这一处。"""
+        return getattr(self, mode.value).instances
+
+
+def find_level_collisions(instances: list[InstanceConfig]) -> list[str]:
     """找出「可能搜到同一寨子」的角色对，返回人类可读的告警文案。
 
     为什么是告警而不是校验错误：撞车不会让流程出错，只会白烧一次搜索
@@ -290,7 +351,7 @@ def find_level_collisions(config: RootConfig) -> list[str]:
     注意第 3 条只要求**任一方向**：A 填 B 而 B 不填 A 时同样会撞车，
     只查「互为」会漏掉这种配置。
     """
-    cars = [(i, c) for i in config.instances for c in i.characters
+    cars = [(i, c) for i in instances for c in i.characters
             if c.role in (RoleEnum.LEADER, RoleEnum.EITHER)]
     out: list[str] = []
     for idx, (inst_a, a) in enumerate(cars):

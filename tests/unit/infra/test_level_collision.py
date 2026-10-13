@@ -17,7 +17,7 @@ def _cfg(level_a, level_b, fill_ab=True, fill_ba=True):
     a_role = "either" if fill_ab else "leader"
     b_role = "either" if fill_ba else "leader"
     return RootConfig.model_validate({
-        "instances": [
+        "zhaiduo": {"instances": [
             {"id": "i0", "mumu_index": 0, "characters": [
                 {"id": "ca", "name": "A", "role": a_role,
                  "target_levels": _levels(level_a), "march_preset": 1,
@@ -28,7 +28,7 @@ def _cfg(level_a, level_b, fill_ab=True, fill_ba=True):
                  "target_levels": _levels(level_b), "march_preset": 1,
                  "march_troop_types": ["cavalry"],
                  "fill_target_leaders": b_targets}]},
-        ]})
+        ]}}).zhaiduo.instances
 
 
 def test_same_level_mutual_fill_warns():
@@ -75,7 +75,7 @@ def test_same_level_no_fill_relation_is_silent():
 def test_pure_member_does_not_participate():
     """纯 member 不开车，不参与撞车判定。"""
     cfg = RootConfig.model_validate({
-        "instances": [
+        "zhaiduo": {"instances": [
             {"id": "i0", "mumu_index": 0, "characters": [
                 {"id": "ca", "name": "A", "role": "leader",
                  "target_levels": [7], "march_preset": 1,
@@ -85,5 +85,5 @@ def test_pure_member_does_not_participate():
                  "target_levels": [7], "march_preset": 1,
                  "march_troop_types": ["cavalry"],
                  "fill_target_leaders": [{"instance": "i0", "name": "A"}]}]},
-        ]})
-    assert find_level_collisions(cfg) == []
+        ]}})
+    assert find_level_collisions(cfg.zhaiduo.instances) == []

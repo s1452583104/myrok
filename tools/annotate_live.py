@@ -274,10 +274,10 @@ def main() -> int:
     from ultralytics import YOLO
 
     config = load_config(Path(args.config))
-    inst = next((i for i in config.instances if i.id == args.instance), None)
+    inst = next((i for i in config.zhaiduo.instances if i.id == args.instance), None)
     if inst is None:
         print(f"实例 {args.instance!r} 不在 config.yaml（可选："
-              f"{[i.id for i in config.instances]}）")
+              f"{[i.id for i in config.zhaiduo.instances]}）")
         return 1
     handle = create_handle_source(
         mumu_index=inst.mumu_index, mumu_manager_path=config.app.mumu_manager_path,

@@ -7,7 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from ..coordination.event_bus import EventBus
 from ..coordination.runtime import RuntimeCoordinator
 from ..infra.app_paths import config_path as default_config_path
-from ..infra.config import RootConfig
+from ..infra.config import AppMode, IMPLEMENTED_MODES, MODE_LABELS, RootConfig
 from ..infra.licensing import guard
 from ..infra.logger import get_logger
 
@@ -62,20 +62,28 @@ class GuiController(QObject):
             self.load_config()
         out = []
         if self._config:
-            for inst in self._config.instances:
+            for inst in self._config.instances_for(AppMode.ZHAIDUO):
                 for char in inst.characters:
                     out.append({"instance_id": inst.id, "char_id": char.id,
                                 "char_name": char.name, "role": char.role.value})
         return out
 
     # ---- 运行 ----
-    def start(self) -> bool:
+    def start(self, mode: AppMode = AppMode.ZHAIDUO) -> bool:
         """成功返回 True，捕获到异常返回 False（错误经 error_occurred 弹出）。
 
         返回值是给界面用的：失败时界面**不能**切到「运行中」态——启动预检
         被拒（本分支的主场景）时异常在这里被吞、方法正常返回，界面若照旧
         置位就会谎报运行中，Stop 可点而实际什么都没跑。
+
+        mode 是模式进入运行时的**唯一入口**：五行的边界检查换掉「某个
+        setEnabled 漏了就直接跑起来」。RuntimeCoordinator 只跑寨多多，
+        所以非寨多多一律拒绝。
         """
+        if mode not in IMPLEMENTED_MODES:
+            self.error_occurred.emit(
+                f"{MODE_LABELS[mode]}尚未开放，无法启动任务")
+            return False
         # 纵深防御：GUI 的 _on_start 已经拦过一道，这里再拦一道，
         # 覆盖不经过界面的调用方（预检脚本、将来的 CLI）。
         # 放在配置闸门**之前**：与 _on_start 的「先授权后配置」同序，

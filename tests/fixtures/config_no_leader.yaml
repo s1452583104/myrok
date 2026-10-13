@@ -1,14 +1,15 @@
 app: {}
-instances:
-  - id: bad
-    mumu_index: 0
-    characters:
-      - id: m1
-        name: "OnlyMember"
-        role: member
-        target_levels:
-        - 5
-        march_preset: 1
-        march_troop_types: [infantry]
-        fill_target_leaders:
-          - { instance: bad, name: "Ghost" }
+zhaiduo:
+  instances:
+    - id: bad
+      mumu_index: 0
+      characters:
+        - id: m1
+          name: "OnlyMember"
+          role: member
+          target_levels:
+          - 5
+          march_preset: 1
+          march_troop_types: [infantry]
+          fill_target_leaders:
+            - { instance: bad, name: "Ghost" }

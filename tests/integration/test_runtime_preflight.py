@@ -7,12 +7,12 @@ from rok_assistant.infra.config import RootConfig
 # 就地写一份最小配置，**不要**从 test_preflight 里 import——本仓库还没有
 # 跨测试模块 import 的先例，而那会让 pytest 把同一个模块收两遍。
 CFG = {
-    "instances": [
+    "zhaiduo": {"instances": [
         {"id": "mumu0", "name": "如愿", "mumu_index": 0,
          "characters": [{"id": "c0", "name": "车头", "role": "leader",
                          "target_levels": [5], "march_preset": 1,
                          "march_troop_types": ["cavalry"]}]},
-    ],
+    ]},
 }
 
 

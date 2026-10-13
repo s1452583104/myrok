@@ -9,7 +9,7 @@ from rok_assistant.infra.config import RootConfig
 CFG = {
     "app": {"mumu_manager_path": "M.exe", "adb_path": "adb.exe",
             "screen_width": 1920, "screen_height": 1080},
-    "instances": [
+    "zhaiduo": {"instances": [
         {"id": "mumu0", "name": "如愿", "mumu_index": 0,
          "characters": [{"id": "c0", "name": "车头", "role": "leader",
                          "target_levels": [5], "march_preset": 1,
@@ -20,7 +20,7 @@ CFG = {
                          "march_troop_types": ["cavalry"],
                          "fill_target_leaders": [{"instance": "mumu0",
                                                   "name": "车头"}]}]},
-    ],
+    ]},
 }
 
 
@@ -54,7 +54,7 @@ def test_preflight_returns_handles_for_all_instances(monkeypatch, caplog):
                         lambda **kw: frames[f"mumu{kw['mumu_index']}"])
     with caplog.at_level(logging.INFO,
                          logger="rok_assistant.coordination.preflight"):
-        handles = PF.preflight(_cfg().instances, _cfg().app)
+        handles = PF.preflight(_cfg().zhaiduo.instances, _cfg().app)
     assert set(handles) == {"mumu0", "mumu1"}
     # 成功也留一句：让用户知道连接**真的测过了**，而不是「没报错」（spec §7.1）
     assert any("预检通过：2 台模拟器" in r.getMessage()
@@ -70,7 +70,7 @@ def test_preflight_retries_then_names_the_instance(monkeypatch):
 
     monkeypatch.setattr(PF, "create_handle_source", _factory)
     with pytest.raises(RuntimeError) as ei:
-        PF.preflight(_cfg().instances, _cfg().app)
+        PF.preflight(_cfg().zhaiduo.instances, _cfg().app)
     msg = str(ei.value)
     assert "如愿" in msg and "mumu0" in msg and "MuMu 编号 0" in msg
     assert "device not found" in msg
@@ -82,7 +82,7 @@ def test_preflight_rejects_wrong_frame_shape(monkeypatch):
         PF, "create_handle_source",
         lambda **kw: _FakeHandle(np.zeros((1920, 1080, 3), dtype=np.uint8)))
     with pytest.raises(RuntimeError) as ei:
-        PF.preflight(_cfg().instances, _cfg().app)
+        PF.preflight(_cfg().zhaiduo.instances, _cfg().app)
     assert "(1920, 1080, 3)" in str(ei.value)
 
 
@@ -96,5 +96,5 @@ def test_preflight_succeeds_after_a_transient_failure(monkeypatch):
         return _FakeHandle(np.zeros((1080, 1920, 3), dtype=np.uint8))
 
     monkeypatch.setattr(PF, "create_handle_source", _factory)
-    handles = PF.preflight(_cfg().instances, _cfg().app)
+    handles = PF.preflight(_cfg().zhaiduo.instances, _cfg().app)
     assert set(handles) == {"mumu0", "mumu1"}

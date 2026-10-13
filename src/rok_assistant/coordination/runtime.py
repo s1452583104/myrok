@@ -8,7 +8,7 @@ import cv2
 
 from ..core.template_registry import TemplateRegistry
 from ..infra.app_paths import resolve_asset, user_dir
-from ..infra.config import RootConfig, RoleEnum, find_level_collisions
+from ..infra.config import AppMode, RootConfig, RoleEnum, find_level_collisions
 from ..infra.anti_detection import HumanProfile, JitteringHandleSource
 from ..infra.logger import get_logger
 from ..workers.factory import create_state_machine
@@ -115,7 +115,8 @@ class RuntimeCoordinator:
         self._stopped.clear()
         # 只告警不拦启动：同等级且互为填兵目标的两号可能搜到同一寨子，
         # 撞车只会白烧一次搜索（已降级不计失败），不该阻断运行
-        for msg in find_level_collisions(self._config):
+        instances = self._config.zhaiduo.instances
+        for msg in find_level_collisions(instances):
             logger.warning("%s", msg)
         # 先置位再组装：若中途失败（如识别器装配失败、第 2 台 worker 起不来），
         # 必须走回滚，否则半启动的 runner 成孤儿、下次 start() 会重复拉起
@@ -125,12 +126,12 @@ class RuntimeCoordinator:
             # 预检先行：在任何 worker 诞生之前确认每台模拟器都截得到
             # screen_width×screen_height 的画面。放在装配识别器之前——
             # 识别器要加载 ONNX，好几秒，连不上的时候不该白花（spec §7.3）。
-            handles = preflight(self._config.instances, self._config.app)
+            handles = preflight(instances, self._config.app)
             # 配置点名的车头交给 registry 兜底装配：manifest 是随包静态资源，
             # 用户改 fill_target_leaders 换车头时不会自动多出 fill_<名字> 条目
             fill_names = sorted({
                 t.name
-                for inst in self._config.instances
+                for inst in instances
                 for char in inst.characters
                 for t in char.fill_target_leaders
             })
@@ -140,7 +141,7 @@ class RuntimeCoordinator:
                             if self._config.app.yolo_model else None),
                 ocr_fallback=self._config.app.ocr_name_fallback,
                 fill_names=fill_names)
-            for inst in self._config.instances:
+            for inst in instances:
                 # 预检已经建好并验过帧，这里直接复用——见 preflight 的 docstring
                 handle = handles[inst.id]
                 profile = HumanProfile(self._config.app.anti_detection)
@@ -166,7 +167,7 @@ class RuntimeCoordinator:
 
     def _role_of(self, key: str) -> RoleEnum | None:
         """runner key（"实例id:角色id"）→ 配置里的分工。查不到返回 None。"""
-        for inst in self._config.instances:
+        for inst in self._config.zhaiduo.instances:
             for char in inst.characters:
                 if f"{inst.id}:{char.id}" == key:
                     return char.role

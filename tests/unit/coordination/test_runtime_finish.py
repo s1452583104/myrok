@@ -8,7 +8,7 @@ from rok_assistant.infra.config import RootConfig
 
 CFG = {
     "app": {"mumu_manager_path": "M.exe", "adb_path": "adb.exe"},
-    "instances": [
+    "zhaiduo": {"instances": [
         {"id": "mumu0", "mumu_index": 0,
          "characters": [{"id": "c0", "name": "车头", "role": "leader",
                          "target_levels": [5], "march_preset": 1,
@@ -19,7 +19,7 @@ CFG = {
                          "march_troop_types": ["cavalry"],
                          "fill_target_leaders": [{"instance": "mumu0",
                                                   "name": "车头"}]}]},
-    ],
+    ]},
 }
 
 
@@ -34,7 +34,7 @@ def _coord(bus):
 # 两个车头 + 一个成员：并发收工回归用（两个车头都会走「收尾」分支）。
 CFG_TWO_LEADERS = {
     "app": {"mumu_manager_path": "M.exe", "adb_path": "adb.exe"},
-    "instances": [
+    "zhaiduo": {"instances": [
         {"id": "mumu0", "mumu_index": 0,
          "characters": [{"id": "c0", "name": "头0", "role": "leader",
                          "target_levels": [5], "march_preset": 1,
@@ -49,7 +49,7 @@ CFG_TWO_LEADERS = {
                          "march_troop_types": ["cavalry"],
                          "fill_target_leaders": [{"instance": "mumu0",
                                                   "name": "头0"}]}]},
-    ],
+    ]},
 }
 
 

@@ -1,12 +1,13 @@
 app: {}
-instances:
-  - id: bad
-    mumu_index: 0
-    characters:
-      - id: l1
-        name: "Hero"
-        role: leader
-        target_levels:
-        - 16
-        march_preset: 1
-        march_troop_types: [infantry]
+zhaiduo:
+  instances:
+    - id: bad
+      mumu_index: 0
+      characters:
+        - id: l1
+          name: "Hero"
+          role: leader
+          target_levels:
+          - 16
+          march_preset: 1
+          march_troop_types: [infantry]

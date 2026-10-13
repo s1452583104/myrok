@@ -206,7 +206,7 @@ def _run_checks() -> list[tuple[str, bool, str]]:
             return f"{cfg_path} 读不出来: {type(e).__name__}: {e}"
 
         app = cfg.get("app") or {}
-        instances = cfg.get("instances") or []
+        instances = (cfg.get("zhaiduo") or {}).get("instances") or []
         if not instances:
             return f"{cfg_path} 里没有 instances"
 

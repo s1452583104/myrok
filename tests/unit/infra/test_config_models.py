@@ -3,7 +3,16 @@ from pydantic import ValidationError
 from rok_assistant.infra.config import (
     AppConfig, InstanceConfig, CharacterConfig, RoleEnum, FillLeader, RootConfig,
     RAIDER_TARGET, find_level_collisions, level_range,
+    AppMode, IMPLEMENTED_MODES, MODE_LABELS, ModeConfig, ZhaiduoConfig,
 )
+
+
+def _leader_inst() -> dict:
+    """最小可加载的 leader 实例（dict 形态，喂给 RootConfig 的模式段）。"""
+    return {"id": "i1", "mumu_index": 0,
+            "characters": [{"id": "c1", "name": "Hero", "role": "leader",
+                            "target_levels": [8], "march_preset": 1,
+                            "march_troop_types": ["infantry"]}]}
 
 
 def _leader(**kw):
@@ -22,8 +31,50 @@ def _member(**kw):
 
 
 def _root(*characters) -> RootConfig:
-    return RootConfig(instances=[InstanceConfig(
-        id="i1", mumu_index=0, characters=list(characters))])
+    return RootConfig(zhaiduo={"instances": [InstanceConfig(
+        id="i1", mumu_index=0, characters=list(characters))]})
+
+
+# ---- 模式分区（2026-10-13）----
+
+def test_app_mode_values_are_ascii_identifiers():
+    assert [m.value for m in AppMode] == ["zhaiduo", "gem", "quiz"]
+
+
+def test_mode_labels_cover_every_mode():
+    assert set(MODE_LABELS) == set(AppMode)
+    assert MODE_LABELS[AppMode.ZHAIDUO] == "寨多多模式"
+    assert MODE_LABELS[AppMode.GEM] == "宝石模式"
+    assert MODE_LABELS[AppMode.QUIZ] == "答题模式"
+
+
+def test_only_zhaiduo_is_implemented_for_now():
+    assert IMPLEMENTED_MODES == frozenset({AppMode.ZHAIDUO})
+
+
+def test_gem_and_quiz_may_be_empty():
+    """宝石/答题现在是空壳，配不出角色也不该加载失败。"""
+    cfg = RootConfig(zhaiduo={"instances": [_leader_inst()]})
+    assert cfg.gem.instances == []
+    assert cfg.quiz.instances == []
+
+
+def test_zhaiduo_requires_at_least_one_instance():
+    with pytest.raises(ValidationError):
+        RootConfig(zhaiduo={"instances": []})
+
+
+def test_instances_for_returns_that_modes_instances():
+    cfg = RootConfig(zhaiduo={"instances": [_leader_inst()]})
+    assert cfg.instances_for(AppMode.ZHAIDUO) == cfg.zhaiduo.instances
+    assert cfg.instances_for(AppMode.GEM) == []
+
+
+def test_legacy_flat_instances_gives_actionable_error():
+    """老配置（顶层 instances）不能只说 Field required —— 要告诉用户怎么办。"""
+    with pytest.raises(ValidationError) as ei:
+        RootConfig.model_validate({"app": {}, "instances": []})
+    assert "请删除 config.yaml 后重启" in str(ei.value)
 
 
 def test_leader_minimal():
@@ -40,7 +91,7 @@ def test_member_requires_fill_targets():
 def test_either_role_roundtrip():
     cfg = _root(_leader(),
                 _member(id="c3", name="F1", role=RoleEnum.EITHER))
-    either = cfg.instances[0].characters[1]
+    either = cfg.zhaiduo.instances[0].characters[1]
     assert either.role == RoleEnum.EITHER
     assert either.fill_target_leaders[0].name == "Hero"
 
@@ -68,14 +119,14 @@ def test_instance_duplicate_names():
 
 def test_mumu_and_adb_both_set_rejected():
     with pytest.raises(ValidationError, match="只能填一个"):
-        RootConfig(instances=[InstanceConfig(
+        RootConfig(zhaiduo={"instances": [InstanceConfig(
             id="i1", mumu_index=0, adb_address="127.0.0.1:16384",
-            characters=[_leader()])])
+            characters=[_leader()])]})
 
 
 def test_mumu_and_adb_both_empty_rejected():
     with pytest.raises(ValidationError, match="必须填一个"):
-        RootConfig(instances=[InstanceConfig(id="i1", characters=[_leader()])])
+        RootConfig(zhaiduo={"instances": [InstanceConfig(id="i1", characters=[_leader()])]})
 
 
 def test_window_title_pattern_optional():
@@ -100,20 +151,22 @@ def test_cross_instance_fill_target_ok():
     a = InstanceConfig(id="i1", mumu_index=0, characters=[_leader()])
     b = InstanceConfig(id="i2", mumu_index=1,
                        characters=[_member(fill_target_leaders=[FillLeader(instance="i1", name="Hero")])])
-    cfg = RootConfig(instances=[a, b])
-    assert cfg.instances[1].characters[0].fill_target_leaders[0].instance == "i1"
+    cfg = RootConfig(zhaiduo={"instances": [a, b]})
+    assert cfg.zhaiduo.instances[1].characters[0].fill_target_leaders[0].instance == "i1"
 
 
 def test_duplicate_instance_ids():
     with pytest.raises(ValidationError, match="实例 id 重复"):
-        RootConfig(instances=[InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
-                              InstanceConfig(id="i1", mumu_index=1, characters=[_leader(id="c9", name="H2")])])
+        RootConfig(zhaiduo={"instances": [
+            InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
+            InstanceConfig(id="i1", mumu_index=1, characters=[_leader(id="c9", name="H2")])]})
 
 
 def test_duplicate_character_ids():
     with pytest.raises(ValidationError, match="角色 id 重复"):
-        RootConfig(instances=[InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
-                              InstanceConfig(id="i2", mumu_index=1, characters=[_leader(name="H2")])])
+        RootConfig(zhaiduo={"instances": [
+            InstanceConfig(id="i1", mumu_index=0, characters=[_leader()]),
+            InstanceConfig(id="i2", mumu_index=1, characters=[_leader(name="H2")])]})
 
 
 def test_app_config_mumu_fields():
@@ -215,7 +268,7 @@ def test_collision_warning_reads_raider_target_in_chinese():
                         target_levels=[RAIDER_TARGET], march_preset=2,
                         march_troop_types=["cavalry"],
                         fill_target_leaders=[FillLeader(instance="i1", name="甲")])
-    warns = find_level_collisions(_root(a, b))
+    warns = find_level_collisions(_root(a, b).zhaiduo.instances)
     assert len(warns) == 1
     assert "劫掠者寨子" in warns[0] and "[0]" not in warns[0]
 

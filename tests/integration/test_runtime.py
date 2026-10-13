@@ -20,31 +20,32 @@ VALID = """
 app:
   mumu_manager_path: ""
   adb_path: "adb"
-instances:
-  - id: inst0
-    name: a
-    adb_address: "127.0.0.1:5555"
-    characters:
-      - id: boss
-        name: 车头
-        role: leader
-        target_levels:
-        - 7
-        march_preset: 1
-        march_troop_types: [cavalry]
-  - id: inst1
-    name: b
-    adb_address: "127.0.0.1:5556"
-    characters:
-      - id: worker
-        name: 成员
-        role: member
-        target_levels:
-        - 7
-        march_preset: 1
-        march_troop_types: [cavalry]
-        fill_target_leaders:
-          - { instance: inst0, name: 车头 }
+zhaiduo:
+  instances:
+    - id: inst0
+      name: a
+      adb_address: "127.0.0.1:5555"
+      characters:
+        - id: boss
+          name: 车头
+          role: leader
+          target_levels:
+          - 7
+          march_preset: 1
+          march_troop_types: [cavalry]
+    - id: inst1
+      name: b
+      adb_address: "127.0.0.1:5556"
+      characters:
+        - id: worker
+          name: 成员
+          role: member
+          target_levels:
+          - 7
+          march_preset: 1
+          march_troop_types: [cavalry]
+          fill_target_leaders:
+            - { instance: inst0, name: 车头 }
 """
 
 # 空模板清单：Registry 加载成功但 recognizers 为空，避免依赖真实 templates/
@@ -56,31 +57,32 @@ EITHER = """
 app:
   mumu_manager_path: ""
   adb_path: "adb"
-instances:
-  - id: inst0
-    name: a
-    adb_address: "127.0.0.1:5555"
-    characters:
-      - id: boss
-        name: 车头
-        role: leader
-        target_levels:
-        - 7
-        march_preset: 1
-        march_troop_types: [cavalry]
-  - id: inst1
-    name: b
-    adb_address: "127.0.0.1:5556"
-    characters:
-      - id: solo
-        name: 独狼
-        role: either
-        target_levels:
-        - 7
-        march_preset: 1
-        march_troop_types: [cavalry]
-        fill_target_leaders:
-          - { instance: inst0, name: 车头 }
+zhaiduo:
+  instances:
+    - id: inst0
+      name: a
+      adb_address: "127.0.0.1:5555"
+      characters:
+        - id: boss
+          name: 车头
+          role: leader
+          target_levels:
+          - 7
+          march_preset: 1
+          march_troop_types: [cavalry]
+    - id: inst1
+      name: b
+      adb_address: "127.0.0.1:5556"
+      characters:
+        - id: solo
+          name: 独狼
+          role: either
+          target_levels:
+          - 7
+          march_preset: 1
+          march_troop_types: [cavalry]
+          fill_target_leaders:
+            - { instance: inst0, name: 车头 }
 """
 
 
