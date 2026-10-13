@@ -868,7 +868,7 @@ class CharacterEditDialog(QDialog):
             cb = QCheckBox(str(lv))
             cb.setChecked(lv in self._level_order)
             self.level_checks[lv] = cb
-            row = i // 5 if i < 10 else i // 5 + 1     # 第 2 行留给区间分割线
+            row = i // 5 if lv <= RANGE_BOUNDARY else i // 5 + 1   # 第 2 行留给区间分割线
             level_grid.addWidget(cb, row, i % 5)
         range_sep = QFrame()
         range_sep.setObjectName("hSeparator")
