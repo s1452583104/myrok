@@ -166,12 +166,49 @@ def test_no_result_toast_retries_then_ends():
     assert sm._ctx.get("fail_reason") == "no_fortress_found"
 
 
+def _detail_reopens_after_each_search(sm, handle):
+    """造「点搜索 → 详情展开 → 点空地 → 详情收起」的真详情面板生命周期。
+
+    没有它时 `red_rally` 只能永远是同一个值：永远在场 = 空地点击收不掉 =
+    「上一座寨子的详情关不掉」（走 `stale_fortress_target` 放弃边，另有专项
+    用例）；永远不在场 = 连搜到都没有。真实的详情是**每次搜索重新展开**的，
+    所以要按点击序列算可见性：`search_btn` 每次被查（= `_confirm_search`）
+    就展开，点一次空地（960,540）就收起。
+    """
+    seq = {"open": 0, "closed": 0}
+
+    def _search(_img):
+        seq["open"] += 1
+        r = MagicMock()
+        r.matched = True
+        r.bbox = MagicMock(center=lambda: (50, 50))
+        return r
+
+    def _red_rally(_img):
+        r = MagicMock()
+        r.matched = seq["open"] > seq["closed"]
+        r.bbox = MagicMock(center=lambda: (50, 50))
+        return r
+
+    orig_click = handle.click
+
+    def _click(x, y, **kw):
+        if (x, y) == (960, 540):
+            seq["closed"] += 1
+        return orig_click(x, y, **kw)
+
+    sm._rec["search_btn"].recognize.side_effect = _search
+    sm._rec["red_rally"].recognize.side_effect = _red_rally
+    handle.click = _click
+
+
 def test_locked_fortress_dismisses_and_researches():
     sm, handle = _make_sm()
     recs = sm._rec
     # red_rally visible (detail popup there) but rally_attack_popup never
     # appears => locked: dismiss at empty ground, renormalize, re-search
     recs["rally_attack_popup"].recognize.return_value.matched = False
+    _detail_reopens_after_each_search(sm, handle)
     steps = 0
     while not sm.is_terminal() and steps < 120:
         sm.step()
@@ -499,13 +536,18 @@ def test_launch_gives_up_after_ap_refill_cap():
     # 弹窗永远复现：怎么补都不够
     sm._rec["ap_refill"].recognize.side_effect = _ap_popup_by_march_click(
         handle, res, reappear_until=99)
-    with pytest.raises(
-            RuntimeError,
-            match=f"行动力补充 {leader_sm._AP_REFILL_MAX} 次后 march_btn 仍点不出去"):
-        sm._launch({})
+    ctx = {}
+    sm._launch(ctx)
     # 行军点到上限就放弃（不死循环）；第 1 轮入口无残留弹窗 → 少补一次
     assert handle.clicks.count(_MARCH_PT) == leader_sm._AP_REFILL_MAX
     assert handle.clicks.count((1448, 379)) == leader_sm._AP_REFILL_MAX - 1
+    # 放弃方式是**干净结束本轮**，不是抛异常：抛异常时 runner 不重建 SM，
+    # 只会在同一个 LAUNCH 状态退避重试 6 次，每次都把体力再补一遍，最后以
+    # 「连续 6 次 step 异常」停掉 worker（2026-10-12 用户报的
+    # 「卡在体力界面 → 一直重试 → 最后失败退出程序」）
+    assert ctx["failed"] is True
+    assert ctx["fail_reason"] == "no_action_points"
+    assert sm.last_rally_event is None
 
 
 # ---- 预设槽选中态确认（2026-09-27）-----------------------------------------
@@ -863,6 +905,162 @@ def test_verify_corrects_a_lost_click():
     assert len(handle.clicks) == 1 + 1 + 3 + 3
 
 
+# ---- 劫掠者寨子（2026-10-11）：切 tab_raider，完全不碰等级 ----------
+
+from rok_assistant.infra.config import RAIDER_TARGET
+
+
+def _make_raider_sm(with_recognizer=True):
+    """劫掠者支路的 SM。`with_recognizer=False` 复刻「manifest 缺 tab_raider」。"""
+    sm, handle = _make_sm(target_levels=(RAIDER_TARGET,))
+    if with_recognizer:
+        sm._rec["tab_raider"] = _mock_rec()
+    return sm, handle
+
+
+def test_raider_target_clicks_tab_and_skips_levels():
+    sm, handle = _make_raider_sm()
+    _to_select_level(sm)
+    # search_icon 1 + tab_raider 1；level_minus/level_plus 一次都没有
+    # （劫掠者页没有等级行，打上去等于盲降空点）。
+    assert len(handle.clicks) == 2
+    assert handle.clicks[1] == (50, 50)      # 第二次点击来自 tab_raider（mock 中心）
+    assert sm.current == "SELECT_LEVEL"
+    assert sm._current_level({}) == RAIDER_TARGET
+
+
+def test_raider_target_logs_skip(caplog):
+    sm, _ = _make_raider_sm()
+    with caplog.at_level(logging.INFO):
+        _to_select_level(sm)
+    assert any("跳过等级设置" in r.message for r in caplog.records)
+
+
+def test_raider_target_without_recognizer_raises():
+    """识别器缺失时不能静默退化：_click 拿不到 id 是空操作，会在面板记住的
+    旧页签（野蛮人/城寨）上搜错目标。宁可按异常结束本轮。"""
+    sm, _ = _make_raider_sm(with_recognizer=False)
+    with pytest.raises(RuntimeError, match="tab_raider"):
+        _to_select_level(sm)
+
+
+def test_raider_target_mixed_with_level_rejected_at_construction():
+    """config 层已经挡了；SM 再断言一次，免得别处构造出混合列表后按
+    「0 级」这种不存在的目标一路搜下去。"""
+    with pytest.raises(ValueError, match="必须单独"):
+        _make_sm(target_levels=(RAIDER_TARGET, 6))
+
+
+def test_raider_flag_is_false_for_normal_levels():
+    sm, _ = _make_sm(target_levels=(7,))
+    assert sm._raider is False
+
+
+# ---- 等级区间切换（2026-10-13：11–15 级寨子上线）----
+
+def _add_range_recs(sm):
+    """给 SM 装上区间控件的识别器（灰态模板，命中即点）。"""
+    sm._rec["level_range_low"] = _mock_rec()
+    sm._rec["level_range_high"] = _mock_rec()
+    return sm
+
+
+def test_high_range_target_clicks_the_high_range_control():
+    """11–15 目标：点页签 → 点区间控件 → 读等级 → 点差量。"""
+    sm, handle = _make_sm_with_level([11, 13], target_levels=(13,))
+    _add_range_recs(sm)
+    _to_select_level(sm)
+    # search_icon 1 + tab_fortress 1 + level_range_high 1 + plus 2 = 5
+    assert len(handle.clicks) == 5
+
+
+def test_low_range_target_clicks_the_low_range_control():
+    sm, handle = _make_sm_with_level([7], target_levels=(7,))
+    _add_range_recs(sm)
+    _to_select_level(sm)
+    # search_icon 1 + tab 1 + level_range_low 1；等级已是 7，不点差量
+    assert len(handle.clicks) == 3
+
+
+def test_high_range_without_recognizer_raises():
+    """缺 level_range_high 时不能静默退化：点不动区间控件就会在 1–10
+    区间里搜，等于「配置要 13、实际搜 8」。宁可按异常结束本轮。"""
+    sm, handle = _make_sm_with_level([11], target_levels=(13,))
+    sm._rec["level_range_low"] = _mock_rec()      # 只有低区间，缺高区间
+    with pytest.raises(RuntimeError, match="level_range_high"):
+        _to_select_level(sm)
+
+
+def test_low_range_without_recognizer_warns_and_continues(caplog):
+    """缺 level_range_low 只警告：旧模板包行为与改动前一致。"""
+    sm, handle = _make_sm_with_level([7], target_levels=(7,))
+    with caplog.at_level(logging.WARNING):
+        _to_select_level(sm)
+    assert any("level_range_low" in r.message for r in caplog.records)
+    assert len(handle.clicks) == 2      # search_icon + tab，没有区间点击
+
+
+def test_raider_target_never_touches_the_range_control():
+    """劫掠者页没有等级行，也就不该有区间点击。"""
+    sm, _ = _make_raider_sm()
+    _add_range_recs(sm)
+    _to_select_level(sm)
+    assert len(sm._handle.clicks) == 2      # search_icon + tab_raider
+
+
+# ---- 劫掠者城寨搜完不自动弹详情面板（2026-10-11 实机复现）----
+#
+# 普通城寨：点「搜索」→ 面板收起 + 相机跳到目标 + **详情面板自动展开**，
+# red_rally 就在那儿。劫掠者城寨：只做到「面板收起 + 相机跳过去」，详情
+# 得再点一下屏幕正中心（目标就在那儿）才展开。实机实测：点搜索后 0.75s
+# 面板收起，再点正中心 0.72s 内 red_rally 命中。
+#
+# 不修的话每次劫掠者搜索都被记成 no_result，5 次烧完直接放弃本轮
+# （fail_reason=no_fortress_found）——就是用户报的「无法自动点集结」。
+
+def _to_confirm_search(sm):
+    _to_select_level(sm)
+    sm.step()          # SELECT_LEVEL -> CONFIRM_SEARCH（执行 _confirm_search）
+    assert sm.current == "CONFIRM_SEARCH"
+
+
+def test_raider_search_taps_center_when_panel_closes():
+    """面板收起（= 搜到了、相机已跳过去）→ 点一次屏幕正中心开详情。"""
+    sm, handle = _make_raider_sm()
+    _to_confirm_search(sm)
+    sm._rec["search_btn"].recognize.return_value.matched = False   # 面板收起
+    sm.step()          # CONFIRM_SEARCH -> CHECK_RESULT
+    assert sm.current == "CHECK_RESULT"
+    assert handle.clicks[-1] == (960, 540)
+    assert sm._ctx["search_outcome"] == "found"
+
+
+def test_raider_search_does_not_tap_when_panel_stays_open():
+    """面板不收起（无结果 toast / 慢加载）时一下都不许点：正中心那一下
+    会打在还盖着的面板上，把「没搜到」的判断搅浑。"""
+    sm, handle = _make_raider_sm()
+    _to_confirm_search(sm)
+    n = len(handle.clicks)
+    sm._rec["search_btn"].recognize.return_value.matched = True    # 面板留着
+    sm._rec["red_rally"].recognize.return_value.matched = False    # 也没搜到
+    sm.step()
+    assert handle.clicks[n:] == []
+    assert sm._ctx["search_outcome"] == "no_result"
+
+
+def test_normal_level_search_does_not_tap_center():
+    """普通城寨这时详情面板已经自动展开，同一个坐标是 `_EMPTY_GROUND`
+    （点空地关面板）——点下去等于把要等的面板关掉。"""
+    sm, handle = _make_sm(target_levels=(7,))
+    sm._rec["search_btn"].recognize.return_value.matched = False
+    _to_select_level(sm)
+    sm.step()          # -> CONFIRM_SEARCH
+    n = len(handle.clicks)
+    sm.step()          # -> CHECK_RESULT
+    assert handle.clicks[n:] == []
+    assert sm._ctx["search_outcome"] == "found"
+
+
 def test_verify_gives_up_after_bounded_rounds_without_raising():
     sm, handle = _make_sm_with_level([3, 3, 3], target_levels=(6,))
     _to_select_level(sm)
@@ -973,3 +1171,188 @@ def test_refill_ap_stops_early_when_dialog_closes():
     sm._rec["ap_refill"] = _ScriptedRec(True, True, False)
     assert sm._refill_ap() is True
     assert [c for c in handle.clicks if c == (1447, 570)] == [(1447, 570)]
+
+
+# ---- 2026-10-12 实机缺陷回归：行动力弹窗收不掉 / 寨子打不了 ----------------
+#
+# 用户报的两条：
+# 1. 「体力不足 → 能自主加体力 → 卡在体力界面不再有后续动作 → 一直重试 →
+#    最后失败退出程序」
+# 2. 「搜到的寨子被别的玩家集结 → 蓝色集结框不弹 → 一直卡在这座寨子上，
+#    直到它消失才重新发起；希望弹不出蓝色框时退回搜索页搜下一座」
+#
+# Phase 1 查到的根因（流水见 docs/HISTORY.md 2026-10-12）：
+# * `_refill_ap`/`_close_ap_dialog` 只按「ap_refill 模板还在不在」判成功——
+#   补没补上体力、弹窗到底关没关都没有独立证据，`_normalize_view` 里那次
+#   补体力连日志都没有；
+# * 补不动一律抛异常，而 WorkerRunner **不重建 SM**（只有终态冷却后才重建），
+#   异常只在同一状态退避重试 `_max_error_streak = max_consecutive_failures*2`
+#   = 6 次，每次都把体力再补一遍，最后以「连续 6 次 step 异常」停掉 worker；
+# * `_verify_unlocked` 把「10s 内没等到蓝色集结框」一律判成「被别人集结」，
+#   `_click_red_rally` 的点击结果被丢掉，`_recover_locked` 点一下空地就走，
+#   没有任何一步确认「上一座寨子的详情真的收掉了、搜出来的是新目标」。
+
+
+def test_ap_exhaustion_reaches_end_and_never_wakes_members():
+    """补不动体力 → 本轮干净收尾（fail_reason=no_action_points），
+    绝不发布 rally_launched 让成员白等一轮。"""
+    from rok_assistant.coordination.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("rally_launched", lambda p: events.append(p))
+    sm, handle = _make_sm()
+    sm._bus = bus
+    _unique_march_point(sm)
+    res = sm._rec["ap_refill"].recognize.return_value
+    sm._rec["ap_refill"].recognize.side_effect = _ap_popup_by_march_click(
+        handle, res, reappear_until=99)
+    for _ in range(40):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm._ctx["fail_reason"] == "no_action_points"
+    assert events == []
+
+
+def test_normalize_ap_dialog_wont_close_ends_round_loudly(caplog):
+    """归一化时行动力弹窗收不掉 → 明说「行动力补充弹窗」，不再是笼统的
+    「归一化失败：卡在[未知]视图」（2026-10-04 实机 mumu1 就是这么报的，
+    读日志的人根本看不出是弹窗没关）。"""
+    sm, handle = _make_sm()
+    sm._rec["search_icon"].recognize.return_value.matched = False  # 不在地图视图
+    sm._rec["ap_refill"] = _ScriptedRec(True)      # 弹窗永远在，X 也关不掉
+    ctx = {}
+    with caplog.at_level(logging.WARNING):
+        sm._normalize_view(ctx)
+    assert ctx.get("fail_reason") == "ap_dialog_stuck"
+    assert ctx.get("failed") is True
+    assert any("行动力补充弹窗" in r.getMessage() for r in caplog.records)
+    assert (1638, 120) in handle.clicks            # 真的去点了 X（且不止一次）
+
+
+def test_normalize_ap_dialog_closed_resumes_normally():
+    """弹窗关得掉时归一化照常走完（不能因为加了判据就把正常路径堵死）。"""
+    sm, handle = _make_sm()
+    sm._rec["ap_refill"] = _ScriptedRec(True, False, False)
+    ctx = {}
+    sm._normalize_view(ctx)
+    assert ctx.get("fail_reason") is None
+    assert sm.current == "IDLE"                    # 动作不自己改状态
+
+
+def test_close_ap_dialog_confirms_before_declaring_closed():
+    """单次模板失配不能当成「弹窗已关」：`ap_refill` 的 ROI 只有
+    [800,90,1300,170] 一条窄带，一次失配就返回 True 会让调用方以为弹窗没了，
+    于是再也不点 X（`_launch` 转头去怪 march_btn）。"""
+    sm, handle = _make_sm()
+    sm._rec["ap_refill"] = _ScriptedRec(False, True, True)   # 先失配、复核时还在
+    assert sm._close_ap_dialog() is False
+    assert (1638, 120) in handle.clicks
+
+
+def test_refill_ap_reports_and_logs_what_it_did(caplog):
+    """补体力不再静默：说清吃了几口、弹窗关没关（`_normalize_view` 那条
+    路径以前连一行日志都没有，实机复盘时完全看不见）。"""
+    sm, handle = _make_sm()
+    sm._rec["ap_refill"] = _ScriptedRec(True)
+    with caplog.at_level(logging.INFO):
+        assert sm._refill_ap() is False
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "行动力" in joined
+    assert str(sm._AP_EAT_MAX) in joined
+
+
+def test_red_rally_click_miss_is_not_silently_a_lock(caplog):
+    """红色集结按钮根本没点到 ≠ 被别人集结。旧实现把 `_click_retry` 的
+    返回值丢掉，`_verify_unlocked` 只会等 10s 然后记一次锁定——点击没落地
+    被算成「城寨被别人占了」，白烧 5 个锁定名额里的一个。"""
+    sm, handle = _make_sm()
+    sm._rec["red_rally"].recognize.return_value.matched = False
+    ctx = {}
+    with caplog.at_level(logging.WARNING):
+        sm._click_red_rally(ctx)
+        clicked = ctx["red_rally_clicked"]      # _verify_unlocked 会 pop 掉它
+        sm._verify_unlocked(ctx)
+    assert clicked is False
+    assert ctx["not_locked"] is False
+    assert ctx["lock_cause"] == "click_missed"
+    assert any("red_rally" in r.getMessage() for r in caplog.records)
+
+
+def test_verify_unlocked_names_the_cause_of_a_missing_popup():
+    """蓝色集结框没出现时要说清是哪种：详情还开着（这一座打不了）／有模态
+    弹窗压着／就是没弹。日志里只有「被锁定」时，用户和我们都没法判断。"""
+    sm, handle = _make_sm()
+    sm._rec["rally_attack_popup"].recognize.return_value.matched = False
+    ctx = {"red_rally_clicked": True}
+    sm._verify_unlocked(ctx)
+    assert ctx["not_locked"] is False
+    assert ctx["locked_count"] == 1
+    assert ctx["lock_cause"] == "detail_still_open"    # red_rally 仍在场
+
+
+def test_verify_unlocked_cause_no_popup_when_nothing_is_in_the_way():
+    """详情收掉了、也没有模态挡着，蓝框就是不弹（服务器慢/真被占）——
+    这是**唯一**能记成「就是没弹」的情形，其余都要说清是什么挡着。"""
+    sm, handle = _make_sm()
+    recs = sm._rec
+    for rid in ("rally_attack_popup", "red_rally", "ap_refill",
+                "form_title", "warning_panel", "net_error_confirm",
+                "replace_popup"):
+        if rid in recs:
+            recs[rid].recognize.return_value.matched = False
+    ctx = {"red_rally_clicked": True}
+    sm._verify_unlocked(ctx)
+    assert ctx["lock_cause"] == "no_popup"
+    assert handle.clicks == []                     # 没东西挡着 → 一次点击都不该有
+
+
+def test_recover_locked_verifies_the_detail_closed():
+    """锁定恢复前要**确认** red_rally 消失，不是点完就走——放大镜 ROI
+    [0,700,240,940] 与详情面板的 red_rally ROI [1200,660,1600,820] 完全不
+    重叠，所以详情还开着时 NORMALIZE 会直接判「已在地图视图」返回。"""
+    sm, handle = _make_sm()
+    sm._rec["rally_attack_popup"].recognize.return_value.matched = False
+    # 诊因那次 _find 见 True，收详情时再见一次 True（于是真去点空地），
+    # 点完复核 False = 收掉了
+    sm._rec["red_rally"].recognize.side_effect = _ScriptedRec(True, True, False).recognize
+    ctx = {"red_rally_clicked": True}
+    sm._verify_unlocked(ctx)
+    assert (960, 540) in handle.clicks
+    assert ctx["prev_target_dismissed"] is True
+    assert ctx.get("fail_reason") is None          # 收得掉 → 走恢复边重搜
+
+
+def test_recover_locked_reports_a_detail_it_cannot_dismiss(caplog):
+    """详情收不掉 → 本轮放弃（fail_reason=stale_fortress_target），由
+    VERIFY_UNLOCKED→END 干净收尾，绝不重搜后再点残留的 red_rally。"""
+    sm, handle = _make_sm()
+    sm._rec["rally_attack_popup"].recognize.return_value.matched = False
+    sm._rec["red_rally"] = _ScriptedRec(True)      # 怎么点都收不掉
+    ctx = {"red_rally_clicked": True}
+    with caplog.at_level(logging.WARNING):
+        sm._verify_unlocked(ctx)
+    assert ctx["prev_target_dismissed"] is False
+    assert ctx["fail_reason"] == "stale_fortress_target"
+    assert any("详情弹窗" in r.getMessage() for r in caplog.records)
+
+
+def test_stale_target_ends_round_instead_of_reclicking_the_same_fortress():
+    """上一座寨子的详情收不掉 → 绝不能把残留的 red_rally 当成新搜索结果
+    再点一次：那样会一直卡在同一座寨子上反复「集结」，直到它消失
+    （2026-10-12 用户报）。改为干净结束本轮，冷却后重建 SM 重新开始。"""
+    sm, handle = _make_sm()
+    recs = sm._rec
+    recs["rally_attack_popup"].recognize.return_value.matched = False
+    recs["red_rally"] = _ScriptedRec(True)         # 空地点击收不掉，永远在场
+    for _ in range(80):
+        sm.step()
+        if sm.is_terminal():
+            break
+    assert sm.is_terminal()
+    assert sm._ctx["fail_reason"] == "stale_fortress_target"
+    assert (960, 540) in handle.clicks
+    # 关键：红色集结按钮只被点了一次，没有反复点同一座寨子
+    # （旧实现会把 5 个锁定名额全烧在这座寨子上）
+    assert sm.history.count("CLICK_RED_RALLY") == 1

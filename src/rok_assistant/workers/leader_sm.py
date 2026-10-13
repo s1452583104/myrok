@@ -7,6 +7,14 @@ from .queue_gate import GateDecision
 from ..core.recognizers.pixel_stat import (
     PRESET_COL_HALF_X, PRESET_CX, PRESET_PITCH, PRESET_TOP, slot_center)
 from ..core.recognizers.view_probe import View, ViewProbe
+from ..infra.config import (
+    MAX_TARGET_LEVEL,
+    MIN_TARGET_LEVEL,
+    RAIDER_TARGET,
+    RANGE_BOUNDARY,
+    level_range,
+    target_label,
+)
 from ..infra.logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,6 +24,17 @@ logger = get_logger(__name__)
 _MAX_NO_RESULT = 5
 _MAX_LOCKED = 5
 _EMPTY_GROUND = (960, 540)   # tap empty ground to dismiss the detail popup
+# 劫掠者城寨搜完**不自动弹详情面板**（2026-10-11 实机复现）。普通城寨搜完
+# 相机跳过去、详情面板自动展开，red_rally 就在那儿；劫掠者城寨只做到「相机
+# 跳过去」，详情得再点一下屏幕正中心（目标就在那儿）才展开。实机实测：点
+# 「搜索」后 0.75s 面板收起（= 搜到了、相机到位），此时点正中心 0.72s 内
+# red_rally 命中。
+#
+# 坐标与 _EMPTY_GROUND 是同一个点，**语义相反**（那里是「点空地关面板」）：
+# 区别只在时机。所以这一步只能挂在劫掠者支路上——普通城寨这时详情已经开着，
+# 点下去等于把要等的面板关掉。
+_RAIDER_PAN_ATTEMPTS = 8     # 等搜索面板收起的轮数（每轮一个轮询间隔 ≈1.1s）
+_RAIDER_PAN_SETTLE = 1.5     # 面板收起后再等相机跳完（秒，再乘 profile 抖动）
 # 派遣队列侧栏展开态会盖掉整个底部栏（含 search_icon/map_btn，2026-09-11
 # 实机验收 mumu1 卡死态）：点侧栏外空地收起侧栏与「创建部队」引导气泡。
 _QUEUE_SIDEBAR_DISMISS = (1550, 320)
@@ -56,6 +75,32 @@ _GATE_LOG_INTERVAL = 30.0
 # 给够次数，否则道具还没吃完就先放弃了。
 _AP_REFILL_MAX = 8
 
+# ---- 本轮放弃的 fail_reason（2026-10-12）--------------------------------
+# 这三个都是「环境/体力问题，本轮干不下去了」而不是「附近没城寨了」，所以
+# 用**干净结束本轮**（置 fail_reason → 走 END 边）代替抛异常。
+#
+# 为什么不抛：`WorkerRunner._run` 捕获异常后**不重建 SM**（只有终态冷却后
+# 才重建），只在同一状态退避 10s 重试，连续 `_max_error_streak =
+# max_consecutive_failures * 2 = 6` 次才停 worker。对一个「收不掉的模态
+# 弹窗」来说，重试 6 次等于把同一个动作原样重放 6 遍——`_launch` 里那圈
+# 补体力每次都会再吃 4 口道具，最后以「连续 6 次 step 异常（疑似体力耗尽
+# 或环境异常），停止」收场。2026-10-12 用户报的「卡在体力界面不再有后续
+# 动作 → 一直重试 → 最后失败退出程序」正是这条路径。
+#
+# 干净结束本轮的好处：冷却后 runner 重建 SM，从 IDLE→NORMALIZE 重新开始，
+# 而归一化里本来就有收行动力弹窗的代码——同一条路走两遍，第一遍卡住、
+# 第二遍往往就通了（NORMALIZE 是幂等的，重放它没有副作用）。
+_NO_AP_REASON = "no_action_points"           # 体力补不动 / 弹窗关不掉
+_AP_STUCK_REASON = "ap_dialog_stuck"         # 归一化时行动力弹窗收不掉
+_STALE_TARGET_REASON = "stale_fortress_target"   # 上一座寨子详情收不掉
+
+# 收「城寨详情」弹窗：点空地，确认 red_rally 消失。放大镜 ROI
+# [0,700,240,940] 与 red_rally ROI [1200,660,1600,820] 完全不重叠，所以
+# 详情还开着时 `_normalize_view` 会直接判「已在地图视图」返回——**不能**
+# 指望归一化顺手把详情收掉。
+_DETAIL_DISMISS_TRIES = 2
+_DETAIL_DISMISS_TIMEOUT = 4.0
+
 
 class LeaderStateMachine(StateMachine):
     """集结车头。真实 UI 流程（2026-09 实测，ACCEPTANCE §1.4/§1.5）：
@@ -77,6 +122,13 @@ class LeaderStateMachine(StateMachine):
     已知限制：读出的等级可能来自非城寨页（面板会记住上次 Tab，而野蛮人页
     也有等级）——同一 ROI 上若两页都能读出合法数字，回读自洽、不会被自纠
     机制发现。待实机确认（spec §9）。
+
+    劫掠者寨子（2026-10-11）：`target_levels == [RAIDER_TARGET]` 时走
+    **另一条支路**——切「劫掠者城寨」页签（tab_raider）后**完全不碰等级**
+    （那一页没有等级行，实测 OCR 只有描述文字 + 搜索按钮），直接搜索。
+    此后与普通城寨**差一步**（2026-10-11 实机复现）：那一页搜完只把相机
+    跳到目标，**不自动展开详情面板**，得再点一下屏幕正中心才出 red_rally
+    （见 `_open_raider_detail`）。详情弹窗之后的流程（红集结 → …）逐字相同。
     """
 
     def __init__(self, handle_source, recognizers: dict, target_levels: list[int],
@@ -92,6 +144,17 @@ class LeaderStateMachine(StateMachine):
         # _MAX_NO_RESULT 次无结果就换下一个，绕完一圈放弃。顺序完全按
         # 配置，不做降序假设（用户明确要求 6→4→5 这类顺序合法）
         self._target_levels = list(target_levels)
+        # 劫掠者寨子：不分等级、页签不同（见类 docstring）。只认「列表就是
+        # 单独一个 RAIDER_TARGET」这一种形态——config 层的 _check_levels
+        # 保证它不会与等级共存，这里再断言一次，免得别处构造出混合列表后
+        # 静默按普通城寨搜（那会一直搜到「0 级」这种不存在的目标）。
+        if RAIDER_TARGET in self._target_levels:
+            if self._target_levels != [RAIDER_TARGET]:
+                raise ValueError(
+                    f"劫掠者寨子必须单独作为搜索目标，收到 {self._target_levels}")
+            self._raider = True
+        else:
+            self._raider = False
         # 有序预设列表（2026-10-09）：每项 (预设号, 兵种列表)。第一个确认
         # 不了高亮就换下一个（返程中的主将载不出预设，见 _select_preset）。
         # 新参数是**关键字**且在末尾：既有的 18 处位置参数调用（测试 +
@@ -288,6 +351,10 @@ class LeaderStateMachine(StateMachine):
 
     def _setup(self):
         self.add_transition("IDLE", "NORMALIZE", self._normalize_view)
+        # 归一化收不掉行动力弹窗 → 干净结束本轮（必须先于 NORMALIZE→SEARCH_FORTRESS
+        # 注册：StateMachine 按注册顺序取第一条 guard 通过的转移）
+        self.add_transition("NORMALIZE", "END", self._abort_round,
+                            guard=lambda ctx: ctx.get("fail_reason") == _AP_STUCK_REASON)
         self.add_transition("NORMALIZE", "SEARCH_FORTRESS", self._search_fortress)
         self.add_transition("SEARCH_FORTRESS", "SELECT_LEVEL", self._select_level)
         self.add_transition("SELECT_LEVEL", "CONFIRM_SEARCH", self._confirm_search)
@@ -311,6 +378,11 @@ class LeaderStateMachine(StateMachine):
         self.add_transition("CLICK_RED_RALLY", "VERIFY_UNLOCKED", self._verify_unlocked)
         self.add_transition("VERIFY_UNLOCKED", "SELECT_RALLY_TIME", self._open_troop_form,
                             guard=lambda ctx: ctx.get("not_locked"))
+        # 详情弹窗收不掉（`_verify_unlocked` 判据）→ 屏幕上那块 red_rally 是
+        # **上一座寨子的残留**，重搜也证明不了搜到的是新目标。干净结束本轮
+        # （必须先于恢复边注册：StateMachine 按注册顺序取第一条 guard 通过的）
+        self.add_transition("VERIFY_UNLOCKED", "END", self._abort_round,
+                            guard=lambda ctx: ctx.get("fail_reason") == _STALE_TARGET_REASON)
         # 恢复边必须先于放弃边注册（同上）
         self.add_transition("VERIFY_UNLOCKED", "NORMALIZE", self._recover_locked,
                             guard=lambda ctx: not ctx.get("not_locked")
@@ -319,10 +391,11 @@ class LeaderStateMachine(StateMachine):
                             guard=lambda ctx: not ctx.get("not_locked"))
         self.add_transition("SELECT_RALLY_TIME", "FORM_TROOP", self._form_troop)
         self.add_transition("FORM_TROOP", "LAUNCH", self._launch)
-        # 集结被游戏静默拒绝的放弃边必须先于等待成员边注册：StateMachine
-        # 按注册顺序取第一条匹配转移（2026-09-18 run11 run 实锤）
-        self.add_transition("LAUNCH", "END", lambda ctx: None,
-                            guard=lambda ctx: ctx.get("fail_reason") == "rally_rejected")
+        # 集结被游戏静默拒绝 / 体力补不动的放弃边必须先于等待成员边注册：
+        # StateMachine 按注册顺序取第一条匹配转移（2026-09-18 run11 实锤）
+        self.add_transition("LAUNCH", "END", self._abort_round,
+                            guard=lambda ctx: ctx.get("fail_reason")
+                            in ("rally_rejected", _NO_AP_REASON))
         self.add_transition("LAUNCH", "WAIT_MEMBERS", self._wait_members)
         self.add_transition("WAIT_MEMBERS", "END", lambda ctx: None,
                             guard=lambda ctx: ctx.get("departed"))
@@ -358,8 +431,20 @@ class LeaderStateMachine(StateMachine):
             # mumu0 77/140）：补体力（每日免费 500 + 初级恢复 100）而非关
             # 弹窗 —— 2026-09-18 run9 实锤加入行军同样耗行动力，140 自然
             # 上限跑不满 10 轮目标，历次「连续 3 轮失败」停机根因即此
-            if not self._refill_ap():
-                self._handle.click(1638, 120)
+            #
+            # 2026-10-12：补完还关不掉就**明说**，不再点一次 X 就往下走。
+            # 旧实现点一下 (1638,120) 当弹窗没了，后面的清理点击全打在模态
+            # 上、`map_btn` 点不动，最后报成笼统的「归一化失败：卡在[未知]
+            # 视图」（2026-10-04 19:28 mumu1 就是这么报的，读日志的人看不出
+            # 是弹窗没关）。这里改为干净结束本轮：冷却后重建 SM 从 NORMALIZE
+            # 重来一遍，而 NORMALIZE 自己就能再收一次这个弹窗。
+            if not self._refill_ap() and not self._close_ap_dialog():
+                logger.warning("[归一化] 行动力补充弹窗补体力后仍关不掉，"
+                               "本轮放弃（fail_reason=%s）", _AP_STUCK_REASON)
+                ctx["failed"] = True
+                ctx["fail_reason"] = _AP_STUCK_REASON
+                self.last_rally_event = None
+                return
         if self._find("form_title"):
             # 创建部队表单残留（上轮进程被杀在 FORM_TROOP，2026-09-12 实机
             # mumu0）：全屏模态盖住一切，点右上角 X 关闭再归一化
@@ -502,12 +587,62 @@ class LeaderStateMachine(StateMachine):
         logger.warning("[车头] 等级回读仍未确认（目标 %s 级），继续本轮", target)
         return False
 
+    def _switch_level_range(self, target: int) -> None:
+        """把搜索面板切到 target 所在的等级区间（灰态模板，幂等）。
+
+        与 tab_fortress / tab_raider 同一套惯用法：模板只裁**未选中**态，
+        命中 ⇔ 当前不在该区间 ⇔ 点它；已在目标区间就不命中，`_click`
+        自动跳过。**不需要先读状态**——「面板当前停在哪个区间」本来就不
+        容易读准，靠"点一下没坏处"把这个不确定性消掉。
+        """
+        low = level_range(target)[0]
+        rid = "level_range_high" if low > RANGE_BOUNDARY else "level_range_low"
+        if rid not in self._rec:
+            if low > RANGE_BOUNDARY:
+                # 识别器缺失时 `_click` 是**静默空操作**。对 11–15 目标不能
+                # 静默：点不动区间控件就会在 1–10 区间里搜，等于「配置要 13、
+                # 实际搜 8」。宁可按异常结束本轮（runner 会计失败并停机）。
+                raise RuntimeError(
+                    f"目标等级 {target} 属于 {low}–{MAX_TARGET_LEVEL} 区间，"
+                    f"但识别器里没有 {rid}"
+                    "（templates/manifest.yaml 缺条目或模板 PNG 缺失）")
+            # 低区间：旧模板包没有这个条目，行为与改动前一致（只警告）。
+            # 若面板实际停在 11–15 区间会搜错等级，但**不静默**——回读值
+            # 不在目标区间内会被 _verify_level 判失败并留下 warning，
+            # 最终由 no_result 计数自然兜住本轮。
+            logger.warning(
+                "[车头] 缺少 %s 识别器，无法确认面板停在哪个等级区间；"
+                "若面板停在 %s–%s 区间会搜错等级", rid,
+                RANGE_BOUNDARY + 1, MAX_TARGET_LEVEL)
+            return
+        self._click(rid)
+
     def _select_level(self, ctx):
         # 面板记住上次的 Tab（实测落在「野蛮人」上，2026-09-11 实机验收发现）。
         # tab_fortress 模板采的是未选中（灰色）态：匹配到 ⇔ 当前不在城寨页，
         # 点它切换；已在城寨页（棕色选中态）不匹配，_click 自动跳过。
+        #
+        # 劫掠者寨子走同一条「点页签切换」的路子，但**到此为止**：那一页没有
+        # 等级行，下面的读等级/点差量/回读校验全都无从谈起（读不到会一路退回
+        # 盲降，12 次 level_minus 打在空处）。tab_raider 与 tab_fortress 同样是
+        # 灰态模板：在城寨页/野蛮人页时命中并点过去，已在劫掠者页时不命中。
+        if self._raider:
+            if "tab_raider" not in self._rec:
+                # 识别器缺失时 `_click` 是**静默空操作**（state_machine._find
+                # 拿不到就返回 None）。对普通页签无所谓，这里不行：点不动页签
+                # 就会在面板记住的旧页签上搜，等于「配置要劫掠者、实际搜普通
+                # 城寨」。宁可按异常结束本轮（runner 会计失败并停机）也不静默
+                # 搜错目标。
+                raise RuntimeError(
+                    "配置指定了劫掠者寨子，但识别器里没有 tab_raider"
+                    "（templates/manifest.yaml 缺条目或模板 PNG 缺失）")
+            self._click("tab_raider")
+            logger.info("[车头] 目标为劫掠者寨子（不分等级），跳过等级设置")
+            return
         self._click("tab_fortress")
         target = self._current_level(ctx)
+        # 必须先切区间再读等级：读出来的值要反映切换后的区间
+        self._switch_level_range(target)
 
         current = self._read_level()
         if current is None:
@@ -529,6 +664,8 @@ class LeaderStateMachine(StateMachine):
     def _check_result(self, ctx):
         ctx.setdefault("no_result_count", 0)
         ctx.setdefault("locked_count", 0)
+        if self._raider:
+            self._open_raider_detail()
         if self._wait_for("red_rally", timeout=8.0):
             ctx["search_outcome"] = "found"
             return
@@ -547,9 +684,42 @@ class LeaderStateMachine(StateMachine):
                        ctx["no_result_count"], _MAX_NO_RESULT,
                        ctx["last_search_toast"])
 
+    def _open_raider_detail(self) -> None:
+        """劫掠者寨子：等搜索面板收起（= 搜到了、相机已跳到目标）后，点一下
+        屏幕正中心把详情面板点开（见 `_RAIDER_PAN_ATTEMPTS` 的常量注释）。
+
+        面板**不收起**（无结果 toast / 慢加载）就直接返回，一下都不点：那两
+        种情况下正中心那一下会打在还盖着的面板/地图上，把「没搜到」的判断
+        搅浑。交给 `_check_result` 既有的 no_result 计数。
+
+        按轮数而不是墙钟计时：`leader_sm.time` 在单测里是不推进的替身
+        （见 test_leader_sm._NoSleepTime），墙钟循环会变成忙等。`_read_level`
+        / `_verify_level` / `_blind_set_level` 同样是计数上界。
+
+        点击走 `self._handle`，所以反检测那层照常生效：随机延迟 + 高斯散布
+        （`anchor="map_center"` 取一个比默认更小的 σ——目标是地图正中的城寨
+        图标，偏移大了可能点空）。
+        """
+        if "search_btn" not in self._rec:
+            # 连「面板在不在」都判不了，宁可不点：点错位置比漏点一下难查。
+            return
+        closed = False
+        for _ in range(_RAIDER_PAN_ATTEMPTS):
+            if self._find("search_btn") is None:
+                closed = True
+                break
+            pause = self._pause(None)
+            if pause > 0:
+                time.sleep(pause)
+        if not closed:
+            return
+        time.sleep(self._human.jitter(_RAIDER_PAN_SETTLE))
+        self._handle.click(*_EMPTY_GROUND, anchor="map_center")
+
     def _retry_search(self, ctx):
         # toast 弹出时搜索面板仍在背后——重同步等级（缓存已被
-        # _check_result 清掉，_select_level 走全量降底+升级）再搜
+        # _check_result 清掉，_select_level 走全量降底+升级）再搜。
+        # 劫掠者寨子没有等级可同步，_select_level 只重确认一次页签。
         self._select_level(ctx)
         self._click_retry("search_btn")
 
@@ -563,29 +733,110 @@ class LeaderStateMachine(StateMachine):
         prev = self._current_level(ctx)
         ctx["level_index"] = ctx.get("level_index", 0) + 1
         ctx["no_result_count"] = 0
-        logger.warning("[车头] %s 级连续 %s 次搜不到，改搜 %s 级"
-                       "（列表第 %s/%s 个）", prev, _MAX_NO_RESULT,
-                       self._current_level(ctx), ctx["level_index"] + 1,
-                       len(self._target_levels))
+        logger.warning("[车头] %s连续 %s 次搜不到，改搜 %s"
+                       "（列表第 %s/%s 个）", target_label(prev), _MAX_NO_RESULT,
+                       target_label(self._current_level(ctx)),
+                       ctx["level_index"] + 1, len(self._target_levels))
         self._retry_search(ctx)
 
     def _click_red_rally(self, ctx):
-        self._click_retry("red_rally")
+        # 点击结果**不能丢**：丢掉了，一次没落地的点击会被 `_verify_unlocked`
+        # 记成「城寨被别人集结」，白烧 5 个锁定名额里的一个
+        ctx["red_rally_clicked"] = self._click_retry("red_rally")
+        if not ctx["red_rally_clicked"]:
+            logger.warning("[车头] red_rally 点击未落地（模板没命中），"
+                           "这不等于城寨被占")
 
     def _verify_unlocked(self, ctx):
         # 锁定 = 点 red_rally 后集结攻击弹窗未出现（§3.3）。超时 5s -> 10s：
         # 2026-09-12 实机 mumu0/mumu1 同秒被判锁定（第 1、2/5 次）—— 弹窗
         # 服务器慢加载超 5s 被误判，每次误判白烧一轮全量重搜（~40s）还
         # 烧锁定计数。误判代价远高于真锁定多等 5s。
+        if not ctx.pop("red_rally_clicked", True):
+            # 按钮压根没点到：这是**点击问题**，不是「被别人集结」。仍然占一个
+            # 名额（否则这条边会无限循环），但原因要记清楚——日志里只有
+            # 「被锁定」时，用户和我们都没法判断到底卡在哪。
+            ctx["not_locked"] = False
+            ctx["lock_cause"] = "click_missed"
+            ctx["locked_count"] = ctx.get("locked_count", 0) + 1
+            logger.warning("[车头] 未进入集结（第 %s/%s 次，原因=red_rally 点击没落地）",
+                           ctx["locked_count"], _MAX_LOCKED)
+            return
         ctx["not_locked"] = self._wait_for("rally_attack_popup", timeout=10.0)
         if not ctx["not_locked"]:
+            ctx["lock_cause"] = self._diagnose_missing_popup()
             ctx["locked_count"] = ctx.get("locked_count", 0) + 1
+            logger.warning("[车头] 蓝色集结框未出现（第 %s/%s 次，原因=%s）",
+                           ctx["locked_count"], _MAX_LOCKED, ctx["lock_cause"])
+            # 立刻把详情收掉并**确认**收掉（用户的诉求：弹不出蓝框就退回
+            # 搜索页搜下一座）。收不掉 = 屏幕上那块 red_rally 是上一座寨子的
+            # 残留，重搜也证明不了新目标 —— 交给 VERIFY_UNLOCKED→END 放弃边，
+            # 绝不再点它一次（那正是「一直卡在这座寨子上」的成因）。
+            ctx["prev_target_dismissed"] = self._dismiss_detail()
+            if not ctx["prev_target_dismissed"]:
+                ctx["failed"] = True
+                ctx["fail_reason"] = _STALE_TARGET_REASON
+                self.last_rally_event = None
+
+    def _diagnose_missing_popup(self) -> str:
+        """蓝色集结框没出现时，尽量说清是哪一种。
+
+        「被别人集结」只是其中一种可能（详情还开着 = 这一座打不了），另外
+        还有「有模态弹窗压着」「就是没弹出来」。以前三种都记成同一句
+        「城寨被锁定」，实机复盘时分不出来（2026-10-12）。
+        """
+        if self._find("red_rally") is not None:
+            return "detail_still_open"
+        for modal in ("ap_refill", "form_title", "warning_panel",
+                      "net_error_confirm", "replace_popup"):
+            if self._find(modal) is not None:
+                return f"modal_{modal}"
+        return "no_popup"
+
+    def _dismiss_detail(self) -> bool:
+        """收掉城寨详情弹窗，**确认** red_rally 消失后返回 True。
+
+        点一下就走是不够的：详情收没收掉只有 red_rally 这一个可观测量，而
+        放大镜 ROI 与它不重叠，NORMALIZE 不会替我们收（见常量注释）。
+        点空地收不掉时退一步走搜索页专属的返回键（`search_back`）。
+        """
+        for _ in range(_DETAIL_DISMISS_TRIES):
+            if self._find("red_rally") is None:
+                return True
+            self._handle.click(*_EMPTY_GROUND)
+            if self._wait_for_gone("red_rally", timeout=_DETAIL_DISMISS_TIMEOUT):
+                return True
+        if self._find("search_back") is not None:
+            self._click("search_back")
+            if self._wait_for_gone("red_rally", timeout=_DETAIL_DISMISS_TIMEOUT):
+                return True
+        logger.warning("[车头] 城寨详情弹窗收不掉（red_rally 仍在场）")
+        return False
 
     def _recover_locked(self, ctx):
-        # 点空地关掉详情弹窗，重新归一化视图后再搜
-        logger.warning("[车头] 城寨被锁定（第 %s/%s 次），关闭详情重搜",
-                       ctx.get("locked_count", 0), _MAX_LOCKED)
-        self._handle.click(*_EMPTY_GROUND)
+        # 详情弹窗已在 `_verify_unlocked` 里收掉并确认过（收不掉根本走不到这条
+        # 边），这里只剩回搜索页重搜——即用户要的「弹不出蓝框就搜下一座」
+        logger.warning("[车头] 城寨被锁定（第 %s/%s 次，原因=%s），退回搜索页搜下一座",
+                       ctx.get("locked_count", 0), _MAX_LOCKED,
+                       ctx.get("lock_cause", "unknown"))
+
+    def _abort_round(self, ctx):
+        """干净地结束本轮（不 raise）。
+
+        和 `_give_up` 的区别：这里的触发条件不是「重试额度耗尽」，而是
+        「画面卡在一个本状态机收拾不了的东西上」（行动力弹窗关不掉、上一座
+        寨子的详情收不掉）。此时**必须让 runner 重建状态机**——重建后重新
+        走 NORMALIZE，而归一化本来就知道怎么关这些弹窗。
+
+        以前这些分支是 `raise RuntimeError`：`WorkerRunner` 收到 step 异常
+        并不重建 SM，只是退避 10s 后**重进同一个状态**，于是同一个弹窗被
+        反复点、直到连续 6 次异常把 worker 停掉（用户报的「一直重试，最后
+        失败退出程序」）。fail_reason 由触发那条转移的 action 写入。
+        """
+        ctx["failed"] = True
+        self.last_rally_event = None
+        logger.warning("[车头] 本轮放弃：%s，冷却后自动重试",
+                       ctx.get("fail_reason", "unknown"))
 
     def _give_up(self, ctx):
         # 重试耗尽：结束本轮，置失败标记。fail_reason 由 WorkerRunner 在
@@ -599,8 +850,9 @@ class LeaderStateMachine(StateMachine):
                               else "no_fortress_found")
         # no_result_count 是**每级**额度、降级时清零，所以这里报「已试等级」
         # 而不是累计次数——不然日志会读成「只搜了 5 次就放弃」
-        tried = self._target_levels[:ctx.get("level_index", 0) + 1]
-        logger.warning("[车头] 放弃本轮集结：%s（已试等级 %s，末级无结果 %s 次 / "
+        tried = [target_label(v) for v in
+                 self._target_levels[:ctx.get("level_index", 0) + 1]]
+        logger.warning("[车头] 放弃本轮集结：%s（已试目标 %s，末个无结果 %s 次 / "
                        "锁定 %s 次），冷却后自动重试", ctx["fail_reason"], tried,
                        ctx.get("no_result_count", 0), ctx.get("locked_count", 0))
         self.last_rally_event = None
@@ -761,15 +1013,26 @@ class LeaderStateMachine(StateMachine):
         # `行动力补充后 march_btn 点击失败` 的修法）：原实现只在行军点击
         # **首次**弹窗时补一次体力，补完再点若又弹（AP 仍不够），直接抛错，
         # 全靠 runner 退避重试才恢复。这里补到行军点得出去、或补满
-        # _AP_REFILL_MAX 次为止；真耗尽时按上限放弃本轮，走 runner 的
-        # 连续失败计数停机，不再靠异常兜。
+        # _AP_REFILL_MAX 次为止；真耗尽时按上限**干净放弃本轮**
+        # （fail_reason=no_action_points，见 LAUNCH→END 边），交给冷却后的
+        # 下一轮，不再靠异常兜。
         for attempt in range(1, _AP_REFILL_MAX + 1):
             if self._find("ap_refill") is not None:
                 # 入口残留（2026-09-18 run10 实机：残留弹窗盖住 march_btn，
                 # 先找行军只会一路异常，永远走不到补体力分支）或上一轮补完
                 # 仍不够：补体力并关弹窗再点行军
-                if not self._refill_ap():
-                    raise RuntimeError("行动力补充弹窗关不掉，集结未发起")
+                if not self._refill_ap() and not self._close_ap_dialog():
+                    # 2026-10-12 用户报：弹窗压根关不掉，程序还在反复点。
+                    # 这里以前 raise —— runner 不重建 SM，退避后重进 LAUNCH，
+                    # 于是「补 8 轮 → 异常 → 退避 → 再补 8 轮」直到停机。
+                    # 改成干净放弃：重建 SM 后会重新走 NORMALIZE，由它收弹窗。
+                    logger.warning("[车头] 行动力补充弹窗补完仍关不掉，本轮放弃"
+                                   "（fail_reason=%s），冷却后由归一化重收弹窗",
+                                   _NO_AP_REASON)
+                    ctx["failed"] = True
+                    ctx["fail_reason"] = _NO_AP_REASON
+                    self.last_rally_event = None
+                    return
             if not self._click_retry("march_btn", attempts=3):
                 raise RuntimeError("march_btn 点击失败，集结未发起")
             # 行动力不足弹窗（行动力 < 消耗，2026-09-18 实机 run9）：行军
@@ -780,9 +1043,13 @@ class LeaderStateMachine(StateMachine):
             logger.warning("[车头] 行军点击后仍弹行动力不足（第 %s/%s 次），"
                            "补体力再试", attempt, _AP_REFILL_MAX)
         else:
-            raise RuntimeError(
-                f"行动力补充 {_AP_REFILL_MAX} 次后 march_btn 仍点不出去"
-                "（疑似体力耗尽/道具用尽），集结未发起")
+            logger.warning("[车头] 行动力补充 %s 次后 march_btn 仍点不出去"
+                           "（疑似体力耗尽/道具用尽），本轮放弃"
+                           "（fail_reason=%s）", _AP_REFILL_MAX, _NO_AP_REASON)
+            ctx["failed"] = True
+            ctx["fail_reason"] = _NO_AP_REASON
+            self.last_rally_event = None
+            return
         # 发射验证（2026-09-18 run11 实锤）：同联盟两号步调锁步（行军点击仅
         # 差 4s）向同一座最近城寨发起集结，后发起的被游戏**静默拒绝**——
         # 表单关闭、无 toast、无队列徽标、任何战争列表都无集结行。旧实现
@@ -800,7 +1067,8 @@ class LeaderStateMachine(StateMachine):
         used = ctx.get("used_preset", self._march_presets[0][0])
         self.last_rally_event = {
             "rally_id": f"rally_{int(time.time())}",
-            # 实际搜到的那一级（多选列表里可能已降过级），不是列表首个
+            # 实际搜到的那一级（多选列表里可能已降过级），不是列表首个。
+            # 劫掠者寨子不分等级 → 这里是 RAIDER_TARGET(0)，见 infra.config
             "fortress_level": self._current_level(ctx),
             # 实际用上的预设号（可能是回退后的第二个），供日志/账本核对
             "march_preset": used,
@@ -813,8 +1081,8 @@ class LeaderStateMachine(StateMachine):
                 and self._ledger is not None and self._publisher_id:
             self._ledger.mark_troops_out(self._publisher_id)
             self._ledger.mark_rally_launched(self._publisher_id)
-        logger.info("[车头] 集结已发起：%s 级城寨（预设槽 %s）",
-                    self._current_level(ctx), used)
+        logger.info("[车头] 集结已发起：%s城寨（预设槽 %s）",
+                    target_label(self._current_level(ctx)), used)
         if self._bus:
             payload = dict(self.last_rally_event)
             if self._publisher_id:
