@@ -31,7 +31,15 @@
 
 # 只构建不打 zip（本地试跑）
 .venv/Scripts/python.exe -X utf8 tools/build_package.py --no-zip
+
+# 指定试用期天数（默认 30）。天数在构建时编进包，用户改不到
+.venv/Scripts/python.exe -X utf8 tools/build_package.py --trial-days 2
 ```
+
+> `--trial-days` 只影响**冻结包**；源码运行恒为默认 30 天。构建时会在
+> `src/rok_assistant/infra/licensing/_trial_override.py` 临时生成一个常量模块
+> （`.gitignore` 忽略、构建完即删），若发现该文件**已存在**（上次构建残留），
+> 构建会直接失败而不是误用——先删掉再构建。
 
 ### 换权重之后
 
@@ -64,6 +72,9 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 
 **把 zip 发给别人之前，至少在一台干净机器上跑一次这个。**
 
+> 自检通过 ≠ 可以发包：区间控件模板（`level_range_low` / `level_range_high`）
+> 还没落地，发版前还必须过下面「发版门槛」一节。
+
 当前基线（本机，2026-10-05）：
 
 ```
@@ -80,6 +91,31 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 
 单帧 CPU 推理 26~30ms（目标 < 100ms），对轮询节奏绰绰有余。
 
+## 发版门槛：区间控件模板未落地前不要发包
+
+城寨等级扩到 1–15 后，代码靠两张模板 PNG（`level_range_low` /
+`level_range_high`）认面板上的区间控件。**这两张图还没采**（需实机截图裁剪，
+见 `docs/PROGRESS.md` 待办「等级 11–15 区间的实机验收」），
+`templates/manifest.yaml` 里因此**还没有**这两条目。
+
+当前状态下：
+
+- 目标等级配 **1–10** —— 行为与改动前逐字相同，可以正常发包；
+- 目标等级配 **11–15** —— 设等级时 `leader_sm._switch_level_range` 找不到
+  `level_range_high` 识别器，**抛 `RuntimeError` 结束本轮**（响亮中止，且计入
+  连续失败数，见 `workers/runner.py`）。
+
+**因此：`manifest.yaml` 里这两条目落地之前，不要发这个包。**
+
+发版前在仓库根跑一条命令核对：
+
+```bash
+grep -c 'level_range' templates/manifest.yaml
+```
+
+期望输出 `2`（`level_range_low` + `level_range_high` 各一条）；输出 `0` 表示
+模板条目还没落地，**不要发包**。
+
 ## 授权与密钥（**不要打包 secrets/**）
 
 发行包只带**公钥**（`src/rok_assistant/infra/licensing/pubkey.py`，已入库），
@@ -88,7 +124,7 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 - `secrets/license_private.key` 是发码的唯一凭据，**绝不进发行包**；
   `tools/build_package.py` 的产物断言里有一条硬失败专门盯它。
 - 打包机上如果存在 `secrets/` 目录，**先确认它不在 `dist/` 里**再分发 zip。
-- 首启行为不变：解压即用，默认 30 天试用，无需任何操作。
+- 首启行为不变：解压即用，默认 30 天试用（打包时用 `--trial-days` 可改），无需任何操作。
 
 ## 目标机器要求
 
@@ -185,6 +221,18 @@ traceback 只写这里）。
 返回 None**。但 adb / 模拟器那边不一定能处理，所以还是建议解压到英文路径。
 
 **自检某一项 FAIL** → `logs/selftest.log` 里有异常类型和消息。
+
+**删不掉解压出来的文件夹**（运行过一次之后）→ **不是我们的进程残留**，是
+**adb 守护进程**。双击 `rok-assistant.exe` 时 app 的 CWD 就是解压目录，它起的
+`adb.exe` 客户端在本地没有 adb server 时会 fork 出一个**常驻**的
+`adb -L tcp:5037 fork-server server`，把客户端的工作目录句柄一起继承下去；
+Windows 不允许删除任何活进程还开着的目录。app 退出了，守护进程还在，文件夹
+就删不掉（任务管理器里也找不到 `rok-assistant.exe`，所以看着像「隐藏后台程序」）。
+**已在 `infra/subproc.run` 里给所有子进程指定中性 CWD（系统临时目录）修掉**
+（2026-10-11，`tests/unit/infra/test_subproc.py` 钉着）。**旧包**或已经踩上的
+用户：任务管理器结束 `adb.exe`（或 `adb kill-server`）后即可删除——**别删
+MuMu 自己的 adb**，直接结束进程即可，MuMu 会自己再拉起来。
+详见 HISTORY 2026-10-11 同日一节。
 
 ## 相关文件
 
