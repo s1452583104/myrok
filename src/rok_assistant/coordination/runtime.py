@@ -115,7 +115,7 @@ class RuntimeCoordinator:
         self._stopped.clear()
         # 只告警不拦启动：同等级且互为填兵目标的两号可能搜到同一寨子，
         # 撞车只会白烧一次搜索（已降级不计失败），不该阻断运行
-        instances = self._config.zhaiduo.instances
+        instances = self._config.instances_for(AppMode.ZHAIDUO)
         for msg in find_level_collisions(instances):
             logger.warning("%s", msg)
         # 先置位再组装：若中途失败（如识别器装配失败、第 2 台 worker 起不来），
@@ -167,7 +167,7 @@ class RuntimeCoordinator:
 
     def _role_of(self, key: str) -> RoleEnum | None:
         """runner key（"实例id:角色id"）→ 配置里的分工。查不到返回 None。"""
-        for inst in self._config.zhaiduo.instances:
+        for inst in self._config.instances_for(AppMode.ZHAIDUO):
             for char in inst.characters:
                 if f"{inst.id}:{char.id}" == key:
                     return char.role
