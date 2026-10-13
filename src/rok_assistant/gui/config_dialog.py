@@ -857,9 +857,9 @@ class CharacterEditDialog(QDialog):
         # 这里做成「勾一个自动清空/禁用另一组」，比弹窗提示轻，且状态永远
         # 合法——与 _on_level_toggle 超上限时撤销勾选同一套做法。
         #
-        # 2026-10-13 扩到 1–15：1–10 与 11–15 是**两个互斥区间**（面板上由
-        # 一个独立的区间控件切换），所以第 2 行留白放一条分割线，11–15 落到
-        # 第 3 行；区间互斥与劫掠者互斥同法处理。
+        # 2026-10-13 扩到 1–15：1–10 与 11–15 是**两个互斥区间**（区间由
+        # 账号所在大地图决定，程序不需要切换），所以第 2 行留白放一条分割线，
+        # 11–15 落到第 3 行；区间互斥与劫掠者互斥同法处理。
         self._level_order: list[int] = list((character or {}).get("target_levels", [7]))
         self.level_checks: dict[int, QCheckBox] = {}
         level_grid = QGridLayout()

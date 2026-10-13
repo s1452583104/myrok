@@ -956,58 +956,6 @@ def test_raider_flag_is_false_for_normal_levels():
     assert sm._raider is False
 
 
-# ---- 等级区间切换（2026-10-13：11–15 级寨子上线）----
-
-def _add_range_recs(sm):
-    """给 SM 装上区间控件的识别器（灰态模板，命中即点）。"""
-    sm._rec["level_range_low"] = _mock_rec()
-    sm._rec["level_range_high"] = _mock_rec()
-    return sm
-
-
-def test_high_range_target_clicks_the_high_range_control():
-    """11–15 目标：点页签 → 点区间控件 → 读等级 → 点差量。"""
-    sm, handle = _make_sm_with_level([11, 13], target_levels=(13,))
-    _add_range_recs(sm)
-    _to_select_level(sm)
-    # search_icon 1 + tab_fortress 1 + level_range_high 1 + plus 2 = 5
-    assert len(handle.clicks) == 5
-
-
-def test_low_range_target_clicks_the_low_range_control():
-    sm, handle = _make_sm_with_level([7], target_levels=(7,))
-    _add_range_recs(sm)
-    _to_select_level(sm)
-    # search_icon 1 + tab 1 + level_range_low 1；等级已是 7，不点差量
-    assert len(handle.clicks) == 3
-
-
-def test_high_range_without_recognizer_raises():
-    """缺 level_range_high 时不能静默退化：点不动区间控件就会在 1–10
-    区间里搜，等于「配置要 13、实际搜 8」。宁可按异常结束本轮。"""
-    sm, handle = _make_sm_with_level([11], target_levels=(13,))
-    sm._rec["level_range_low"] = _mock_rec()      # 只有低区间，缺高区间
-    with pytest.raises(RuntimeError, match="level_range_high"):
-        _to_select_level(sm)
-
-
-def test_low_range_without_recognizer_warns_and_continues(caplog):
-    """缺 level_range_low 只警告：旧模板包行为与改动前一致。"""
-    sm, handle = _make_sm_with_level([7], target_levels=(7,))
-    with caplog.at_level(logging.WARNING):
-        _to_select_level(sm)
-    assert any("level_range_low" in r.message for r in caplog.records)
-    assert len(handle.clicks) == 2      # search_icon + tab，没有区间点击
-
-
-def test_raider_target_never_touches_the_range_control():
-    """劫掠者页没有等级行，也就不该有区间点击。"""
-    sm, _ = _make_raider_sm()
-    _add_range_recs(sm)
-    _to_select_level(sm)
-    assert len(sm._handle.clicks) == 2      # search_icon + tab_raider
-
-
 # ---- 劫掠者城寨搜完不自动弹详情面板（2026-10-11 实机复现）----
 #
 # 普通城寨：点「搜索」→ 面板收起 + 相机跳到目标 + **详情面板自动展开**，
@@ -1369,44 +1317,41 @@ def test_blind_reset_clicks_follow_the_range_span():
 def test_blind_high_range_lands_on_eleven_not_one():
     """11–15 目标读不出等级时降到底 = 11，不是 1。"""
     sm, handle = _make_sm_with_level([None, None, None], target_levels=(13,))
-    _add_range_recs(sm)
     _to_select_level(sm)
-    # search_icon 1 + tab 1 + level_range_high 1 + 降底 7 + 升到 13 点 2
-    assert len(handle.clicks) == 1 + 1 + 1 + 7 + 2
+    # search_icon 1 + tab 1 + 降底 7 + 升到 13 点 2
+    assert len(handle.clicks) == 1 + 1 + 7 + 2
 
 
 def test_cross_range_cache_is_ignored():
-    """切区间会把滑条重置到区间下界，跨区间的旧缓存是谎话，不能当起点。"""
+    """跨区间的旧缓存不是当前轨道上的值，不能当起点。"""
     sm, handle = _make_sm_with_level([None, None, None], target_levels=(13,))
-    _add_range_recs(sm)
     sm._cache_level(8)          # 上一轮留在 1–10 区间的缓存
     _to_select_level(sm)
     # 若误信缓存 8，就会从 8 点 +5；正确行为是降底 7 次再从 11 点 +2
-    assert len(handle.clicks) == 1 + 1 + 1 + 7 + 2
+    assert len(handle.clicks) == 1 + 1 + 7 + 2
 
 
 def test_same_range_cache_is_still_reused():
     """同区间缓存仍要复用（这是 _blind_set_level 存在的意义）。"""
     sm, handle = _make_sm_with_level([None, None, None], target_levels=(7,))
-    _add_range_recs(sm)
     sm._cache_level(4)          # 同区间
     _to_select_level(sm)
-    # search_icon 1 + tab 1 + level_range_low 1 + 从 4 升到 7 点 3
-    assert len(handle.clicks) == 1 + 1 + 1 + 3
+    # search_icon 1 + tab 1 + 从 4 升到 7 点 3
+    assert len(handle.clicks) == 1 + 1 + 3
 
 
 def test_verify_gives_up_when_readback_is_in_another_range(caplog):
-    """回读落在另一个区间 = 区间没切过去，补点只会打在滑条端点上。
+    """回读落在另一个区间 = 配置的区间与账号所在大地图不符，补点只会打在
+    滑条端点上。
 
     读序不能以 13 开头——初读就等于目标的话 _select_level 会直接跳过，
     根本走不到 _verify_level。这里初读 11，故意让校验跑两轮。
     """
-    # 读序：初读 11 → 补点后回读 11 → 再回读 8（区间没切过去）
+    # 读序：初读 11 → 补点后回读 11 → 再回读 8（落在另一个区间）
     sm, handle = _make_sm_with_level([11, 11, 8], target_levels=(13,))
-    _add_range_recs(sm)
     with caplog.at_level(logging.WARNING):
         _to_select_level(sm)
-    # search_icon 1 + tab 1 + level_range_high 1 + 初补 2 + 校验补 2；第二轮
-    # 发现跨区间，一次补点都不再打
-    assert len(handle.clicks) == 1 + 1 + 1 + 2 + 2
+    # search_icon 1 + tab 1 + 初补 2 + 校验补 2；第二轮发现跨区间，
+    # 一次补点都不再打
+    assert len(handle.clicks) == 1 + 1 + 2 + 2
     assert any("不在同一区间" in r.message for r in caplog.records)

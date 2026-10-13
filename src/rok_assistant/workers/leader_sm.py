@@ -11,7 +11,6 @@ from ..infra.config import (
     MAX_TARGET_LEVEL,
     MIN_TARGET_LEVEL,
     RAIDER_TARGET,
-    RANGE_BOUNDARY,
     level_range,
     target_label,
 )
@@ -557,8 +556,9 @@ class LeaderStateMachine(StateMachine):
         与改动前逐字相同，只有两处随区间变化：降到底的点击数按区间跨度算，
         起点是**本区间的下界**（1–10 降到 1，11–15 降到 11）。
 
-        缓存命中还必须**同区间**：切区间会把滑条重置到区间下界，跨区间的
-        旧缓存是谎话（拿 8 当起点去点 +5，在 11–15 区间会落到 16）。
+        缓存命中还必须**同区间**：滑条轨道由账号所在大地图决定（1–10 或
+        11–15），跨区间的旧缓存不是当前轨道上的值（拿 8 当起点去点 +5，
+        在 11–15 区间会落到 16）。
 
         spec §4.4：**不删缓存**——这条路径只在 OCR 失败时走到，保留缓存
         才能兑现「最坏情况与改动前相同」。每点一下的停顿不再由这里 sleep，
@@ -602,8 +602,8 @@ class LeaderStateMachine(StateMachine):
                 return True
             if level_range(read)[0] != level_range(target)[0]:
                 # 跨区间的差量点击没有意义（从 8 点 + 到不了 13）。这多半是
-                # 区间没切过去，补点只会打在滑条端点上——判失败，交给
-                # no_result 计数兜住本轮。
+                # 配置的区间与账号所在大地图不符，补点只会打在滑条端点上——
+                # 判失败，交给 no_result 计数兜住本轮。
                 logger.warning(
                     "[车头] 等级回读 %s 级与目标 %s 级不在同一区间，放弃修正",
                     read, target)
@@ -613,36 +613,6 @@ class LeaderStateMachine(StateMachine):
             self._set_level(target, read)
         logger.warning("[车头] 等级回读仍未确认（目标 %s 级），继续本轮", target)
         return False
-
-    def _switch_level_range(self, target: int) -> None:
-        """把搜索面板切到 target 所在的等级区间（灰态模板，幂等）。
-
-        与 tab_fortress / tab_raider 同一套惯用法：模板只裁**未选中**态，
-        命中 ⇔ 当前不在该区间 ⇔ 点它；已在目标区间就不命中，`_click`
-        自动跳过。**不需要先读状态**——「面板当前停在哪个区间」本来就不
-        容易读准，靠"点一下没坏处"把这个不确定性消掉。
-        """
-        low = level_range(target)[0]
-        rid = "level_range_high" if low > RANGE_BOUNDARY else "level_range_low"
-        if rid not in self._rec:
-            if low > RANGE_BOUNDARY:
-                # 识别器缺失时 `_click` 是**静默空操作**。对 11–15 目标不能
-                # 静默：点不动区间控件就会在 1–10 区间里搜，等于「配置要 13、
-                # 实际搜 8」。宁可按异常结束本轮（runner 会计失败并停机）。
-                raise RuntimeError(
-                    f"目标等级 {target} 属于 {low}–{MAX_TARGET_LEVEL} 区间，"
-                    f"但识别器里没有 {rid}"
-                    "（templates/manifest.yaml 缺条目或模板 PNG 缺失）")
-            # 低区间：旧模板包没有这个条目，行为与改动前一致（只警告）。
-            # 若面板实际停在 11–15 区间会搜错等级，但**不静默**——回读值
-            # 不在目标区间内会被 _verify_level 判失败并留下 warning，
-            # 最终由 no_result 计数自然兜住本轮。
-            logger.warning(
-                "[车头] 缺少 %s 识别器，无法确认面板停在哪个等级区间；"
-                "若面板停在 %s–%s 区间会搜错等级", rid,
-                RANGE_BOUNDARY + 1, MAX_TARGET_LEVEL)
-            return
-        self._click(rid)
 
     def _select_level(self, ctx):
         # 面板记住上次的 Tab（实测落在「野蛮人」上，2026-09-11 实机验收发现）。
@@ -668,9 +638,6 @@ class LeaderStateMachine(StateMachine):
             return
         self._click("tab_fortress")
         target = self._current_level(ctx)
-        # 必须先切区间再读等级：读出来的值要反映切换后的区间
-        self._switch_level_range(target)
-
         current = self._read_level()
         if current is None:
             logger.warning("[车头] 等级文本读不出（面板可能不在城寨页），退回盲降")

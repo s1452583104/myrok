@@ -72,9 +72,6 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 
 **把 zip 发给别人之前，至少在一台干净机器上跑一次这个。**
 
-> 自检通过 ≠ 可以发包：区间控件模板（`level_range_low` / `level_range_high`）
-> 还没落地，发版前还必须过下面「发版门槛」一节。
-
 当前基线（本机，2026-10-05）：
 
 ```
@@ -90,33 +87,6 @@ ONNX 模型 → 跑 OCR），逐项打印 PASS/FAIL，并把结果写进
 ```
 
 单帧 CPU 推理 26~30ms（目标 < 100ms），对轮询节奏绰绰有余。
-
-## 发版门槛：区间控件模板未落地前不要发包
-
-城寨等级扩到 1–15 后，代码靠两张模板 PNG（`level_range_low` /
-`level_range_high`）认面板上的区间控件。**这两张图还没采**（需实机截图裁剪，
-见 `docs/PROGRESS.md` 待办「等级 11–15 区间的实机验收」），
-`templates/manifest.yaml` 里因此**还没有**这两条目。
-
-当前状态下：
-
-- 目标等级配 **1–10** —— 行为与改动前逐字相同，可以正常发包；
-- 目标等级配 **11–15** —— 设等级时 `leader_sm._switch_level_range` 找不到
-  `level_range_high` 识别器，**抛 `RuntimeError`**。异常发生在任何点击之前，所以
-  不会误搜错等级的寨子；但它是**异常**不是干净收工：runner 不重建状态机，在同一
-  状态退避重放，攒满 6 次异常直接停机（`workers/runner.py` 的 `_error_streak`，
-  注意它与 3 轮的 `_fail_streak` 不是同一个计数）。
-
-**因此：`manifest.yaml` 里这两条目落地之前，不要发这个包。**
-
-发版前在仓库根跑一条命令核对：
-
-```bash
-grep -c 'level_range' templates/manifest.yaml
-```
-
-期望输出 `2`（`level_range_low` + `level_range_high` 各一条）；输出 `0` 表示
-模板条目还没落地，**不要发包**。
 
 ## 授权与密钥（**不要打包 secrets/**）
 
