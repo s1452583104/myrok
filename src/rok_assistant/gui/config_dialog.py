@@ -162,6 +162,11 @@ class ConfigDialog(QDialog):
                                   if k in alive}
 
         # 0=公共 1=寨多多 2=宝石 3=答题 4=YAML；实例页从 5 起
+        #
+        # ⚠️ 五个固定页必须先全部 addWidget 完，实例页才能开始加。
+        # 否则实例页会插进固定页中间，把 gem/quiz/yaml 整体下移 N 位，
+        # 而 _on_tree_change 的映射是按固定索引写的——结果是点一个进另一个，
+        # 且不报错（静默串页）。树子项的 addChild 与 stack 顺序无关，可留在原处。
         self._stack.addWidget(self._scroll(self._make_global_page()))
         g = QTreeWidgetItem(["公共配置"])
         g.setData(0, Qt.ItemDataRole.UserRole, ("page", 0))
@@ -171,18 +176,12 @@ class ConfigDialog(QDialog):
         z = QTreeWidgetItem(["寨多多模式"])
         z.setData(0, Qt.ItemDataRole.UserRole, ("page", 1))
         self._tree.addTopLevelItem(z)
-        # 实例配置属于寨多多模式：做成它的子项，点开才看得到
-        for idx, inst in enumerate(self._data["zhaiduo"]["instances"]):
-            label = inst.get("name") or inst["id"]
-            item = QTreeWidgetItem([f"模拟器  {label}"])
-            item.setData(0, Qt.ItemDataRole.UserRole, ("instance", idx))
-            z.addChild(item)
-            self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
 
         for mode in (AppMode.GEM, AppMode.QUIZ):
             self._stack.addWidget(self._scroll(self._make_locked_page(mode)))
             it = QTreeWidgetItem([MODE_LABELS[mode]])
-            it.setData(0, Qt.ItemDataRole.UserRole, ("page", 2 + list((AppMode.GEM, AppMode.QUIZ)).index(mode)))
+            it.setData(0, Qt.ItemDataRole.UserRole,
+                       ("page", 2 + list((AppMode.GEM, AppMode.QUIZ)).index(mode)))
             self._tree.addTopLevelItem(it)
 
         y = QTreeWidgetItem(["YAML 源码（高级）"])
@@ -192,6 +191,15 @@ class ConfigDialog(QDialog):
         self._yaml_view.setObjectName("yamlView")
         self._yaml_view.setReadOnly(True)
         self._stack.addWidget(self._padded(self._yaml_view))
+
+        # 五个固定页（stack 0..4）加完，实例页才从 5 起。
+        # 树子项在这一轮单独建（与 stack 顺序无关，别混进上面）。
+        for idx, inst in enumerate(self._data["zhaiduo"]["instances"]):
+            label = inst.get("name") or inst["id"]
+            item = QTreeWidgetItem([f"模拟器  {label}"])
+            item.setData(0, Qt.ItemDataRole.UserRole, ("instance", idx))
+            z.addChild(item)
+            self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
 
         self._tree.expandItem(z)          # 实例默认展开，否则用户看不见它们
 
@@ -284,6 +292,7 @@ class ConfigDialog(QDialog):
     # ---------------- 全局页 ----------------
     def _make_global_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("page:global")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
         outer.setSpacing(theme.SP_LG)
@@ -360,6 +369,7 @@ class ConfigDialog(QDialog):
         一个字段都不沾。按 spec §3.1 的两段划分搬到这一页。
         """
         page = QWidget()
+        page.setObjectName("page:zhaiduo")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
         outer.setSpacing(theme.SP_LG)
@@ -380,6 +390,7 @@ class ConfigDialog(QDialog):
 
     def _make_locked_page(self, mode: AppMode) -> QWidget:
         box = QWidget()
+        box.setObjectName(f"page:{mode.value}")
         lay = QVBoxLayout(box)
         lay.addStretch(1)
         msg = QLabel("该模式尚未开放，暂无配置项")
@@ -403,6 +414,7 @@ class ConfigDialog(QDialog):
     def _make_instance_page(self, idx: int) -> QWidget:
         inst = self._data["zhaiduo"]["instances"][idx]
         page = QWidget()
+        page.setObjectName(f"page:instance:{idx}")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
         outer.setSpacing(theme.SP_LG)
@@ -800,7 +812,7 @@ class ConfigDialog(QDialog):
                 "MuMuManager.exe 和 adb.exe（点「浏览…」选择）。")
 
     def _detect_all_instances(self):
-        """spec §5：全局页「检测全部模拟器」，列出各模拟器在线状态。
+        """spec §5：寨多多模式页「检测全部模拟器」，列出各模拟器在线状态。
 
         一次 `info -v all` 拿全，不再逐台 `is_running`（N 台省 N 次子进程）。
         输出用模拟器的**名字**，不再暴露 `inst0 (mumu2)` 这种内部 id。

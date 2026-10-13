@@ -5,7 +5,9 @@ from pathlib import Path
 import yaml
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QAbstractItemView, QMessageBox
+from PyQt6.QtWidgets import (
+    QApplication, QAbstractItemView, QMessageBox, QPlainTextEdit, QWidget,
+)
 
 from rok_assistant.gui.config_dialog import ConfigDialog
 from rok_assistant.gui.config_dialog import CharacterEditDialog
@@ -112,10 +114,37 @@ def test_tree_navigation_switches_stack(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
     # 0=公共 1=寨多多 2=宝石 3=答题 4=YAML
-    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))     # 寨多多模式
-    assert dlg._stack.currentIndex() == 1
-    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(4))     # YAML 源码
-    assert dlg._stack.currentIndex() == 4
+    # 只断 currentIndex() 的数字不够：实例页若插进固定页中间，索引照样对得上
+    # 却是别的页（点一个进另一个）。逐个断言**落到了哪一页**。
+    def _goto(top: int, obj_name: str, cls=QWidget):
+        dlg._tree.setCurrentItem(dlg._tree.topLevelItem(top))
+        cur = dlg._stack.currentWidget()
+        assert cur.findChild(cls, obj_name) is not None, \
+            f"顶层项 {top} 没落到 {obj_name}（当前页 objectName={cur.objectName()}）"
+
+    _goto(0, "page:global")
+    _goto(1, "page:zhaiduo")
+    _goto(2, "page:gem")
+    _goto(3, "page:quiz")
+    _goto(4, "yamlView", QPlainTextEdit)
+
+
+def test_gem_page_not_shadowed_by_instances(tmp_path, qapp, monkeypatch):
+    """有实例时点「宝石模式」必须落在宝石占位页，不能被实例页顶掉。
+
+    这是 stack 填充顺序的回归锁：实例页若在固定页之前 addWidget，会把
+    gem/quiz/yaml 整体下移 N 位，而导航映射按固定索引写——点一个进另一个
+    且不报错。用 2 个实例复现评审探针里 N=2 的错位。
+    """
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["zhaiduo"]["instances"].append(
+        {"id": "inst1", "name": "如愿", "mumu_index": 1, "characters": []})
+    dlg = ConfigDialog(_write_config(tmp_path, data))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))     # 宝石模式
+    cur = dlg._stack.currentWidget()
+    assert cur.findChild(QWidget, "page:gem") is not None
+    assert cur.findChild(QWidget, "page:instance:0") is None
 
 
 def test_switching_to_yaml_refreshes_preview(tmp_path, qapp, monkeypatch):
