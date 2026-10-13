@@ -153,12 +153,13 @@ templates/
 
 ## §2 写你的 config.yaml
 
-**推荐方式：** 启动 GUI（`python -m rok_assistant.gui.main_window`，从项目根目录），点「⚙ 配置」，在左树右表单界面里配置全局路径、模拟器（点「扫描模拟器」按 MuMu 里的名字选）与角色阵容（分工/等级/预设/兵种/填兵目标），保存时自动校验。配置前先用模拟器页「测试连接」确认连对了模拟器。
+**推荐方式：** 启动 GUI（`python -m rok_assistant.gui.main_window`，从项目根目录），点「⚙ 配置」。配置对话框左树按模式重排：**公共配置**（全局路径 / 运行参数 / 反检测）、**寨多多模式**（默认展开，下挂每台模拟器一个子项，点进去配角色阵容）、**宝石模式** / **答题模式**（占位）、**YAML 源码（高级）**（全文件原始编辑）。模拟器在寨多多模式下点「扫描模拟器」按 MuMu 里的名字选；角色阵容（分工/等级/预设/兵种/填兵目标）在实例页配，保存时自动校验。配置前先用实例页「测试连接」确认连对了模拟器。
 
 > 面向非程序员的逐步说明见 [`配置说明.md`](配置说明.md)（会随绿色包一起分发）。
 
-**手动方式：** 复制 `config.example.yaml` 为 `config.yaml` 修改。要点：
-- `instances` 取代旧 `accounts`；1 实例 = 1 账号；`mumu_index` 与 `adb_address` 二选一
+**手动方式：** 复制 `config.example.yaml` 为 `config.yaml` 修改。**顶层按模式分区**：`app:` 是公共段，`zhaiduo:` / `gem:` / `quiz:` 各持自己的 `instances`（`gem` / `quiz` 现在是空壳）。要点：
+- 模拟器与角色配在 **`zhaiduo.instances`** 下（不再是顶层 `instances`）；1 实例 = 1 账号；`mumu_index` 与 `adb_address` 二选一
+- **老配置（顶层 `instances:`）硬报错、不自动迁移**：报「配置格式已更新：instances 现在挂在 zhaiduo 模式下。请删除 config.yaml 后重启，程序会从 config.example.yaml 重新生成一份」——删掉重配即可
 - 首启默认生成**两台**模拟器、每台一个角色：车头「集结手」（`mumu0`）+
   填兵号「填兵号」（`mumu1`，填给 `mumu0/集结手`）；按需增删
 - `role`: `leader`（车头，自己开寨）/ `member`（成员，只填兵）/ `either`（先开寨再填兵）
@@ -172,9 +173,11 @@ templates/
 
 ## §3 跑 5 项手动验收
 
-> **按钮名已改（2026-10-13 界面重构）**：顶栏原来是英文 `Start` / `Stop` / `Mode:`，
-> 现统一为 **「开始运行」/「停止」/「模式」**，窗口标题由 `rok-assistant` 改为「RoK 助手」。
-> 下面各项标题里的 `Start` / `Stop` 是当时的验收条目名，**照着点对应中文按钮即可**。
+> **界面已改（2026-10-13 多模式框架）**：主窗口现在是「应用头 + 左侧导航 + 每模式一页」。
+> 左侧导航每模式一项（**寨多多模式 / 宝石模式 / 答题模式**）；**「开始运行」/「停止」已下沉到各模式页的页头**
+> （不再是顶栏全局按钮，也**没有**模式下拉）。寨多多模式是当前唯一能跑的模式，
+> 宝石 / 答题页的「开始运行」**置灰**、内容是「该模式尚未开放」占位。
+> 下面各项标题里的 `Start` / `Stop` 是当时的验收条目名，**在「寨多多模式」页点对应中文按钮即可**。
 
 运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ 开始运行，验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
 
@@ -193,7 +196,7 @@ python tools/verify.py
 1. 启动 MuMu，确保 RoK 在主城
 2. 启动 GUI：`python -m rok_assistant.gui.main_window`
 3. 配置文件选择 `config.yaml`
-4. 点「开始运行」→ 观察 `logs/rok_assistant_*.log` 看状态机走到 `END`
+4. 在「寨多多模式」页点页头「开始运行」→ 观察 `logs/rok_assistant_*.log` 看状态机走到 `END`
 5. GUI 上的 leader character card 应显示状态变化（`searching` → `forming` → `waiting` → `done`）
 
 ### 3.2 [x] Add 1 member, verify auto-switch + join

@@ -2364,3 +2364,64 @@ PNG」前置；`docs/PACKAGING.md` 删掉「区间控件模板未落地前不要
 
 **「1–10 与 11–15 互斥」这条配置要求仍然成立**——用户明确要的正是它。11–15 的实机验收仍待做，
 但不再有模板前置。
+
+## 2026-10-13 多模式框架（寨多多/宝石/答题）
+
+用户要求给软件加两个模式（**宝石模式**、**答题模式**，先做空白页待开发），并把当前模式命名为
+**寨多多模式**。澄清过程中长成**信息架构级**改动：模式各有配置、主界面按模式分页、每模式各自一个
+「开始运行」。本次交付的是**多模式框架 + 城寨等级扩展**（等级 1–15 见同日另一节），不是「加两个
+下拉项」。设计见 `docs/superpowers/specs/2026-10-13-多模式框架与城寨等级扩展-design.md`。
+
+**① 配置按模式分区、老配置硬报错不迁移。** `config.yaml` 顶层由「扁平 `instances:`」改成
+`app:`（公共：屏幕/路径/模型/反检测/收工阈值）+ `zhaiduo:` / `gem:` / `quiz:`（各持 `instances`）。
+`zhaiduo.instances` **必填且至少 1 台**（`ZhaiduoConfig.instances = Field(min_length=1)`），
+`gem` / `quiz` 可空。原挂在 `RootConfig` 上的 `_cross_checks`（实例 id 不重 / 角色 id 不重 /
+至少 1 个 leader-either / 填兵目标互相指向 / leader 不许配填兵目标）**整块搬到 `ZhaiduoConfig`**
+——校验跟着数据走：宝石/答题现在没有角色，硬套「至少一个 leader」会让它们当场加载失败。
+`find_level_collisions` 签名由收 `RootConfig` 改为收 `list[InstanceConfig]`。
+老格式（顶层 `instances:`）**硬报错、不自动迁移**：`RootConfig` 的 `mode="before"` 校验器把
+pydantic 那句光秃秃的 `zhaiduo / Field required` 换成可操作文案——逐字是
+「配置格式已更新：instances 现在挂在 zhaiduo 模式下。请删除 config.yaml 后重启，程序会从
+config.example.yaml 重新生成一份。」放在 `mode="before"` 而不是 `load_config()`：`GuiController`
+自己走 `model_validate`，不经过 `load_config()`。**发布顺序硬约束**：`config.example.yaml`
+必须与代码同批（本次已同步）。
+
+**② 模式是界面概念，不是运行时概念。** `config.yaml` 里**没有 `mode` 键**——模式不落盘，
+固定开在寨多多（早先设计过的 `save_app_mode` 逐行回写配置那套机制整个删掉）。
+`RuntimeCoordinator` 只跑寨多多（只有它实现了），内部读 `config.zhaiduo.instances`（4 处）。
+`AppMode(str, Enum)` = `zhaiduo` / `gem` / `quiz`，中文标签 `MODE_LABELS` 放 `infra/config.py`
+（跟 `RAIDER_LABEL` 同一先例：GUI 与协调器跨层共用中文文案）。
+`IMPLEMENTED_MODES = frozenset({AppMode.ZHAIDUO})` 是「某模式做完了」的唯一开关。
+**模式进入运行时的唯一入口是 `GuiController.start(mode: AppMode = AppMode.ZHAIDUO) -> bool`**，
+里面加一道边界检查：模式不在 `IMPLEMENTED_MODES` 就 `error_occurred.emit("…尚未开放，无法启动任务")`
+并返回 `False`（五行的成本换掉「某个 setEnabled 漏了就直接跑起来」）。返回 `False` 时界面
+**不切运行态**（否则会谎报运行中）。
+
+**③ 主窗口改「应用头 + 左导航 + 每模式一页」，开始/停止下沉。** 顶部操作栏解散：
+「开始运行 / 停止」**下沉**到各模式页（`gui/mode_page.py` 的 `ModePage`）的页头，
+「刷新配置 / ⚙ 配置」**上提**到应用头。左侧是 `QListWidget` 导航（宽 160，每模式一项），
+右侧 `QStackedWidget` 每模式一页。`ModePage` 内容用固定索引三态：`0=CARD` 卡片流式网格 /
+`1=EMPTY` 空态 / `2=LOCKED`「该模式尚未开放」占位。**互斥不是靠三处 `if` 维护的**，
+而是 `MainWindow._sync_ui_state()` 从**三个输入**推导全部控件状态：`_running_mode`（运行中的模式）/
+`page.mode`（本页的模式）/ 有无角色。据此：开始按钮 = 未运行且本页已实现；停止按钮 = 运行中且
+运行的就是这一页；导航 = 未运行时才可点（**运行中锁导航**）；内容区按「未实现 → 占位 /
+有角色 → 卡片 / 无角色 → 空态」选页。窗口 1200×800 → **1280×820**（让出 160 导航宽）。
+
+**④ 配置对话框左树重排。** 左树从「全局 / YAML / 各实例」变成
+**公共配置** / **寨多多模式**（下挂「模拟器  <名字>」实例子项，默认展开）/ **宝石模式** /
+**答题模式** / **YAML 源码（高级）**。`_stack` 固定索引 0=公共 1=寨多多 2=宝石 3=答题 4=YAML、
+实例页从 5 起——**五个固定页必须先全部 addWidget 完，实例页才能开始加**，否则实例页插进固定页
+中间会让 gem/quiz/yaml 整体下移、点一个进另一个（静默串页，不报错）。「检测全部模拟器」从公共页
+移到寨多多模式页（它是实例级动作）。`config_dialog` 的裸 dict 编辑路径由 `("instances", …)`
+改到 `("zhaiduo", "instances", …)`；`humanize_loc` 的报错路径因此多一层 `zhaiduo` 模式键。
+
+**测试**：新增 `tests/unit/gui/test_mode_nav.py`（导航选中 / 页内按钮归属 / `_sync_ui_state()`
+三输入推导）；`test_gui_smoke` 的 `w.start_btn` 改取 `w._pages[ZHAIDUO].start_btn`；
+`RootConfig(instances=[…])` 直构改 `RootConfig(zhaiduo={"instances": [...]})`；
+`find_level_collisions` 调用点改收 `cfg.zhaiduo.instances`；`ConfigDialog._stack` 索引契约改
+0=公共 / 1=寨多多 / 2=宝石 / 3=答题 / 4=YAML。
+
+**文档同步**（Task 4）：`docs/配置说明.md` 重写结构段与实例段（面向非程序员、随包分发）；
+`docs/ACCEPTANCE.md` §2/§3 的 GUI 描述与「开始运行」位置；`docs/PROGRESS.md` 当前状态/已落地/待办
+与全量回归计数；本节。**未改** `templates/manifest.yaml`、未换 YOLO 权重，故不重跑
+`tools/calibrate_yolo_threshold.py`。
