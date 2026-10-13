@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 from rok_assistant.infra.config import (
-    AppConfig, InstanceConfig, CharacterConfig, RoleEnum, FillLeader, RootConfig
+    AppConfig, InstanceConfig, CharacterConfig, RoleEnum, FillLeader, RootConfig,
+    RAIDER_TARGET, find_level_collisions, level_range,
 )
 
 
@@ -140,8 +141,8 @@ def test_target_levels_too_many_rejected():
 
 
 def test_target_levels_out_of_range_rejected():
-    with pytest.raises(ValidationError, match="1..10"):
-        _leader(target_levels=[11])
+    with pytest.raises(ValidationError, match="1..15"):
+        _leader(target_levels=[16])
 
 
 def test_target_levels_duplicate_rejected():
@@ -151,6 +152,72 @@ def test_target_levels_duplicate_rejected():
 
 def test_target_levels_three_is_allowed():
     assert _leader(target_levels=[9, 8, 7]).target_levels == [9, 8, 7]
+
+
+# ---- 等级区间 1–10 / 11–15 互斥（2026-10-13）----
+
+def test_level_range_splits_at_ten():
+    assert level_range(1) == (1, 10)
+    assert level_range(10) == (1, 10)
+    assert level_range(11) == (11, 15)
+    assert level_range(15) == (11, 15)
+
+
+def test_target_levels_allows_ten_itself():
+    """边界值 10 属于低区间，不是「越界」。"""
+    assert _leader(target_levels=[10]).target_levels == [10]
+
+
+def test_target_levels_accepts_the_high_range():
+    assert _leader(target_levels=[15, 13, 11]).target_levels == [15, 13, 11]
+
+
+def test_target_levels_rejects_16():
+    with pytest.raises(ValidationError, match="1..15"):
+        _leader(target_levels=[16])
+
+
+def test_target_levels_rejects_mixed_ranges():
+    """面板同一时刻只能停在一个区间上，混选没有意义。"""
+    with pytest.raises(ValidationError, match="不能混选两个等级区间"):
+        _leader(target_levels=[9, 11])
+
+
+def test_target_levels_rejects_mixed_ranges_regardless_of_order():
+    with pytest.raises(ValidationError, match="不能混选两个等级区间"):
+        _leader(target_levels=[12, 9])
+
+
+# ---- 劫掠者寨子（2026-10-11）----
+
+def test_raider_target_alone_is_allowed():
+    """哨兵值 0 = 劫掠者寨子，合法的形态有且只有 [0]。"""
+    assert _leader(target_levels=[RAIDER_TARGET]).target_levels == [0]
+
+
+def test_raider_target_mixed_with_levels_rejected():
+    """劫掠者寨子不分等级，与任何等级共存都无意义。"""
+    with pytest.raises(ValidationError, match="不能再选其他等级"):
+        _leader(target_levels=[RAIDER_TARGET, 6])
+
+
+def test_raider_target_duplicate_rejected():
+    """[0, 0] 也走「不能与其他目标共存」这条——0 不是可重复的等级。"""
+    with pytest.raises(ValidationError, match="不能再选其他等级"):
+        _leader(target_levels=[RAIDER_TARGET, RAIDER_TARGET])
+
+
+def test_collision_warning_reads_raider_target_in_chinese():
+    """撞车告警里 0 要写成「劫掠者寨子」，不能把哨兵值原样摊给用户看。"""
+    a = _leader(id="c1", name="甲", target_levels=[RAIDER_TARGET],
+                fill_target_leaders=[])
+    b = CharacterConfig(id="c2", name="乙", role=RoleEnum.EITHER,
+                        target_levels=[RAIDER_TARGET], march_preset=2,
+                        march_troop_types=["cavalry"],
+                        fill_target_leaders=[FillLeader(instance="i1", name="甲")])
+    warns = find_level_collisions(_root(a, b))
+    assert len(warns) == 1
+    assert "劫掠者寨子" in warns[0] and "[0]" not in warns[0]
 
 
 # ---- 多预设（2026-10-09）----

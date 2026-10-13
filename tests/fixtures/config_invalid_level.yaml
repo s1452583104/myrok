@@ -7,6 +7,6 @@ instances:
         name: "Hero"
         role: leader
         target_levels:
-        - 11
+        - 16
         march_preset: 1
         march_troop_types: [infantry]

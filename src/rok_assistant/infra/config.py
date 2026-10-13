@@ -24,9 +24,75 @@ class FillLeader(BaseModel):
 # 一圈的代价越大（每级 5 次全量重搜 ≈ 40s）。
 MAX_TARGET_LEVELS = 3
 
+
+# 目标城寨等级的合法范围（2026-10-13：11–15 级寨子上线）。
+#
+# 注意别和上面那个 MAX_TARGET_LEVELS 看串了：**S 结尾的是「最多勾几个」
+# （=3），不带 S 的是「最大是几级」（=15）**。两个名字只差一个字母，改这两
+# 块代码时先确认自己在改哪一个。
+#
+# 面板上 1–10 与 11–15 是**两个互斥的区间**，由一个独立的区间控件切换，
+# 不是一根连续滑条。所以「同一次搜索里混选两个区间」没有意义：面板同一
+# 时刻只能停在其中一个区间上，另一个区间里的等级根本搜不到。
+MIN_TARGET_LEVEL = 1
+MAX_TARGET_LEVEL = 15
+RANGE_BOUNDARY = 10          # 1..10 | 11..15 的分界
+
+
+def level_range(lv: int) -> tuple[int, int]:
+    """该等级所属区间的 (下界, 上界)：1–10 → (1, 10)；11–15 → (11, 15)。
+
+    区间在本次改动里同时出现在三处（校验互斥、切面板区间、盲降降到底），
+    所以给它一个名字，而不是在三处各写一遍 `if lv > 10`。
+    """
+    if lv <= RANGE_BOUNDARY:
+        return (MIN_TARGET_LEVEL, RANGE_BOUNDARY)
+    return (RANGE_BOUNDARY + 1, MAX_TARGET_LEVEL)
+
+# 「劫掠者城寨」哨兵值（2026-10-11 活动第二阶段）。
+#
+# 它是一类**不分等级**的特殊寨子：搜索面板上多一个「劫掠者城寨」页签，
+# 切过去以后**没有等级行**（实测该页 OCR 只有描述文字 + 搜索按钮），
+# 集结流程与普通城寨完全一致（详情弹窗 → 红集结 → …）。
+#
+# 为什么用哨兵值而不是新加一个 `target_raider: bool` 字段：搜索目标在
+# 语义上就是**一个有序列表**（先搜第一个，搜不到换下一个），劫掠者城寨
+# 只是列表里的一种取值。加字段会立刻产生「两个字段互相矛盾」的组合
+# （true + 非空 levels 算哪个？），还得让 target_levels 允许为空、
+# 从而废掉「不能为空」这条既有不变量和它的测试。用 0 则天然互斥：
+# 它就是列表里的一个元素，`[0]` 与 `[6, 5]` 不可能同时成立。
+#
+# 0 这个取值不可能与等级冲突（等级是 1..15），校验里额外要求它**只能
+# 单独出现**——「劫掠者寨子 + 某级城寨」的混合搜索没意义：劫掠者城寨
+# 没有等级，搜不到时换到普通等级等于换了一类目标，用户要的是二选一。
+RAIDER_TARGET = 0
+
 # 有序行军预设列表上限（2026-10-09）：与 MAX_TARGET_LEVELS 同理——列表越长，
 # 每个预设都要跑一遍「点槽 + 确认 selected_preset_N 高亮」的代价越大。
 MAX_MARCH_PRESETS = 3
+
+
+RAIDER_LABEL = "劫掠者寨子"
+
+
+def target_short(v: int) -> str:
+    """列表里的紧凑写法：等级就是数字（`7`），劫掠者写中文。
+
+    给表格列 / 校验文案里的「一串目标」用。哨兵值 0 不能原样摊给用户看
+    （那读起来像「0 级」），但也不能一律写成 `7 级`——`8→7→6` 那种紧凑
+    写法是既有的界面约定。
+    """
+    return RAIDER_LABEL if v == RAIDER_TARGET else str(v)
+
+
+def target_label(v: int) -> str:
+    """带单位的写法（日志 / 校验文案）：`7 级` / `劫掠者寨子`。"""
+    return RAIDER_LABEL if v == RAIDER_TARGET else f"{v} 级"
+
+
+def levels_repr(vals) -> str:
+    """角色自己的目标列表在文案里的写法：`[7, 6]` / `[劫掠者寨子]`。"""
+    return "[" + ", ".join(target_short(v) for v in vals) + "]"
 
 
 class MarchPreset(BaseModel):
@@ -54,6 +120,8 @@ class CharacterConfig(BaseModel):
     # 有序搜索列表：先搜第 1 个，搜不到换第 2 个……绕完一圈放弃本轮。
     # 顺序**完全自由**（用户明确要求，例如 6→4→5 合法），不强制降序；
     # 下限即列表中的最小值，不另设 min_level 字段。
+    # 取值 1..10 = 普通城寨等级；`RAIDER_TARGET`(0) = 劫掠者寨子（不分等级，
+    # 且只能单独出现，见 `_check_levels`）。
     target_levels: list[int]
     # 有序行军预设列表（2026-10-09）：第一个确认不了高亮就换第二个，
     # 行序即优先级。空列表时由下面的 _migrate_march 从旧字段合成。
@@ -69,14 +137,33 @@ class CharacterConfig(BaseModel):
     def _check_levels(cls, v):
         if not v:
             raise ValueError("target_levels 不能为空：至少选一个城寨等级")
+        if RAIDER_TARGET in v:
+            # 劫掠者寨子不分等级 → 「它 + 某个等级」这种混合列表没有意义
+            # （见 RAIDER_TARGET 的注释）。这里连 3 个上限都一并挡掉：
+            # 合法的劫掠者配置有且只有 [RAIDER_TARGET] 这一种。
+            if len(v) > 1:
+                raise ValueError(
+                    f"target_levels 选了劫掠者寨子（{RAIDER_TARGET}）时"
+                    f"不能再选其他等级（收到 {v}）")
+            return v
         if len(v) > MAX_TARGET_LEVELS:
             raise ValueError(
                 f"target_levels 最多 {MAX_TARGET_LEVELS} 个（收到 {len(v)} 个）")
         for lv in v:
-            if not 1 <= lv <= 10:
-                raise ValueError(f"target_levels 取值须在 1..10（收到 {lv}）")
+            if not MIN_TARGET_LEVEL <= lv <= MAX_TARGET_LEVEL:
+                raise ValueError(
+                    f"target_levels 取值须在 {MIN_TARGET_LEVEL}..{MAX_TARGET_LEVEL}"
+                    f"（收到 {lv}）")
         if len(set(v)) != len(v):
             raise ValueError(f"target_levels 有重复等级：{v}")
+        # 区间互斥：与 RAIDER_TARGET 那条并列的第二条互斥规则。按区间下界
+        # 去重后还剩两种，就说明混选了两个区间。
+        if len({level_range(lv)[0] for lv in v}) > 1:
+            raise ValueError(
+                f"target_levels 不能混选两个等级区间"
+                f"（{MIN_TARGET_LEVEL}–{RANGE_BOUNDARY} 与 "
+                f"{RANGE_BOUNDARY + 1}–{MAX_TARGET_LEVEL}）："
+                f"搜索面板同一时刻只能停在一个区间上（收到 {v}）")
         return v
 
     @model_validator(mode="after")
@@ -217,10 +304,10 @@ def find_level_collisions(config: RootConfig) -> list[str]:
                     for t in b.fill_target_leaders)
             if not related:
                 continue
-            levels = "、".join(f"{lv} 级" for lv in shared)
+            levels = "、".join(target_label(lv) for lv in shared)
             out.append(
-                f"[配置] {a.name}（{a.target_levels}）与 {b.name}"
-                f"（{b.target_levels}）都含 {levels} 且至少"
+                f"[配置] {a.name}（{levels_repr(a.target_levels)}）与 {b.name}"
+                f"（{levels_repr(b.target_levels)}）都含 {levels} 且至少"
                 f"一方填对方：可能搜到同一寨子，撞车时后发者被游戏静默拒绝"
                 f"（已降级不计失败，但白烧一次搜索）。建议错开等级。")
     return out
