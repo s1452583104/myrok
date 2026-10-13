@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from rok_assistant.infra.licensing import guard as guard_mod
+from rok_assistant.infra.config import AppMode
 
 MACHINE_CODE = "AAAA-BBBB-CCCC-DDDD-E"
 
@@ -56,7 +57,7 @@ class _FakeController(QObject):
     def reload_config(self):
         pass
 
-    def start(self):
+    def start(self, mode=AppMode.ZHAIDUO):
         self.started = True
         return True
 
@@ -108,9 +109,9 @@ def test_expired_start_does_not_start_controller(monkeypatch, window):
     monkeypatch.setattr(MainWindow, "_open_license_dialog", lambda self: None)
     ctrl = _FakeController()
     w = window(ctrl)
-    w.start_btn.click()
+    w._pages[AppMode.ZHAIDUO].start_btn.click()
     assert ctrl.started is False
-    assert w.start_btn.isEnabled() is True     # 没切成运行态
+    assert w._pages[AppMode.ZHAIDUO].start_btn.isEnabled() is True     # 没切成运行态
     assert "试用已结束" in w.statusBar().currentMessage()
 
 
@@ -119,7 +120,7 @@ def test_trial_start_still_starts(monkeypatch, window):
                         lambda: _StubGuard("trial", 12))
     ctrl = _FakeController()
     w = window(ctrl)
-    w.start_btn.click()
+    w._pages[AppMode.ZHAIDUO].start_btn.click()
     assert ctrl.started is True
 
 
@@ -133,7 +134,7 @@ def test_expired_start_opens_license_dialog(monkeypatch, window):
     # CPython 取完 start_btn 属性就回收了它，C++ 侧连同按钮一起删掉，
     # .click() 会抛「wrapped C/C++ object ... has been deleted」。
     w = window()
-    w.start_btn.click()
+    w._pages[AppMode.ZHAIDUO].start_btn.click()
     assert opened == [True]
 
 
@@ -153,7 +154,7 @@ def test_start_with_broken_license_guard_is_blocked_not_crashed(monkeypatch, win
     monkeypatch.setattr(guard_mod, "current_guard", lambda: _Boom())
     ctrl = _FakeController()
     w = window(ctrl)
-    w.start_btn.click()                        # 不抛
+    w._pages[AppMode.ZHAIDUO].start_btn.click()                        # 不抛
     assert ctrl.started is False
     assert w.license_label.text() == "授权状态未知"
     assert "授权状态未知" in w.statusBar().currentMessage()

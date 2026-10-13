@@ -383,6 +383,23 @@ QTreeWidget#configTree::item { height: 36px; padding-left: $sp_sm; }
 QTreeWidget#configTree::item:hover { background: $fill_base; }
 QTreeWidget#configTree::item:selected { background: $select_bg; color: $primary_active; }
 
+/* ============================ 模式导航 / 模式页 ============================ */
+/* 左导航是列表控件：选中态走主色系（同 configTree 的先例），运行中锁定时文字转灰。 */
+#modeNav {
+    background: $bg_container;
+    border: none;
+    border-right: 1px solid $border_split;
+    outline: none;
+    padding: 8px 0;
+}
+#modeNav::item { height: 40px; padding-left: 16px; color: $text_primary; }
+#modeNav::item:selected { background: $select_bg; color: $primary; }
+#modeNav::item:disabled { color: $text_disabled; }
+#modeNav::item:hover:!selected { background: $bg_layout; }
+
+#modePageHead { background: $bg_container; border-bottom: 1px solid $border_split; }
+#modePageTitle { font-size: ${font_subtitle}px; font-weight: 500; color: $text_primary; }
+
 /* ============================ 分组框 ============================ */
 QGroupBox {
     background: $bg_container;

@@ -4,7 +4,7 @@ import logging
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QComboBox, QFrame, QScrollArea, QStackedWidget,
+    QLabel, QFrame, QListWidget, QListWidgetItem, QStackedWidget,
     QStatusBar, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
@@ -12,10 +12,12 @@ from PyQt6.QtCore import Qt, QTimer
 from . import theme
 from .character_card import CharacterCard
 from .controller import GuiController
-from .flow_layout import FlowLayout, clear_layout
+from .flow_layout import clear_layout
 from .license_dialog import LicenseDialog
 from .log_handler import QtLogHandler
+from .mode_page import ModePage
 from ..infra.app_paths import config_path, ensure_user_files, user_dir
+from ..infra.config import AppMode, IMPLEMENTED_MODES, MODE_LABELS
 from ..infra.licensing import guard
 from ..infra.logger import get_logger
 
@@ -75,36 +77,16 @@ def _maybe_warn_expiring(parent):
             logger.warning("写入到期提醒标记失败：%s", marker)
 
 
-class _EmptyState(QWidget):
-    """卡片区空态：居中占位，不留白不提示（design-tokens §7「空数据」）。
-
-    刻意不放插画/图标——企业后台的空态靠文案说清「下一步做什么」就够。
-    """
-
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-        layout.addStretch(1)
-        title = QLabel("暂无角色")
-        title.setObjectName("emptyTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint = QLabel("请在 config.yaml 中配置角色，然后点击「刷新配置」")
-        hint.setObjectName("emptyHint")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        layout.addSpacing(theme.SP_SM)
-        layout.addWidget(hint)
-        layout.addStretch(1)
-
-
 class MainWindow(QMainWindow):
     def __init__(self, controller: GuiController | None = None):
         super().__init__()
         self.setWindowTitle(_WINDOW_TITLE)
-        self.resize(1200, 800)
+        self.resize(1280, 820)
         self._controller = controller if controller is not None \
             else GuiController(config_path=config_path())
         self._cards: dict[str, CharacterCard] = {}
+        self._pages: dict[AppMode, ModePage] = {}
+        self._running_mode: AppMode | None = None
         self._build_ui()
         self._rebuild_cards()
         self._connect_controller()
@@ -112,7 +94,7 @@ class MainWindow(QMainWindow):
         self._setup_refresh_timer()
 
     # ---------------- UI 骨架 ----------------
-    # 四段式：应用头 / 操作栏 / 卡片区 / 状态栏。分区靠 1px 弱分割线 + 留白，
+    # 三段式：应用头 / 主体（左导航 + 模式页栈）/ 状态栏。分区靠 1px 弱分割线 + 留白，
     # 不用色块（design-tokens §4.1「留白承担分区职责，分割线代替色块」）。
     def _build_ui(self):
         central = QWidget()
@@ -123,12 +105,12 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         root.addWidget(self._build_header())
-        root.addWidget(self._build_toolbar())
-        root.addWidget(self._build_content(), 1)
+        root.addWidget(self._build_body(), 1)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("就绪")
         self._refresh_license_label()
+        self._sync_ui_state()
 
     def _build_header(self) -> QWidget:
         """应用头：产品名 + 副标题（左），授权状态标签 + 激活入口（右）。"""
@@ -150,6 +132,13 @@ class MainWindow(QMainWindow):
         lay.addLayout(titles)
         lay.addStretch(1)                     # 授权区推到右边
 
+        self.refresh_btn = QPushButton("刷新配置")
+        self.refresh_btn.clicked.connect(self._on_refresh_config)
+        self.config_btn = QPushButton("⚙ 配置")
+        self.config_btn.clicked.connect(self._open_config)
+        lay.addWidget(self.refresh_btn)
+        lay.addWidget(self.config_btn)
+        lay.addWidget(self._v_separator())
         self.license_label = QLabel("")
         self.license_label.setStyleSheet(theme.tag_style("default"))
         lay.addWidget(self.license_label)
@@ -157,41 +146,6 @@ class MainWindow(QMainWindow):
         self.activate_btn.clicked.connect(self._open_license_dialog)
         lay.addWidget(self.activate_btn)
         return header
-
-    def _build_toolbar(self) -> QWidget:
-        """操作栏：主操作（开始运行）在前，配置类弱操作靠右。
-
-        同一操作区主按钮**只有「开始运行」一个**（design-tokens §8）。
-        """
-        bar = QFrame()
-        bar.setObjectName("appToolbar")
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(theme.SP_XL, theme.SP_MD, theme.SP_XL, theme.SP_MD)
-        lay.setSpacing(theme.SP_SM)
-
-        self.start_btn = QPushButton("开始运行")
-        theme.make_primary(self.start_btn)
-        self.start_btn.clicked.connect(self._on_start)
-        self.stop_btn = QPushButton("停止")
-        self.stop_btn.setEnabled(False)   # 初始未运行，停止不可用
-        self.stop_btn.clicked.connect(self._on_stop)
-        lay.addWidget(self.start_btn)
-        lay.addWidget(self.stop_btn)
-        lay.addWidget(self._v_separator())
-        lay.addWidget(QLabel("模式"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.setMaximumWidth(160)
-        self.mode_combo.addItems(["rally"])
-        lay.addWidget(self.mode_combo)
-        lay.addStretch(1)
-
-        self.refresh_btn = QPushButton("刷新配置")
-        self.refresh_btn.clicked.connect(self._on_refresh_config)
-        self.config_btn = QPushButton("⚙ 配置")
-        self.config_btn.clicked.connect(self._open_config)
-        lay.addWidget(self.refresh_btn)
-        lay.addWidget(self.config_btn)
-        return bar
 
     @staticmethod
     def _v_separator() -> QFrame:
@@ -201,25 +155,38 @@ class MainWindow(QMainWindow):
         sep.setFixedWidth(1)
         return sep
 
-    def _build_content(self) -> QWidget:
-        """卡片区：有角色时走自适应流式网格，没有时整块换成空态占位。"""
-        # 内部容器必须随卡片撑开，否则真机窗口里卡片区一片空白
-        # （离屏测试只断言卡片对象存在，测不出不可见——2026-09-11 实机验收发现）
-        self.account_area = QScrollArea()
-        self.account_area.setObjectName("cardArea")
-        self.account_area.setWidgetResizable(True)
-        self.account_area.setFrameShape(QFrame.Shape.NoFrame)
-        self.account_widget = QWidget()
-        self.account_layout = FlowLayout(self.account_widget,
-                                         margin=theme.SP_XL,
-                                         h_spacing=theme.SP_LG,
-                                         v_spacing=theme.SP_LG)
-        self.account_area.setWidget(self.account_widget)
+    def _build_body(self) -> QWidget:
+        """左侧模式导航 + 右侧模式页栈（spec §5.3）。"""
+        body = QWidget()
+        lay = QHBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-        self._content_stack = QStackedWidget()
-        self._content_stack.addWidget(self.account_area)   # 0：卡片网格
-        self._content_stack.addWidget(_EmptyState())       # 1：空态
-        return self._content_stack
+        self.mode_nav = QListWidget()
+        self.mode_nav.setObjectName("modeNav")
+        self.mode_nav.setFixedWidth(160)
+        for mode in AppMode:
+            item = QListWidgetItem(MODE_LABELS[mode])
+            item.setData(Qt.ItemDataRole.UserRole, mode)
+            self.mode_nav.addItem(item)
+        self.mode_nav.setCurrentRow(0)   # 固定开在寨多多（QListWidget 默认不选中任何行）
+        self.mode_nav.currentRowChanged.connect(self._on_mode_changed)
+        lay.addWidget(self.mode_nav)
+
+        self.mode_stack = QStackedWidget()
+        for mode in AppMode:
+            page = ModePage(mode)
+            # lambda 默认参数捕获 mode：否则所有页面共用循环结束时的那个值
+            page.start_btn.clicked.connect(lambda _=False, m=mode: self._on_start(m))
+            page.stop_btn.clicked.connect(self._on_stop)
+            self._pages[mode] = page
+            self.mode_stack.addWidget(page)
+        lay.addWidget(self.mode_stack, 1)
+        return body
+
+    def _on_mode_changed(self, row: int):
+        if row >= 0:
+            self.mode_stack.setCurrentIndex(row)
 
     def _connect_controller(self):
         # worker 线程经信号跨线程送达（Qt 自动排队），槽内访问控件是主线程安全的
@@ -262,14 +229,14 @@ class MainWindow(QMainWindow):
 
     # ---------------- 角色卡片 ----------------
     def _rebuild_cards(self):
-        clear_layout(self.account_layout)
+        page = self._pages[AppMode.ZHAIDUO]
+        clear_layout(page.card_layout)
         self._cards.clear()
         for info in self._controller.characters():
             card = CharacterCard(info["char_name"], info["role"])
             self._cards[info["char_id"]] = card
-            self.account_layout.addWidget(card)
-        # 空数据不留白：整块换成居中占位（design-tokens §7「空数据」）
-        self._content_stack.setCurrentIndex(0 if self._cards else 1)
+            page.card_layout.addWidget(card)
+        self._sync_ui_state()
         if not self._cards:
             self.statusBar().showMessage("未加载到角色：请检查 config.yaml 后点击「刷新配置」")
 
@@ -290,7 +257,7 @@ class MainWindow(QMainWindow):
             return False
 
     # ---------------- 运行控制 ----------------
-    def _on_start(self):
+    def _on_start(self, mode: AppMode):
         if not self._license_ok():             # 到期就不让跑（但仍能开窗）
             return
         if not self._controller.config_loaded and not self._controller.load_config():
@@ -299,17 +266,35 @@ class MainWindow(QMainWindow):
         # 只有真起来了才切运行态。启动失败（如预检被拒）时 start() 返回 False，
         # 错误已由 error_occurred 弹框呈现；若照旧置位，界面会谎报「运行中」，
         # Start 变灰、Stop 可点，而实际什么都没跑。
-        if not self._controller.start():
+        if not self._controller.start(mode):
             return
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+        self._running_mode = mode
+        self._sync_ui_state()
         self.statusBar().showMessage("运行中")
 
     def _on_stop(self):
         self._controller.stop()
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        self._running_mode = None
+        self._sync_ui_state()
         self.statusBar().showMessage("已停止")
+
+    def _sync_ui_state(self):
+        """从三个输入推导全部界面状态：运行中的模式 / 本页的模式 / 有无角色。
+
+        互斥不是靠三处 if 维护的，是从 _running_mode 这一个状态**推导**出来的
+        （spec §5.4）。加模式维度后散落的 setEnabled 会翻倍，改一处漏一处。
+        """
+        running = self._running_mode is not None
+        self.mode_nav.setEnabled(not running)          # 运行中锁导航
+        for mode, page in self._pages.items():
+            page.start_btn.setEnabled(not running and page.implemented)
+            page.stop_btn.setEnabled(running and mode == self._running_mode)
+            if not page.implemented:
+                page.body.setCurrentIndex(ModePage.LOCKED)
+            elif self._cards:
+                page.body.setCurrentIndex(ModePage.CARD)
+            else:
+                page.body.setCurrentIndex(ModePage.EMPTY)
 
     # ---------------- 状态 / 错误 / 缩略图 ----------------
     def _on_status_changed(self, payload: dict):
@@ -327,8 +312,8 @@ class MainWindow(QMainWindow):
         时上报 worker_finished。不弹模态框：跑完是正常结束，打断无人值守
         场景反而添乱。
         """
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        self._running_mode = None
+        self._sync_ui_state()
         reasons = "；".join(f"{k}: {v}" for k, v
                             in (payload.get("reasons") or {}).items())
         self.statusBar().showMessage(f"已收工 —— {reasons}" if reasons else "已收工")
