@@ -55,7 +55,8 @@ SCENES: dict[str, dict] = {
         "desc": "野蛮人/城寨搜索页",
         "classes": ["search_icon", "level_minus", "level_plus", "search_btn",
                     "search_back", "tab_fortress", "toast_no_fortress",
-                    "barb_search_tab", "zhaizi_level_text"],
+                    "barb_search_tab", "zhaizi_level_text",
+                    "tab_raider", "raider_search_tab"],
     },
     "02_warlist": {
         "desc": "战争列表（集结）",
@@ -112,7 +113,8 @@ TEXT_ANCHORED: dict[str, dict] = {
 }
 
 # 门控位置先验：固定框 + 必须满足的门控条件。所有坐标是 1920x1080 归一化 (cx, cy, w, h)。
-# gate_text   = 该文本必须被 OCR 找到，且其纵向中心与 prior 的 cy 相差不超过 gate_dy；
+# gate_text     = 该文本必须被 OCR 找到，且其纵向中心与 prior 的 cy 相差不超过 gate_dy；
+# gate_tmpl     = 该模板**必须**命中（正向门控，锁定「就是这一种状态」）；
 # gate_not_tmpl = 该模板**不得**命中（负向门控，排除同名不同义的 UI）。
 #
 # 刻意**不含** `sort_opt_latest/nearest/shortest`：实测那 12 个实例里有一半来自
@@ -122,27 +124,70 @@ TEXT_ANCHORED: dict[str, dict] = {
 #
 # 同样不含 `selected_preset_*`（x 有两组取值 0.8625/0.775，且既有标注互相差一行）
 # 与 `troop_check`（是 4 列网格，不是单点）。
+#
+# 2026-10-10 活动「劫掠者」上线，搜索面板 2 页签 → 3 页签：「野蛮人城寨」页签
+# 从右侧挪到中间且变窄（旧 cx 0.2891 / w 0.1406 → 新 cx 0.2109 / w 0.0969）。
+# 两个类的语义不变，仍是**同一块页签的两种状态**：
+#   灰（未选中，点了才切到城寨页）= `tab_fortress`；
+#   棕（已选中，就在城寨页）      = `barb_search_tab`。
+# 二者互斥、同框，靠 tab_fortress 模板（已改成文字裁剪，两种布局都命中）分辨：
+# 命中 → 灰态放 tab_fortress；不命中且 OCR 找得到「野蛮人城寨」→ 棕态放 barb_search_tab。
+# box/roi 按**新（3 页签）布局**实测；旧布局的帧早已入库，不会走这段。
+TAB_BOX = (0.2109, 0.3278, 0.0969, 0.0574)   # 中间页签「野蛮人城寨」整块，实测 x 312..498 / y 323..385
+TAB_ROI = (280, 310, 760, 400)               # 只含页签行；面板描述文字在 y>=432，故意不含
+
+# 2026-10-11 活动第二阶段：右页签由「劫掠者」变成「劫掠者城寨」——不分等级的
+# 特殊寨子（页面上没有等级行）。同样是**一块页签的两种状态**，同一套门控：
+#   灰（未选中，点了才切到劫掠者页）= `tab_raider`；
+#   棕（已选中，就在劫掠者页）      = `raider_search_tab`。
+# 右页签外框实测 x 511..697 / y 323..385（与中间页签同宽同高，只是 x 平移）。
+# 两页的 OCR 门控文本不同（野蛮人城寨 / 劫掠者城寨），互不干扰；10-10 那批帧
+# 右页签还叫「劫掠者」，门控文本匹配不上，不会被事后补标。
+RAIDER_BOX = (0.3146, 0.3278, 0.0969, 0.0574)  # 右页签「劫掠者城寨」整块，实测 x 511..697 / y 323..385
+
 PRIORS: list[dict] = [
     {
-        # 实测 n=12：cx 0.2901±0.0023 / cy 0.3319±0.0088（极稳）。
-        # 负向门控必需：`tab_fortress` 与 `barb_search_tab` 实测是**同一个矩形**
-        # （cx 0.2909/0.2891、w 0.1443/0.1406）且从不共存——语义是「当前激活的
-        # 页签」。不加门控会在城寨页帧上放出野蛮人页签的假框，等于拿同一片像素
-        # 教两个类。
+        "cls": "tab_fortress",
+        "box": TAB_BOX,
+        "roi": TAB_ROI,
+        "gate_text": "野蛮人城寨",
+        "gate_dy": 0.05,
+        "gate_tmpl": "tab_fortress",
+    },
+    {
         "cls": "barb_search_tab",
-        "box": (0.2891, 0.3292, 0.1406, 0.0509),
-        "roi": (300, 300, 900, 420),
-        "gate_text": "野蛮人",
+        "box": TAB_BOX,
+        "roi": TAB_ROI,
+        "gate_text": "野蛮人城寨",
         "gate_dy": 0.05,
         "gate_not_tmpl": "tab_fortress",
+    },
+    {
+        "cls": "tab_raider",
+        "box": RAIDER_BOX,
+        "roi": TAB_ROI,
+        "gate_text": "劫掠者城寨",
+        "gate_dy": 0.05,
+        "gate_tmpl": "tab_raider",
+    },
+    {
+        "cls": "raider_search_tab",
+        "box": RAIDER_BOX,
+        "roi": TAB_ROI,
+        "gate_text": "劫掠者城寨",
+        "gate_dy": 0.05,
+        "gate_not_tmpl": "tab_raider",
     },
 ]
 
 # 场景 → 需要跑模板匹配的 manifest 模板 id 白名单（None = 全部）。
 # 限定白名单能显著减少误报（例：队列图标模板不该在搜索页上匹配）。
 SCENE_TEMPLATES: dict[str, list[str] | None] = {
+    # 2026-10-10 起 `tab_fortress` 不在这里：它的模板已改成只裁页签**文字**
+    # （见 manifest 注释），模板腿给出的会是文字框而不是页签框，与既有标注
+    # 约定（整块页签）不符。改由下面的 PRIORS 出整块页签框。
     "01_zhaizi_search": ["search_icon", "level_minus", "level_plus", "search_btn",
-                         "search_back", "tab_fortress", "toast_no_fortress"],
+                         "search_back", "toast_no_fortress"],
     "02_warlist": ["war_title", "join_btn", "rally_attack_popup", "time_5min",
                    "red_rally", "blue_rally", "queue_battle_icon"],
     "03_queue_panel": ["queue_panel", "queue_badge", "queue_gather_icon",
@@ -312,6 +357,20 @@ def prelabel(img: np.ndarray, scene: str, names_inv: dict[str, int],
         cy_ocr = (anchor[1] + anchor[3]) / 2 / h
         if abs(cy_ocr - cy_n) > p["gate_dy"]:
             continue  # 文本在别处（如收起的排序条）→ 状态不符
+
+        need = p.get("gate_tmpl")
+        if need:
+            spec_need = specs.get(need)
+            if need not in templates or spec_need is None:
+                # 正向门控要的模板没加载/没配 → 状态无法确认。这里**必须**跳过而不是
+                # 放行：门控是「只有确认是这一态才出框」，模板缺失时放行等于退化成
+                # 无条件放框（旧行为就是这么写的，实测会把两类同形 UI 全标上）。
+                continue
+            # threshold 传 1.0：只要 best_score，不要 matches。阈值取该模板在
+            # manifest 里的值（不硬编码），模板换阈值这里跟着走。
+            _, nbest = multi_match(img, templates[need], 1.0, p["roi"])
+            if nbest < spec_need.threshold:
+                continue  # 正向门控未过：不是这一种状态（例：页签已选中→棕底白字）
 
         blocker = p.get("gate_not_tmpl")
         if blocker and blocker in templates:

@@ -291,12 +291,13 @@ class _OcrStub:
         return self._blocks
 
 
-NAMES_INV = {"tab_fortress": 6, "barb_search_tab": 51}
+NAMES_INV = {"tab_fortress": 6, "barb_search_tab": 51, "search_btn": 4}
 
 
 def _tab_text_block(y1: int, y2: int):
-    # barb_search_tab 先验 cy = 0.3292 → 355.5px，容差 gate_dy 0.05 = 54px
-    return [(400, y1, 520, y2, "野蛮人", 0.9)]
+    # 两个页签先验共用同一段门控文本（同一块页签的两种状态）；
+    # cy = 0.3278 → 354px，容差 gate_dy 0.05 = 54px
+    return [(400, y1, 520, y2, "野蛮人城寨", 0.9)]
 
 
 def _frame_with_tab_fortress():
@@ -312,23 +313,50 @@ def _emitted(prov: list[str]) -> set[str]:
     return {p.rsplit("<-", 1)[0] for p in prov}
 
 
-def test_prior_suppressed_when_same_rectangle_class_present():
-    """tab_fortress 与 barb_search_tab 实测是同一矩形（cx 0.2909/0.2891）且从不共存。
+def test_prior_barb_tab_suppressed_when_fortress_template_hits():
+    """tab_fortress 与 barb_search_tab 是同一块页签的两种状态（同矩形、从不共存）。
 
-    城寨页帧上若还放出野蛮人页签的框，等于拿同一片像素教两个互斥的类。
+    灰态（模板命中）时若还放出 barb_search_tab 的框，等于拿同一片像素教两个互斥的类。
     """
     img, tmpl = _frame_with_tab_fortress()
-    _boxes, prov, _best = prelabel(
+    boxes, prov, _best = prelabel(
         img, "01_zhaizi_search", NAMES_INV,
         templates={"tab_fortress": tmpl},
         specs={"tab_fortress": _Spec()},
         ocr=_OcrStub(_tab_text_block(340, 370)))
 
-    assert "tab_fortress" in _emitted(prov)        # 模板层照常出框
-    assert "barb_search_tab" not in _emitted(prov)  # 先验层被负向门控拦下
+    assert prov == ["tab_fortress<-prior"]   # 正向门控过 → 灰态
+    cid, cx, cy, _w, _h = boxes[0]
+    assert cid == 6
+    assert abs(cx - 0.2109) < 1e-3 and abs(cy - 0.3278) < 1e-3
 
 
-def test_prior_emitted_when_blocker_absent():
+def test_tab_fortress_prior_needs_template_hit():
+    """棕态（已选中，就在城寨页）：文字还在但模板不命中 → 不放 tab_fortress。
+
+    正向门控是「确认是这一态才出框」，不是「模板随便给个就出框」。
+    """
+    rng = np.random.RandomState(3)
+    tmpl = (rng.rand(40, 80, 3) * 255).astype(np.uint8)  # 与画面无关的噪声
+    img = np.zeros((NATIVE_H, NATIVE_W, 3), dtype=np.uint8)
+
+    _boxes, prov, _st = prelabel(img, "01_zhaizi_search", NAMES_INV,
+                                 templates={"tab_fortress": tmpl},
+                                 specs={"tab_fortress": _Spec()},
+                                 ocr=_OcrStub(_tab_text_block(340, 370)))
+    assert prov == ["barb_search_tab<-prior"]
+
+
+def test_tab_fortress_prior_skipped_when_gate_template_not_loaded():
+    """正向门控要的模板没加载 → 不放 tab_fortress（放行等于退化成无条件放框）。"""
+    img = np.zeros((NATIVE_H, NATIVE_W, 3), dtype=np.uint8)
+    _boxes, prov, _best = prelabel(img, "01_zhaizi_search", NAMES_INV,
+                                   templates={}, specs={},
+                                   ocr=_OcrStub(_tab_text_block(340, 370)))
+    assert _emitted(prov) == {"barb_search_tab"}
+
+
+def test_barb_tab_prior_emitted_when_blocker_absent():
     """反向：没有城寨页签时，野蛮人页签先验应正常出框。"""
     img = np.zeros((NATIVE_H, NATIVE_W, 3), dtype=np.uint8)
     boxes, prov, _best = prelabel(img, "01_zhaizi_search", NAMES_INV,
@@ -339,7 +367,7 @@ def test_prior_emitted_when_blocker_absent():
     assert prov == ["barb_search_tab<-prior"]
     cid, cx, cy, _w, _h = boxes[0]
     assert cid == 51
-    assert abs(cx - 0.2891) < 1e-3 and abs(cy - 0.3292) < 1e-3
+    assert abs(cx - 0.2109) < 1e-3 and abs(cy - 0.3278) < 1e-3
 
 
 def test_prior_gate_rejects_text_at_wrong_vertical_position():
@@ -403,26 +431,31 @@ def test_no_full_frame_probe_when_roi_already_hit():
     """ROI 内已命中就不再多跑一遍全帧（那只是诊断信号，白花一次 matchTemplate）。"""
     img, tmpl = _frame_with_tab_fortress()
     _b, prov, st = prelabel(img, "01_zhaizi_search", NAMES_INV,
-                            templates={"tab_fortress": tmpl},
-                            specs={"tab_fortress": _Spec(roi=ROI(300, 300, 900, 420))},
+                            templates={"search_btn": tmpl},
+                            specs={"search_btn": _Spec(roi=ROI(300, 300, 900, 420))},
                             ocr=_OcrStub([]))
-    assert prov == ["tab_fortress<-tmpl"]
-    assert "tab_fortress" not in st["best_full"]
+    assert prov == ["search_btn<-tmpl"]
+    assert "search_btn" not in st["best_full"]
 
 
 def test_scene_template_whitelist_filters_out_of_scene_classes():
-    """同一帧、同一模板：场景白名单里有它就出框，没有就一个框都不出。"""
+    """同一帧、同一模板：场景白名单里有它就出框，没有就一个框都不出。
+
+    注意 `tab_fortress` 已不在 `01_zhaizi_search` 白名单里（模板改成只裁文字，
+    模板层给的框与标注约定不符），所以这里换个白名单内的模板来考。
+    """
     img, tmpl = _frame_with_tab_fortress()
     ocr = _OcrStub([])  # 空 OCR，让先验层不参与，只考察模板层
+    roi = ROI(300, 300, 900, 420)
 
     _b_in, prov_in, _s_in = prelabel(img, "01_zhaizi_search", NAMES_INV,
-                                     templates={"tab_fortress": tmpl},
-                                     specs={"tab_fortress": _Spec()}, ocr=ocr)
+                                     templates={"search_btn": tmpl},
+                                     specs={"search_btn": _Spec(roi=roi)}, ocr=ocr)
     _b_out, prov_out, _s_out = prelabel(img, "02_warlist", NAMES_INV,
-                                        templates={"tab_fortress": tmpl},
-                                        specs={"tab_fortress": _Spec()}, ocr=ocr)
+                                        templates={"search_btn": tmpl},
+                                        specs={"search_btn": _Spec(roi=roi)}, ocr=ocr)
 
-    assert prov_in == ["tab_fortress<-tmpl"]
+    assert prov_in == ["search_btn<-tmpl"]
     assert prov_out == []
 
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""训练类英文名 → 中文名对照（dataset/dataset.yaml 方案 B，64 类）。
+"""训练类英文名 → 中文名对照（dataset/dataset.yaml 方案 B，66 类）。
 
 语义来源 templates/manifest.yaml 注释与 src/rok_assistant/workers 用法。
 CLASS_ZH 缺项时 zh() 原样返回英文名，新增类漏配不会报错。
@@ -18,6 +18,8 @@ CLASS_ZH: dict[str, str] = {
     "toast_no_fortress": "无城寨提示框",
     "barb_search_tab": "野蛮人搜索页签",
     "zhaizi_level_text": "寨子等级文本",
+    "tab_raider": "劫掠者城寨页签",
+    "raider_search_tab": "劫掠者搜索页签",
     "troop_check": "部队类型勾选",
     # 集结 / 战争
     "red_rally": "红色集结旗",
