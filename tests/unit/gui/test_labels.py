@@ -44,6 +44,11 @@ def test_humanize_loc_keeps_unknown_segments():
         "模拟器 / 第1个 / brand_new_field"
 
 
+def test_humanize_loc_covers_mode_keys():
+    assert humanize_loc(("zhaiduo", "instances", 0, "characters", 1)) == \
+        "寨多多模式 / 模拟器 / 第1个 / 角色 / 第2个"
+
+
 def test_humanize_loc_empty_for_root_level_error():
     """根级（跨字段）错误 loc 为空；调用方负责给个「整体配置」的兜底标题。"""
     assert humanize_loc(()) == ""

@@ -22,7 +22,7 @@ def qapp():
 def _valid_config_dict() -> dict:
     return {
         "app": {"mumu_manager_path": "C:/mumu/MuMuManager.exe", "adb_path": "adb"},
-        "instances": [
+        "zhaiduo": {"instances": [
             {
                 "id": "inst0", "name": "阑珊号", "mumu_index": 0,
                 "characters": [
@@ -34,7 +34,7 @@ def _valid_config_dict() -> dict:
                      "fill_target_leaders": [{"instance": "inst0", "name": "Hero"}]},
                 ],
             }
-        ],
+        ]},
     }
 
 
@@ -48,8 +48,14 @@ def test_dialog_loads_and_builds_tree(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
     labels = [dlg._tree.topLevelItem(i).text(0) for i in range(dlg._tree.topLevelItemCount())]
-    assert any("阑珊号" in t for t in labels)
-    assert any("全局设置" in t for t in labels)
+    assert any("公共配置" in t for t in labels)
+    assert any("寨多多模式" in t for t in labels)
+    # 实例现在是「寨多多模式」的子项，不在顶层
+    zhaiduo = next(dlg._tree.topLevelItem(i)
+                   for i in range(dlg._tree.topLevelItemCount())
+                   if "寨多多模式" in dlg._tree.topLevelItem(i).text(0))
+    child_labels = [zhaiduo.child(i).text(0) for i in range(zhaiduo.childCount())]
+    assert any("阑珊号" in t for t in child_labels)
 
 
 def test_save_writes_yaml(tmp_path, qapp, monkeypatch):
@@ -60,7 +66,7 @@ def test_save_writes_yaml(tmp_path, qapp, monkeypatch):
     assert dlg.save() is True
     loaded = yaml.safe_load(cfg.read_text(encoding="utf-8"))
     assert loaded["app"]["mumu_manager_path"] == "C:/other/MuMuManager.exe"
-    assert loaded["instances"][0]["characters"][1]["fill_target_leaders"][0]["name"] == "Hero"
+    assert loaded["zhaiduo"]["instances"][0]["characters"][1]["fill_target_leaders"][0]["name"] == "Hero"
 
 
 def test_save_rejects_invalid_and_keeps_file(tmp_path, qapp, monkeypatch):
@@ -69,11 +75,11 @@ def test_save_rejects_invalid_and_keeps_file(tmp_path, qapp, monkeypatch):
                         lambda *a, **k: errors.append(k.get("text") or (a[2] if len(a) > 2 else "")))
     cfg = _write_config(tmp_path)
     dlg = ConfigDialog(cfg)
-    dlg._data["instances"][0]["characters"][1]["fill_target_leaders"] = []
+    dlg._data["zhaiduo"]["instances"][0]["characters"][1]["fill_target_leaders"] = []
     assert dlg.save() is False
     assert any("fill_target_leaders" in e for e in errors)
     loaded = yaml.safe_load(cfg.read_text(encoding="utf-8"))
-    assert loaded["instances"][0]["characters"][1]["fill_target_leaders"] == [
+    assert loaded["zhaiduo"]["instances"][0]["characters"][1]["fill_target_leaders"] == [
         {"instance": "inst0", "name": "Hero"}]
 
 
@@ -105,12 +111,11 @@ def test_clamped_spin_preserves_original_value(tmp_path, qapp, monkeypatch):
 def test_tree_navigation_switches_stack(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
-    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))
-    assert dlg._stack.currentIndex() == 2
-    dlg._data["app"]["adb_path"] = "C:/x/adb.exe"
-    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))
+    # 0=公共 1=寨多多 2=宝石 3=答题 4=YAML
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))     # 寨多多模式
     assert dlg._stack.currentIndex() == 1
-    assert "C:/x/adb.exe" in dlg._yaml_view.toPlainText()
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(4))     # YAML 源码
+    assert dlg._stack.currentIndex() == 4
 
 
 def test_on_save_accepts_only_when_valid(tmp_path, qapp, monkeypatch):
@@ -120,7 +125,7 @@ def test_on_save_accepts_only_when_valid(tmp_path, qapp, monkeypatch):
     dlg._on_save()
     assert dlg.result() == 1
     dlg2 = ConfigDialog(_write_config(tmp_path))
-    dlg2._data["instances"][0]["characters"][1]["fill_target_leaders"] = []
+    dlg2._data["zhaiduo"]["instances"][0]["characters"][1]["fill_target_leaders"] = []
     dlg2._on_save()
     assert dlg2.result() == 0
 
@@ -138,12 +143,12 @@ def test_add_instance_generates_unique_id(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
     dlg._add_instance()
-    assert len(dlg._data["instances"]) == 2
+    assert len(dlg._data["zhaiduo"]["instances"]) == 2
     # 与首启模板同前缀（mumu0/1…），不是另起一套叫法
-    assert dlg._data["instances"][1]["id"] == "mumu0"
+    assert dlg._data["zhaiduo"]["instances"][1]["id"] == "mumu0"
     dlg._add_instance()                       # 再加一台必须拿到不重名的 id
-    assert dlg._data["instances"][2]["id"] == "mumu1"
-    assert dlg._data["instances"][1]["characters"] == []
+    assert dlg._data["zhaiduo"]["instances"][2]["id"] == "mumu1"
+    assert dlg._data["zhaiduo"]["instances"][1]["characters"] == []
     # 新实例不合法（无角色），保存必须被拒
     assert dlg.save() is False
 
@@ -155,12 +160,12 @@ def test_add_and_edit_character_roundtrip(tmp_path, qapp, monkeypatch):
             "march_preset": 3, "march_troop_types": ["archer"],
             "fill_target_leaders": [{"instance": "inst0", "name": "Hero"}]}
     dlg._save_character(0, None, char)
-    chars = dlg._data["instances"][0]["characters"]
+    chars = dlg._data["zhaiduo"]["instances"][0]["characters"]
     assert len(chars) == 3
     assert chars[2]["role"] == "either"
     assert dlg.save() is True
     loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
-    assert loaded["instances"][0]["characters"][2]["name"] == "New"
+    assert loaded["zhaiduo"]["instances"][0]["characters"][2]["name"] == "New"
 
 
 def test_character_edit_dialog_rejects_member_without_fills(qapp):
@@ -212,7 +217,7 @@ def test_delete_character(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
     dlg._delete_character(0, 1)  # 删 M1（有 fill target 引用，删除后 leader 无妨）
-    assert [c["name"] for c in dlg._data["instances"][0]["characters"]] == ["Hero"]
+    assert [c["name"] for c in dlg._data["zhaiduo"]["instances"][0]["characters"]] == ["Hero"]
     assert dlg.save() is True
 
 
@@ -228,12 +233,12 @@ def test_delete_character_with_incoming_reference_blocks_save(tmp_path, qapp, mo
 def test_manual_adb_instance_keeps_none_mumu_index(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     data = _valid_config_dict()
-    inst = data["instances"][0]
+    inst = data["zhaiduo"]["instances"][0]
     inst["mumu_index"] = None
     inst["adb_address"] = "127.0.0.1:16384"
     dlg = ConfigDialog(_write_config(tmp_path, data))
-    assert dlg._data["instances"][0]["mumu_index"] is None
-    assert dlg._data["instances"][0]["adb_address"] == "127.0.0.1:16384"
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] is None
+    assert dlg._data["zhaiduo"]["instances"][0]["adb_address"] == "127.0.0.1:16384"
 
 
 def test_table_has_no_inline_edit(tmp_path, qapp, monkeypatch):
@@ -251,20 +256,20 @@ def test_delete_instance_requires_confirmation(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", _no)
     dlg = ConfigDialog(_write_config(tmp_path))
     dlg._delete_instance(0)
-    assert len(dlg._data["instances"]) == 1  # 回答 No → 不删
+    assert len(dlg._data["zhaiduo"]["instances"]) == 1  # 回答 No → 不删
 
     monkeypatch.setattr(QMessageBox, "question",
                         lambda *a, **k: QMessageBox.StandardButton.Yes)
     dlg._delete_instance(0)
-    assert dlg._data["instances"] == []  # 回答 Yes → 删除
+    assert dlg._data["zhaiduo"]["instances"] == []  # 回答 Yes → 删除
 
 
 def test_rename_propagates_to_fill_targets(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
-    hero = dict(dlg._data["instances"][0]["characters"][0])
+    hero = dict(dlg._data["zhaiduo"]["instances"][0]["characters"][0])
     dlg._save_character(0, hero, dict(hero, name="Hero2"))
-    m1 = dlg._data["instances"][0]["characters"][1]
+    m1 = dlg._data["zhaiduo"]["instances"][0]["characters"][1]
     assert m1["fill_target_leaders"] == [{"instance": "inst0", "name": "Hero2"}]
     assert dlg.save() is True
 
@@ -277,23 +282,24 @@ def test_mode_switch_to_mumu_clears_addr_field(tmp_path, qapp, monkeypatch):
     """
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     data = _valid_config_dict()
-    inst = data["instances"][0]
+    inst = data["zhaiduo"]["instances"][0]
     inst["mumu_index"] = None
     inst["adb_address"] = "127.0.0.1:16384"
     dlg = ConfigDialog(_write_config(tmp_path, data))
     dlg._mode_combos[0].setCurrentIndex(0)
-    assert dlg._data["instances"][0]["adb_address"] == ""
-    assert dlg._widgets[("instances", 0, "adb_address")].text() == ""
-    assert dlg._data["instances"][0]["mumu_index"] is None
+    assert dlg._data["zhaiduo"]["instances"][0]["adb_address"] == ""
+    assert dlg._widgets[("zhaiduo", "instances", 0, "adb_address")].text() == ""
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] is None
 
 
 def test_reload_tree_preserves_selection(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     dlg = ConfigDialog(_write_config(tmp_path))
-    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))  # 实例 0
+    zhaiduo = dlg._tree.topLevelItem(1)          # 寨多多模式
+    dlg._tree.setCurrentItem(zhaiduo.child(0))   # 实例 0（现在是子项）
     dlg._add_instance()
     cur = dlg._tree.currentItem()
-    assert cur.data(0, Qt.ItemDataRole.UserRole) == ("page", 0)
+    assert cur.data(0, Qt.ItemDataRole.UserRole) == ("instance", 0)
 
 
 def test_test_connection_reports_error(tmp_path, qapp, monkeypatch):
@@ -310,10 +316,10 @@ def test_test_connection_reports_error(tmp_path, qapp, monkeypatch):
 
 def test_test_connection_unconfigured_shows_hint(tmp_path, qapp, monkeypatch):
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = None
-    data["instances"][0]["adb_address"] = "127.0.0.1:16384"  # 先合法加载
+    data["zhaiduo"]["instances"][0]["mumu_index"] = None
+    data["zhaiduo"]["instances"][0]["adb_address"] = "127.0.0.1:16384"  # 先合法加载
     dlg = ConfigDialog(_write_config(tmp_path, data))
-    dlg._data["instances"][0]["adb_address"] = ""  # 模拟用户清空了地址
+    dlg._data["zhaiduo"]["instances"][0]["adb_address"] = ""  # 模拟用户清空了地址
     dlg._test_connection(0)
     assert "未配置" in dlg._status_labels[0].text()
 
@@ -332,7 +338,7 @@ def test_detect_all_instances_marks_stopped(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = 2      # 「如愿-2」未启动
+    data["zhaiduo"]["instances"][0]["mumu_index"] = 2      # 「如愿-2」未启动
     dlg = _open(_write_config(tmp_path, data), qapp)
     dlg._detect_all_instances()
     assert "○ 未启动" in dlg._detect_output.toPlainText()
@@ -342,7 +348,7 @@ def test_detect_all_instances_handles_missing_index(tmp_path, qapp, monkeypatch)
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = 7      # MuMu 里没这台
+    data["zhaiduo"]["instances"][0]["mumu_index"] = 7      # MuMu 里没这台
     dlg = _open(_write_config(tmp_path, data), qapp)
     dlg._detect_all_instances()
     assert "没找到编号 7" in dlg._detect_output.toPlainText()
@@ -409,16 +415,16 @@ def test_picking_by_name_sets_mumu_index(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = None
-    data["instances"][0]["adb_address"] = "127.0.0.1:16384"   # 先以手动模式合法加载
-    data["instances"][0]["name"] = ""
+    data["zhaiduo"]["instances"][0]["mumu_index"] = None
+    data["zhaiduo"]["instances"][0]["adb_address"] = "127.0.0.1:16384"   # 先以手动模式合法加载
+    data["zhaiduo"]["instances"][0]["name"] = ""
     dlg = _open(_write_config(tmp_path, data), qapp)
     dlg._mode_combos[0].setCurrentIndex(0)      # 切到「按模拟器选择」
-    assert dlg._data["instances"][0]["adb_address"] == ""
+    assert dlg._data["zhaiduo"]["instances"][0]["adb_address"] == ""
     dlg._instance_lists[0].setCurrentRow(2)     # ○ 如愿-2 · 未启动
-    assert dlg._data["instances"][0]["mumu_index"] == 2
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] == 2
     # 显示名空着时顺手填上，省得用户再想一个
-    assert dlg._data["instances"][0]["name"] == "如愿-2"
+    assert dlg._data["zhaiduo"]["instances"][0]["name"] == "如愿-2"
 
 
 def test_picking_does_not_overwrite_existing_display_name(tmp_path, qapp, monkeypatch):
@@ -426,8 +432,8 @@ def test_picking_does_not_overwrite_existing_display_name(tmp_path, qapp, monkey
     _stub_scan(monkeypatch)
     dlg = _open(_write_config(tmp_path), qapp)   # name 已是「阑珊号」
     dlg._instance_lists[0].setCurrentRow(0)
-    assert dlg._data["instances"][0]["mumu_index"] == 0
-    assert dlg._data["instances"][0]["name"] == "阑珊号"
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] == 0
+    assert dlg._data["zhaiduo"]["instances"][0]["name"] == "阑珊号"
 
 
 def test_autofilled_name_follows_re_pick(tmp_path, qapp, monkeypatch):
@@ -439,18 +445,18 @@ def test_autofilled_name_follows_re_pick(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = None
-    data["instances"][0]["adb_address"] = "127.0.0.1:16384"
-    data["instances"][0]["name"] = ""
+    data["zhaiduo"]["instances"][0]["mumu_index"] = None
+    data["zhaiduo"]["instances"][0]["adb_address"] = "127.0.0.1:16384"
+    data["zhaiduo"]["instances"][0]["name"] = ""
     dlg = _open(_write_config(tmp_path, data), qapp)
     dlg._mode_combos[0].setCurrentIndex(0)
     lst = dlg._instance_lists[0]
     lst.setCurrentRow(1)
-    assert dlg._data["instances"][0]["name"] == "15634025219"
+    assert dlg._data["zhaiduo"]["instances"][0]["name"] == "15634025219"
     lst.setCurrentRow(0)                       # 改选「如愿」
-    assert dlg._data["instances"][0]["mumu_index"] == 0
-    assert dlg._data["instances"][0]["name"] == "如愿"
-    assert dlg._widgets[("instances", 0, "name")].text() == "如愿"
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] == 0
+    assert dlg._data["zhaiduo"]["instances"][0]["name"] == "如愿"
+    assert dlg._widgets[("zhaiduo", "instances", 0, "name")].text() == "如愿"
 
 
 def test_autofilled_name_never_clobbers_typed_name(tmp_path, qapp, monkeypatch):
@@ -458,16 +464,16 @@ def test_autofilled_name_never_clobbers_typed_name(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = None
-    data["instances"][0]["adb_address"] = "127.0.0.1:16384"
-    data["instances"][0]["name"] = ""
+    data["zhaiduo"]["instances"][0]["mumu_index"] = None
+    data["zhaiduo"]["instances"][0]["adb_address"] = "127.0.0.1:16384"
+    data["zhaiduo"]["instances"][0]["name"] = ""
     dlg = _open(_write_config(tmp_path, data), qapp)
     dlg._mode_combos[0].setCurrentIndex(0)
     lst = dlg._instance_lists[0]
     lst.setCurrentRow(0)                       # 自动填成「如愿」
-    dlg._widgets[("instances", 0, "name")].setText("我的小号")
+    dlg._widgets[("zhaiduo", "instances", 0, "name")].setText("我的小号")
     lst.setCurrentRow(2)                       # 再换选
-    assert dlg._data["instances"][0]["name"] == "我的小号"
+    assert dlg._data["zhaiduo"]["instances"][0]["name"] == "我的小号"
 
 
 def test_existing_mumu_index_is_preselected(tmp_path, qapp, monkeypatch):
@@ -485,7 +491,7 @@ def test_scan_failure_shows_hint_and_keeps_dialog_usable(tmp_path, qapp, monkeyp
     rows = _rows(dlg)
     assert len(rows) == 1 and "无法运行 MuMuManager" in rows[0]
     assert dlg._instance_lists[0].count() == 1
-    assert dlg._data["instances"][0]["mumu_index"] == 0   # 原配置没被动
+    assert dlg._data["zhaiduo"]["instances"][0]["mumu_index"] == 0   # 原配置没被动
 
 
 def test_scan_without_manager_path_does_not_run_subprocess(tmp_path, qapp, monkeypatch):
@@ -502,7 +508,7 @@ def test_test_connection_explains_stopped_emulator(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _stub_scan(monkeypatch)
     data = _valid_config_dict()
-    data["instances"][0]["mumu_index"] = 2
+    data["zhaiduo"]["instances"][0]["mumu_index"] = 2
     dlg = _open(_write_config(tmp_path, data), qapp)
 
     def _boom(*a, **k):
@@ -550,7 +556,7 @@ def test_validation_error_path_is_humanized(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "critical",
                         lambda *a, **k: errors.append(a[2] if len(a) > 2 else ""))
     dlg = ConfigDialog(_write_config(tmp_path))
-    dlg._data["instances"][0]["characters"][1]["march_preset"] = "abc"
+    dlg._data["zhaiduo"]["instances"][0]["characters"][1]["march_preset"] = "abc"
     assert dlg.save() is False
     joined = "\n".join(errors)
     assert "模拟器 / 第1个 / 角色 / 第2个 / 行军预设" in joined
@@ -564,10 +570,10 @@ def test_model_validator_error_on_parent_path_is_humanized(tmp_path, qapp, monke
     monkeypatch.setattr(QMessageBox, "critical",
                         lambda *a, **k: errors.append(a[2] if len(a) > 2 else ""))
     dlg = ConfigDialog(_write_config(tmp_path))
-    dlg._data["instances"][0]["characters"][1]["fill_target_leaders"] = []
+    dlg._data["zhaiduo"]["instances"][0]["characters"][1]["fill_target_leaders"] = []
     assert dlg.save() is False
     joined = "\n".join(errors)
-    assert "整体配置: Value error" in joined
+    assert "寨多多模式: Value error" in joined
     assert "instances" not in joined
 
 

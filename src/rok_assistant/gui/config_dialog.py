@@ -27,6 +27,7 @@ from rok_assistant.core.handle_source import create_handle_source
 from rok_assistant.infra.config import (MAX_MARCH_PRESETS, MAX_TARGET_LEVELS,
                                         MAX_TARGET_LEVEL, MIN_TARGET_LEVEL,
                                         RANGE_BOUNDARY, level_range,
+                                        AppMode, MODE_LABELS,
                                         RAIDER_LABEL, RAIDER_TARGET, RootConfig,
                                         load_config, target_short)
 from rok_assistant.infra.mumu import (
@@ -156,37 +157,59 @@ class ConfigDialog(QDialog):
         self._preview_labels.clear()
         self._instance_lists.clear()
         # 删掉已不存在的实例的记录，别让它在增删几次后越积越多
-        alive = {i["id"] for i in self._data["instances"]}
+        alive = {i["id"] for i in self._data["zhaiduo"]["instances"]}
         self._autofilled_names = {k: v for k, v in self._autofilled_names.items()
                                   if k in alive}
 
-        g = QTreeWidgetItem(["全局设置"])
-        g.setData(0, Qt.ItemDataRole.UserRole, ("page", "global"))
-        self._tree.addTopLevelItem(g)
+        # 0=公共 1=寨多多 2=宝石 3=答题 4=YAML；实例页从 5 起
         self._stack.addWidget(self._scroll(self._make_global_page()))
+        g = QTreeWidgetItem(["公共配置"])
+        g.setData(0, Qt.ItemDataRole.UserRole, ("page", 0))
+        self._tree.addTopLevelItem(g)
 
-        y = QTreeWidgetItem(["YAML 源码"])
-        y.setData(0, Qt.ItemDataRole.UserRole, ("page", "yaml"))
+        self._stack.addWidget(self._scroll(self._make_zhaiduo_page()))
+        z = QTreeWidgetItem(["寨多多模式"])
+        z.setData(0, Qt.ItemDataRole.UserRole, ("page", 1))
+        self._tree.addTopLevelItem(z)
+        # 实例配置属于寨多多模式：做成它的子项，点开才看得到
+        for idx, inst in enumerate(self._data["zhaiduo"]["instances"]):
+            label = inst.get("name") or inst["id"]
+            item = QTreeWidgetItem([f"模拟器  {label}"])
+            item.setData(0, Qt.ItemDataRole.UserRole, ("instance", idx))
+            z.addChild(item)
+            self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
+
+        for mode in (AppMode.GEM, AppMode.QUIZ):
+            self._stack.addWidget(self._scroll(self._make_locked_page(mode)))
+            it = QTreeWidgetItem([MODE_LABELS[mode]])
+            it.setData(0, Qt.ItemDataRole.UserRole, ("page", 2 + list((AppMode.GEM, AppMode.QUIZ)).index(mode)))
+            self._tree.addTopLevelItem(it)
+
+        y = QTreeWidgetItem(["YAML 源码（高级）"])
+        y.setData(0, Qt.ItemDataRole.UserRole, ("page", 4))
         self._tree.addTopLevelItem(y)
         self._yaml_view = QPlainTextEdit()
         self._yaml_view.setObjectName("yamlView")
         self._yaml_view.setReadOnly(True)
         self._stack.addWidget(self._padded(self._yaml_view))
 
-        for idx, inst in enumerate(self._data["instances"]):
-            label = inst.get("name") or inst["id"]
-            item = QTreeWidgetItem([f"模拟器  {label}"])
-            item.setData(0, Qt.ItemDataRole.UserRole, ("page", idx))
-            self._tree.addTopLevelItem(item)
-            self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
+        self._tree.expandItem(z)          # 实例默认展开，否则用户看不见它们
 
-        # 重建后恢复先前的选中项（不存在则回落到全局设置）
+        # 重建后恢复先前的选中项（不存在则回落到公共配置）。实例现在是子项，
+        # 得递归扫，只扫顶层会漏掉它们。
+        def _walk(item):
+            yield item
+            for k in range(item.childCount()):
+                yield from _walk(item.child(k))
+
         target = g
         if cur_key is not None:
             for i in range(self._tree.topLevelItemCount()):
-                it = self._tree.topLevelItem(i)
-                if it.data(0, Qt.ItemDataRole.UserRole) == cur_key:
-                    target = it
+                for it in _walk(self._tree.topLevelItem(i)):
+                    if it.data(0, Qt.ItemDataRole.UserRole) == cur_key:
+                        target = it
+                        break
+                if target is not g:
                     break
         self._tree.setCurrentItem(target)
         self._refresh_yaml_preview()
@@ -195,13 +218,10 @@ class ConfigDialog(QDialog):
         if cur is None:
             return
         kind, key = cur.data(0, Qt.ItemDataRole.UserRole)
-        if kind == "page" and isinstance(key, int):
-            self._stack.setCurrentIndex(2 + key)
-        elif key == "global":
-            self._stack.setCurrentIndex(0)
-        else:
-            self._refresh_yaml_preview()
-            self._stack.setCurrentIndex(1)
+        if kind == "page":
+            self._stack.setCurrentIndex(key)
+        elif kind == "instance":
+            self._stack.setCurrentIndex(5 + key)
 
     # ---------------- 小部件帮手 ----------------
     def _bind(self, path: tuple, widget: QWidget) -> QWidget:
@@ -247,7 +267,7 @@ class ConfigDialog(QDialog):
         return self._bind(path, w)
 
     def _data_set(self, path: tuple, value):
-        """写回 self._data；路径形如 ("app","adb_path") 或 ("instances",0,"name")。"""
+        """写回 self._data；路径形如 ("app","adb_path") 或 ("zhaiduo","instances",0,"name")。"""
         obj = self._data
         for key in path[:-1]:
             obj = obj[key]
@@ -322,6 +342,24 @@ class ConfigDialog(QDialog):
         self._bind(("app", "anti_detection", "debug_no_jitter"), dbg)
         af.addRow(dbg)
         outer.addWidget(group)
+        outer.addStretch(1)
+        return page
+
+    def _make_zhaiduo_page(self) -> QWidget:
+        """寨多多模式页：实例级操作（检测全部模拟器 + 结果输出）。
+
+        「检测全部模拟器」原来挂在公共配置页，但它是实例级的——跟 app 段
+        一个字段都不沾。按 spec §3.1 的两段划分搬到这一页。
+        """
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        outer.setSpacing(theme.SP_LG)
+
+        hint = QLabel("实例（模拟器）配置见左侧「寨多多模式」下的各模拟器条目。")
+        hint.setObjectName("emptyHint")
+        outer.addWidget(hint)
+
         detect_btn = QPushButton("检测全部模拟器")
         detect_btn.clicked.connect(self._detect_all_instances)
         outer.addWidget(detect_btn)
@@ -331,6 +369,17 @@ class ConfigDialog(QDialog):
         outer.addWidget(self._detect_output)
         outer.addStretch(1)
         return page
+
+    def _make_locked_page(self, mode: AppMode) -> QWidget:
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.addStretch(1)
+        msg = QLabel("该模式尚未开放，暂无配置项")
+        msg.setObjectName("emptyHint")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(msg)
+        lay.addStretch(1)
+        return box
 
     def _pick_file(self, line_edit: QLineEdit, title: str):
         f, _ = QFileDialog.getOpenFileName(self, title, line_edit.text(), "All files (*.*)")
@@ -344,7 +393,7 @@ class ConfigDialog(QDialog):
 
     # ---------------- 模拟器页 ----------------
     def _make_instance_page(self, idx: int) -> QWidget:
-        inst = self._data["instances"][idx]
+        inst = self._data["zhaiduo"]["instances"][idx]
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
@@ -355,7 +404,7 @@ class ConfigDialog(QDialog):
                                | Qt.AlignmentFlag.AlignVCenter)
 
         outer.addWidget(QLabel(f"模拟器 ID：{inst['id']}"))
-        name = self._line(("instances", idx, "name"), inst.get("name", ""))
+        name = self._line(("zhaiduo", "instances", idx, "name"), inst.get("name", ""))
         form.addRow("显示名", name)
 
         mode = QComboBox()
@@ -374,7 +423,7 @@ class ConfigDialog(QDialog):
         lst.setMaximumHeight(110)
         lst.itemSelectionChanged.connect(lambda i=idx: self._on_instance_pick(i))
         self._instance_lists[idx] = lst
-        self._bind(("instances", idx, "mumu_index"), lst)
+        self._bind(("zhaiduo", "instances", idx, "mumu_index"), lst)
         pv.addWidget(lst)
         scan_row = QHBoxLayout()
         scan_btn = QPushButton("扫描模拟器")
@@ -387,7 +436,7 @@ class ConfigDialog(QDialog):
         stack.addWidget(picker)
 
         # --- 方式二：直接填 adb 地址（非 MuMu 的模拟器走这里） ---
-        addr = self._line(("instances", idx, "adb_address"), inst.get("adb_address", ""))
+        addr = self._line(("zhaiduo", "instances", idx, "adb_address"), inst.get("adb_address", ""))
         stack.addWidget(addr)
 
         is_manual = inst.get("mumu_index") is None
@@ -395,7 +444,7 @@ class ConfigDialog(QDialog):
         stack.setCurrentIndex(1 if is_manual else 0)
 
         def _on_mode(i, i2=idx):
-            inst2 = self._data["instances"][i2]
+            inst2 = self._data["zhaiduo"]["instances"][i2]
             if i == 0:
                 inst2["adb_address"] = ""
                 addr.clear()
@@ -484,14 +533,14 @@ class ConfigDialog(QDialog):
 
     def _leader_candidates(self, exclude=None) -> list[dict]:
         out = []
-        for i, inst in enumerate(self._data["instances"]):
+        for i, inst in enumerate(self._data["zhaiduo"]["instances"]):
             for j, c in enumerate(inst["characters"]):
                 if c["role"] in ("leader", "either") and (i, j) != exclude:
                     out.append({"instance": inst["id"], "name": c["name"]})
         return out
 
     def _edit_character(self, idx: int, row: int):
-        inst = self._data["instances"][idx]
+        inst = self._data["zhaiduo"]["instances"][idx]
         existing = inst["characters"][row] if 0 <= row < len(inst["characters"]) else None
         dlg = CharacterEditDialog(self, existing, self._leader_candidates(
             exclude=(idx, row) if existing else None))
@@ -499,7 +548,7 @@ class ConfigDialog(QDialog):
             self._save_character(idx, existing, dlg.get_result())
 
     def _save_character(self, idx: int, existing: dict | None, result: dict):
-        chars = self._data["instances"][idx]["characters"]
+        chars = self._data["zhaiduo"]["instances"][idx]["characters"]
         if existing is not None:
             pos = next((i for i, c in enumerate(chars) if c["id"] == existing["id"]), None)
             if pos is None:
@@ -509,8 +558,8 @@ class ConfigDialog(QDialog):
             chars.append(result)
         # 重命名时同步所有实例中的填兵目标引用，避免悬空引用
         if existing is not None and existing["name"] != result["name"]:
-            inst_id = self._data["instances"][idx]["id"]
-            for inst in self._data["instances"]:
+            inst_id = self._data["zhaiduo"]["instances"][idx]["id"]
+            for inst in self._data["zhaiduo"]["instances"]:
                 for c in inst["characters"]:
                     for f in c.get("fill_target_leaders", []):
                         if f["instance"] == inst_id and f["name"] == existing["name"]:
@@ -518,31 +567,31 @@ class ConfigDialog(QDialog):
         self._reload_tree()
 
     def _delete_character(self, idx: int, row: int):
-        chars = self._data["instances"][idx]["characters"]
+        chars = self._data["zhaiduo"]["instances"][idx]["characters"]
         if 0 <= row < len(chars):
             chars.pop(row)
             self._reload_tree()
 
     def _add_instance(self):
-        used = {i["id"] for i in self._data["instances"]}
+        used = {i["id"] for i in self._data["zhaiduo"]["instances"]}
         n = 0
         # 与首启模板（config.example.yaml）用同一套前缀，免得用户在界面上
         # 看到模板里叫 mumu0、自己新加的却叫 inst1，以为是什么不同的东西。
         while f"mumu{n}" in used:
             n += 1
-        self._data["instances"].append({
+        self._data["zhaiduo"]["instances"].append({
             "id": f"mumu{n}", "name": f"模拟器{n}", "mumu_index": None,
             "adb_address": "", "window_title_pattern": "", "characters": []})
         self._reload_tree()
 
     def _delete_instance(self, idx: int):
-        inst = self._data["instances"][idx]
+        inst = self._data["zhaiduo"]["instances"][idx]
         answer = QMessageBox.question(
             self, "删除模拟器",
             f"确定删除模拟器 {inst.get('name') or inst['id']} 及其全部角色？")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._data["instances"].pop(idx)
+        self._data["zhaiduo"]["instances"].pop(idx)
         self._reload_tree()
 
     # ---- 扫描模拟器 / 按名字选中 ----
@@ -589,7 +638,7 @@ class ConfigDialog(QDialog):
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 lst.addItem(item)
                 return
-            wanted = self._data["instances"][idx].get("mumu_index")
+            wanted = self._data["zhaiduo"]["instances"][idx].get("mumu_index")
             for e in self._scanned:
                 mark = "●" if e["running"] else "○"
                 state = "运行中" if e["running"] else "未启动"
@@ -612,20 +661,20 @@ class ConfigDialog(QDialog):
         item = lst.currentItem()
         if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
             return
-        self._data_set(("instances", idx, "mumu_index"),
+        self._data_set(("zhaiduo", "instances", idx, "mumu_index"),
                        int(item.data(Qt.ItemDataRole.UserRole)))
         # 显示名留空时顺手填上模拟器名字，省得用户再想一个。
         # 只在「空着」或「还是我们上次填的那个」时才动它：用户点几行比较一下
         # 是常态，若不跟着换，最后会留下「选的是如愿、名字却是 15634025219」；
         # 而用户自己敲的名字则绝不覆盖。
-        inst = self._data["instances"][idx]
+        inst = self._data["zhaiduo"]["instances"][idx]
         name = (inst.get("name") or "").strip()
         if not name or name == self._autofilled_names.get(inst["id"]):
             picked = self._instance_name(inst["mumu_index"])
             if picked:
                 inst["name"] = picked
                 self._autofilled_names[inst["id"]] = picked
-                w = self._widgets.get(("instances", idx, "name"))
+                w = self._widgets.get(("zhaiduo", "instances", idx, "name"))
                 if isinstance(w, QLineEdit):
                     w.setText(picked)
 
@@ -657,7 +706,7 @@ class ConfigDialog(QDialog):
     def _test_connection(self, idx: int):
         """spec §5：查模拟器在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
         import cv2
-        inst = self._data["instances"][idx]
+        inst = self._data["zhaiduo"]["instances"][idx]
         if inst.get("mumu_index") is None and not inst.get("adb_address"):
             self._set_inst_status(
                 idx, "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
@@ -752,7 +801,7 @@ class ConfigDialog(QDialog):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             lines = []
-            for inst in self._data["instances"]:
+            for inst in self._data["zhaiduo"]["instances"]:
                 index = inst.get("mumu_index")
                 shown = inst.get("name") or inst["id"]
                 if index is None:
@@ -805,7 +854,7 @@ class ConfigDialog(QDialog):
                 continue  # 根级错误无对应控件
             for path in self._widgets:
                 # 前缀匹配：model-validator 的错误落在父路径上（如
-                # ("instances", 0) 或 ()），其下所有控件都要标红
+                # ("zhaiduo", "instances", 0) 或 ()），其下所有控件都要标红
                 if path[:len(loc)] == loc:
                     self._widgets[path].setStyleSheet(ERR_STYLE)
         QMessageBox.critical(self, "校验失败", "\n".join(lines) or str(e))

@@ -9,6 +9,8 @@ KeyError——看不懂总比看不到强，且能直接截图给开发者。
 """
 from __future__ import annotations
 
+from ..infra.config import AppMode, MODE_LABELS
+
 # ---- 分工 ----
 ROLE_LABELS = {"leader": "车头", "member": "成员", "either": "车头或成员"}
 LABEL_ROLES = {v: k for k, v in ROLE_LABELS.items()}
@@ -121,6 +123,8 @@ def role_label(value: str | None) -> str:
 # 直接摊给用户看等于什么都没说。
 LOC_LABELS = {
     "app": "全局设置",
+    # 模式键：复用 config.py 的 MODE_LABELS，别在这里抄第二份中文
+    **{m.value: MODE_LABELS[m] for m in AppMode},
     "instances": "模拟器",
     "characters": "角色",
     "id": "ID",
