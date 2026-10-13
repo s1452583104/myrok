@@ -64,3 +64,9 @@ secrets/
 
 # 源码运行时 user_dir() 就是仓库根，授权记录与到期提醒标记都会落在仓库里，别提交
 .roklicense*
+
+# 构建期生成的试用期覆盖模块（tools/build_package.py --trial-days 写、构建完删）
+src/rok_assistant/infra/licensing/_trial_override.py
+
+# 界面探针（_probe_ui_theme.py）导出的离屏截图：可随时重新生成，不入库
+_ui_shots/

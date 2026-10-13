@@ -29,6 +29,13 @@ datas = [
 binaries = []
 hiddenimports = []
 
+# 构建期生成的试用期覆盖模块（tools/build_package.py --trial-days 写、构建完删）。
+# 它在 `try: from ._trial_override import ...` 里，且只在构建时短暂存在——不显式
+# 声明成 hiddenimport 就得赌模块图恰好扫到；这里按文件存在与否补一条，确保收进去。
+if (ROOT / "src" / "rok_assistant" / "infra" / "licensing"
+        / "_trial_override.py").is_file():
+    hiddenimports.append("rok_assistant.infra.licensing._trial_override")
+
 # ---- 两个包必须 collect_all，静态分析抓不全 ----
 # 1) rapidocr_onnxruntime：OCR 模型（ch_PP-OCRv3_*_infer.onnx）和默认配置 yaml
 #    在 wheel 的数据目录里；且 RapidOCR 是函数内懒 import（ocr_text.py），

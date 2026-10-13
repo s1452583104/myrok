@@ -17,6 +17,11 @@
     .venv/Scripts/python.exe -X utf8 tools/build_package.py
     .venv/Scripts/python.exe -X utf8 tools/build_package.py --skip-build   # 只校验已有产物
     .venv/Scripts/python.exe -X utf8 tools/build_package.py --no-zip
+    .venv/Scripts/python.exe -X utf8 tools/build_package.py --trial-days 2 # 试用期改 2 天
+
+**试用期天数**：默认 30。`--trial-days N` 会在 PyInstaller 之前生成一个
+`licensing/_trial_override.py`（构建完即删），把 N 编进包；它**不进任何用户
+可编辑的文件**（spec §5.5 的防改要求）。源码运行永远走默认 30。
 """
 from __future__ import annotations
 
@@ -34,6 +39,12 @@ SPEC = ROOT / "rok-assistant.spec"
 DIST = ROOT / "dist"
 APP_DIR = DIST / "rok-assistant"
 ONNX = ROOT / "models" / "detect.onnx"
+
+# 构建期生成、构建完删除的试用期覆盖模块（.gitignore 已忽略）。
+# state.py 优先 `from ._trial_override import TRIAL_DAYS`，读不到退回 30。
+_TRIAL_OVERRIDE = ROOT / "src" / "rok_assistant" / "infra" / "licensing" / "_trial_override.py"
+DEFAULT_TRIAL_DAYS = 30
+MAX_TRIAL_DAYS = 3650
 
 # 解压后必须存在的资源（相对 _internal/，即 sys._MEIPASS）
 REQUIRED_RESOURCES = [
@@ -78,6 +89,28 @@ def _read_version() -> str:
             return tomllib.load(f)["project"]["version"]
     except Exception:
         return "0.0.0"
+
+
+def _write_trial_override(days: int) -> None:
+    """生成构建期试用期覆盖模块。**已存在则报错**：残留文件说明上一次构建没
+    清干净（或手动放了一个），用它构建出来的包试用期不可信——宁可失败。"""
+    if _TRIAL_OVERRIDE.exists():
+        raise RuntimeError(
+            f"发现残留的 {_TRIAL_OVERRIDE.relative_to(ROOT)}——上一次构建没清干净，"
+            f"先删掉再构建（避免误用错误的试用期天数）")
+    _TRIAL_OVERRIDE.write_text(
+        '"""构建期生成：试用期天数覆盖。由 tools/build_package.py --trial-days 写入，\n'
+        '构建结束即删除；不要手改、不要提交（.gitignore 已忽略）。\n"""\n'
+        f"TRIAL_DAYS = {days}\n",
+        encoding="utf-8")
+
+
+def _clear_trial_override() -> None:
+    """删掉构建期生成的覆盖模块（幂等）。"""
+    try:
+        _TRIAL_OVERRIDE.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _preflight() -> int:
@@ -209,18 +242,36 @@ def _make_zip(app_dir: Path, version: str) -> Path:
     return out
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="打绿色 zip 发行包")
     ap.add_argument("--skip-build", action="store_true",
                     help="跳过 PyInstaller，只校验 dist/rok-assistant 现有产物")
     ap.add_argument("--no-zip", action="store_true", help="只构建，不打 zip")
-    args = ap.parse_args()
+    ap.add_argument("--trial-days", type=int, default=DEFAULT_TRIAL_DAYS,
+                    help=f"打包进 exe 的试用期天数（默认 {DEFAULT_TRIAL_DAYS}）。"
+                         f"只影响冻结包，源码运行恒为 {DEFAULT_TRIAL_DAYS} 天")
+    args = ap.parse_args(argv)
+
+    if not 1 <= args.trial_days <= MAX_TRIAL_DAYS:
+        print(f"--trial-days 须在 1..{MAX_TRIAL_DAYS}（收到 {args.trial_days}）",
+              file=sys.stderr)
+        return 2
 
     if not args.skip_build:
+        print(f"=== 构建参数 ===\n  试用期：{args.trial_days} 天")
         rc = _preflight()
         if rc:
             return rc
-        rc = _run_pyinstaller()
+        try:
+            _write_trial_override(args.trial_days)
+        except RuntimeError as e:
+            print(f"\n构建中止：{e}", file=sys.stderr)
+            return 2
+        try:
+            rc = _run_pyinstaller()
+        finally:
+            # 无论成败都删掉生成物：留着会污染源码树，也会让下次构建直接失败。
+            _clear_trial_override()
         if rc:
             return rc
 
@@ -235,6 +286,8 @@ def main() -> int:
     out = _make_zip(APP_DIR, version)
     print(f"\n完成：{out}")
     print("解压后双击 rok-assistant.exe；首启会自动生成 config.yaml 并探测 MuMu 路径。")
+    if not args.skip_build:
+        print(f"本包试用期：{args.trial_days} 天。")
     return 0
 
 
