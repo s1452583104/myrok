@@ -1747,3 +1747,578 @@ worker 还没起来，运行日志里一个字都没有，所以既点名又写�
 ### 回归状态
 
 `pytest tests/ -q` → **870 passed / 0 failed / 0 error**（4m25s）。
+
+## 2026-11-01 时钟回拨不再判篡改（线上反馈：激活「没有任何效果」）
+
+**现场**（用户本机，2026-11-01）：调系统时间测试 → 调到 11-10（试用 11-08 到期）→ 状态 expired →
+在 11-10 这个时间上激活 → **激活成功**（`serial=1`，`applied_at=2026-11-10 12:10`，三处存储都写了）→
+把时间改回真实 11-01 → 状态**仍是 expired**，点激活没反应（同一张码报「已被使用」，换新码报
+「激活成功」但状态不变）。
+
+**根因**：`guard.status()` 里「回拨超 24h 容差 → 判篡改 → 强制 expired」。记录里的
+`last_seen = applied_at = 2026-11-10`（`activate()` 写的是 `eff`），而 `last_seen` 只增不减，
+于是那个未来时间被永久钉进记录：真实时间追上它之前，每次 `status()` 都判篡改。spec §12.4 承诺的
+「判篡改的用户仍可正常购买激活」在「先调到未来、再调回来」这条路径上不成立（§12 也没列这条）。
+
+**修法（选 B，用户拍板）**：删掉两条判死规则——回拨超 24h、文件 mtime 在将来（连同
+`state.clock_rolled_back` / `TAMPER_TOLERANCE_SECONDS` / `Store.newest_mtime` / slot `mtime()` 一并删除）。
+保留 `effective_now = max(now, last_seen)` 与「`last_seen` 只增」——到期日是绝对日期、`applied_at`
+又被 `last_seen` 夹住，所以「不给好处」已经堵死唯一的获利路径，判死对防作弊没有额外贡献，只剩误伤
+（主板电池没电 / 系统校时 / 拿错时间）。判篡改现在只剩一条路径：**记录结构完整但 HMAC 验不过**。
+回拨时记一条 `logger.info`（只进日志）。
+
+**为什么没选 A（保留判死 + 激活时重锚 `last_seen`）**：A 下没买码的纯试用用户一旦调错时间仍被锁到
+真实时间追上锚点，只能靠买码自救——把一个手滑变成一笔支出。
+
+**验收**：`tests/unit/infra/licensing/test_clock.py` 重写（回拨超容差 = 不罚也不给好处、文件 mtime
+在将来不判篡改、新增「调到未来 → 激活 → 改回时间仍是 licensed」这条回归）；本机实测修复后
+`--selftest` 报 `licensed 剩余 30 天 到期 2026-12-10`——用**已经买过的那张码**恢复，无需重输、
+无需清存储。代价：调时间白损失的 9 天不还（spec §12 新增第 8 条）。
+
+## 2026-11-01（续）重输已用过的激活码不再报「已被使用」
+
+**现场**（同一天的第二条反馈）：「再次激活显示激活码已使用」。记录本身没问题（`serial=1`
+已在本机三处存储里），源码树状态也是 `licensed`——问题是这条**提示语**把用户挡住了：
+已经授权成功的人重输同一张码，看到「该激活码已被使用」，只会以为码作废。
+（顺带查明：`dist/rok-assistant.exe` 是 **10-09 15:11** 打的，早于今天上午的修复，
+里面还是旧的判篡改逻辑——如果是在跑这个 exe，得重新打包才会生效。）
+
+**改法**：`verify` 的「第四步 serial 未用过」取消，`check_code` / `REASON_USED` 与
+`state.used_serials` 一并删除（它们只为这一步存在）。防重放本来就不靠这一步：靠的是
+`state.apply_activation` 的**幂等**——serial 已在 `licenses` 里就原样返回，加不上第二次时间。
+`guard.activate` 因此改成：验签通过就并入记录，若 `licenses` 条数没变（= 幂等命中）返回
+`True, "该激活码已在本机激活过，授权时间未变"`；这样提示语永远描述**真实发生了什么**，
+比「serial 是否在集合里」更不容易和实际行为漂移。
+
+**顺带修的**：`gui/license_dialog` 激活成功时把**结果状态**一并显示
+（「激活成功（当前：已授权，剩余 30 天）」）。上一轮那个 bug 的教训就是「激活成功」
+四个字本身会骗人——重输已用过的码、记录被判篡改时，激活都可能成功而状态仍是到期。
+
+**没做的**：没给「不同码、同一 serial」（台账回退重发号）单独报错。那种情况下新码加不上
+时间，提示是「已在本机激活过，授权时间未变」——用户照样会找作者，信号没丢；为此在
+`activate` 里再写一遍去重判断（和 `apply_activation` 两处逻辑）不划算。
+
+## 2026-10-11 活动第二阶段「劫掠者城寨」：配置/GUI/车头支路 + 数据集入库（V12 训练但**不升级权重**）
+
+**背景**：10-10 的活动让搜索面板从 2 页签变 3 页签（多出「劫掠者」）；10-11 早 07:09 实机复查
+发现**第三页签的文字已变成「劫掠者城寨」**——活动第二阶段上线的是一类**不分等级的特殊寨子**，
+点进去**没有等级行**（OCR 整页只读得到描述文字 + 「搜索」按钮）。几何完全没变：右页签仍是
+x 511..697 / y 323..385，与中间页签同宽同高，只是 x 平移。所以这不是「第 4 个页签」，
+是同一块页签换了个目标。集结流程与普通城寨逐字相同，差别只有「切哪个页签、要不要设等级」。
+
+**配置模型：哨兵值 `RAIDER_TARGET = 0` 塞进 `target_levels`**（`infra/config.py`）。
+`[0]` 是合法配置且**只能单独出现**，与任何 1–10 级共存都在 `_check_levels` 里被拒
+（`[0, 6]` 报「不能再选其他等级」，`[0, 0]` 也走这条）。**没选另加 `target_raider: bool`**：
+那会造出 `target_raider: true` + `target_levels: [6]` 这种自相矛盾的组合，还得把
+「`target_levels` 不能为空」这条不变量放开——哨兵值让「非法组合根本表达不出来」。
+配套 `target_label(v)`（0 → 「劫掠者寨子」）供日志/校验文案/GUI 共用，`find_level_collisions`
+的告警也走它，不让哨兵值原样摊给用户看。
+
+**GUI（`CharacterEditDialog`）**：等级网格下多一行「劫掠者寨子（不分等级）」复选框，
+与 1–10 级**并列但互斥**——勾它就清空并禁用等级框，勾等级就把它的勾去掉并禁用。
+做成「自动清空/禁用」而不是弹窗打断，理由和 `_on_level_toggle` 超 3 个时撤销勾选一致：
+状态永远合法，用户不会被拦住。表格「目标城寨等级」列改用 `target_label`，
+不显示「0」。
+
+**车头（`leader_sm._select_level`）**：`target_levels == [0]` 时切 `tab_raider` 后
+**直接 return**，不读等级、不点 +/-、不回读校验（那一页没有等级行，读不到会一路退回
+盲降，12 次 `level_minus` 打在空处）。`__init__` 再断言一次列表形态（别处构造出混合列表
+会按「0 级」这种不存在的目标搜一路）。**识别器缺失时抛 RuntimeError 而不是静默空操作**：
+`_click` 拿不到 id 是静默 no-op，点不动页签就会在面板记住的旧页签上搜——等于「配置要劫掠者、
+实际搜普通城寨」，比按异常结束本轮危险得多。`fortress_level` 事件字段照旧取
+`_current_level(ctx)`，劫掠者时就是 0（文档里写明）。
+
+**模板 `tab_raider`（新）**：与 `tab_fortress` 同一套做法——只裁页签**文字**
+（134×32，文字本身 123×24 @ y 344..367），灰态命中、棕态不命中，阈值 0.9。
+实测灰态 1.000 / 棕态 0.724 / 旧 2 页签布局 0.723，两侧余量都够。
+**模板 PNG 是 gitignored 的**（只有 `templates/manifest.yaml` 进版本库），复现方式：
+`tab_fortress.png` = `dataset/images/scenes__search_panel.png` 的 `[340:372, 486:620]`；
+`tab_raider.png` = `logs/_cap_raider/fortress_page_5.png` 的 `[340:372, 536:670]`。
+（`tab_fortress` 的 ROI 一并改成 `[280,310,760,400]`——只含页签行，面板描述文字在 y≥432。）
+
+**数据集入库**：`tools/ingest_raw_imgs.py` 新增 `RAIDER_BOX` 与两条先验
+（`tab_raider` 正向门控 `gate_tmpl`；`raider_search_tab` 反向门控 `gate_not_tmpl`，
+与 `tab_fortress` / `barb_search_tab` 对称），`SCENES["01_zhaizi_search"]` 加两个类。
+10-11 那批 12 帧里**只入 7 帧**：`cap_0/cap_1` 根本不是搜索面板（两个页签模板都 ≤0.39、
+OCR 只读到一个「20」），`cap_2` + `fortress_page_*` 与 `raider_page_*` 组内两两
+`mean|Δ|≈0.2`（只差动画像素）——每组挑 3 帧 + `cap_2` 就够，剩下的是纯重复。
+入库结果：train 718 → **725**，val 69 不变；7 帧共 40 框，与逐帧手算的
+4×(7 框) + 3×(4 框) 完全一致（城寨页那 4 帧有等级行所以多 3 个框）。
+`dataset.yaml` 加 `64: tab_raider` / `65: raider_search_tab`（66 类），
+`tools/class_names_zh.py` 补中文名，`test_pixel_stat_anchor` 的模板条目数 54 → 55。
+
+**V12 训练了，但 `models/detect.onnx` 仍指向 V11 的导出产物**（已按 MD5 核对还原）。
+`.venv/Scripts/python.exe -X utf8 tools/train_yolo.py --name gpu_1080_v12 --epochs 30
+--batch 8 --imgsz 640 --workers 4` → mAP50 0.7943 / mAP50-95 0.6776（V11 是 0.7250/0.6037）。
+**这个涨幅不能信**：val 只有 69 帧，涨的是 `warning_panel` 0.000→0.995、
+`char_mgmt_btn` 0.000→0.995 这类**只有 1 个 val 实例**的类在抛硬币，同期
+`settings_title` 0.995→0.000、`queue_march_icon` 0.995→0.497 也在反向抛。
+按仓库规矩（「val 太小别拿单类 AP 下结论」）重新用 `tools/compare_runs.py` 把两个权重
+放到**同一套** val 上复算，结论一致：两边都是单实例噪声，没有可归因的改善。
+
+**不升级的真正理由**（换权重后照例重跑了 `tools/calibrate_yolo_threshold.py`，两份定标表在
+`logs/_calib_v11.txt` / `_calib_v12.txt`）：V12 把 **`queue_march_icon` 的 YOLO 腿打死了**——
+val 上正样本最低 0.881 → **0.278**、假阳地板 0.444 → 0.528（「无间隙，阈值救不了」）。
+不放心单帧结论，又把 train+val 里**全部 21 帧带该类 GT 的帧**跑了一遍两个权重：
+V11 中位 conf 0.768、4/21 帧过 0.85 阈值；V12 中位 **0.468**、**0/21** 过阈值
+（`_probe_march.py`）。这是队列闸门（计划 A）最脆弱的一环，而 V12 换来的东西是
+**模板腿本来就有的**：新类 `tab_raider` / `raider_search_tab` 在留出帧上 YOLO conf 只有
+0.35/0.34（默认阈值 0.5 够不着，照旧由模板腿决定），`tab_fortress` 也没变好。
+「为功能切不为指标」——V12 一个功能都不多给，却实打实退了一环，所以**不切**，
+`runs/gpu_1080_v12/` 与它的 ONNX 留在盘上，等劫掠者那类帧攒够（新类有了真数据、
+queue_march_icon 也许一起回来）再评。
+
+**端到端验证**（现役权重就是 V11，链里没有 tab_raider 这个类，正好验证「模型不升级
+不影响该支路」）：用生产识别器链（`TemplateRegistry.build_recognizers` + 现役
+`models/detect.onnx`，脚本 `_probe_tabchain.py`）在实机帧上判两个页签——劫掠者页 `tab_fortress` 命中 0.985 @(404,356)
+且 `tab_raider` 不命中（0.724）；城寨页反过来，`tab_raider` 1.000 @(603,356)、
+`tab_fortress` 不命中（0.723）。互斥成立、余量大，`_click` 的「已在目标页 → 空操作」语义
+由此得到。单测：`test_leader_sm.py` 新增 5 条（切页签且零等级点击 / 跳过等级日志 /
+识别器缺失抛错 / 混合列表构造即拒 / 普通等级下 `_raider is False`），
+`test_config_dialog.py` 新增 3 条（互斥、反向让位、取消勾选回到「至少选一个」），
+`test_config_models.py` 新增 4 条。
+
+**未做**：真机上还没跑过劫掠者支路（要活动期内真发一次集结）；劫掠者页「搜不到」时的
+提示文案是否与 `toast_no_fortress` 模板一致也没验（那一页没有等级行，其余 UI 复用，
+推测一致，等实机）。
+
+## 2026-10-11 14:24 劫掠者城寨：12 点活动更新后的复采复核（结论：**无变化**）
+
+定时任务（一次性 cron `caf4adac`，`7 12 11 10 *`）要求 12 点后复采一批实机帧，
+确认页签 UI 有没有二次变化。实际执行时已 14:24，且模拟器里的游戏在这 5 小时里
+**断线了**（弹「网络不稳定，连接已断开。」）——画面停在断线弹框上。
+
+1. 用生产识别器 `net_error_confirm` 定位「确定」（conf 1.000 @(960,711)）点掉，
+   重连后游戏停在「城内」视图（`map_btn` 1.000、`search_icon` 只有 0.765）。
+2. `_probe_nav.py` 复刻车头的 NORMALIZE + SEARCH_FORTRESS 两步导航回搜索面板：
+   点 `map_btn` → `search_icon` 0.765→0.913 → 点 `search_icon` → 面板开，
+   `search_back` 1.000 / `search_btn` 0.999 / `tab_fortress` 0.985 / `tab_raider` 1.000。
+3. `_probe_noon.py` 按「当前页 → 点 tab_fortress 中心 (404,354) → 城寨页 →
+   点 tab_raider 中心 (604,354) → 劫掠者页」各截 6 帧，只打印数值判据。
+
+复核结果（对照 07:09 基准，帧存 `logs/_cap_raider/noon_{a,f,r}_*.png`）：
+
+| 判据 | 07:09 基准 | 14:2x 复采 |
+|---|---|---|
+| 页签行 y300..410 右页签外框 | x511..697 | x511..696 |
+| 城寨页 `tab_fortress` / `tab_raider` | 0.723（棕）/ 1.000 @603（灰） | 同 |
+| 劫掠者页 `tab_fortress` / `tab_raider` | 0.985 @404（灰）/ 0.723（棕） | 同 |
+| 劫掠者页正文起始 y | ≈484 | 485 |
+| 劫掠者页「等级：N」行 | 无 | 无 |
+
+顺带确认了两件 07:09 没记的事：城寨页的等级行在 **(150,518)-(251,542)**（x<280，
+所以窄的 `BODY_ROI` 框不到它，不是「等级行消失」）；面板打开时默认停在**野蛮人**
+页签上（两个城寨页签都是灰态 = 同时命中），这也解释了 `_select_level` 为什么必须
+无条件先点一次 `tab_fortress`。
+
+按定时任务约定：界面一致 → 不改代码、不重训、不 ingest。新增 `_probe_nav.py`
+（断线后导航回搜索面板）/ `_probe_noon.py`（页签复采判据），旧的
+`_probe_reconnect.py` / `_probe_wait.py` / `_probe_where.py` 用完即删。
+
+## 2026-10-11 劫掠者城寨搜完不弹详情面板（用户缺陷反馈 1）——实机复现 + 修复
+
+**现象**（用户实机验证时反馈）：集结劫掠者城寨时，搜索完相机调转过去，红色集结按钮
+**不自动出现**，必须手动点一下屏幕正中心才弹出来 → 自动流程点不到集结。
+
+**根因（实机复现，不是推测）**。普通城寨点「搜索」后：面板收起 + 相机跳到目标 +
+**详情面板自动展开**，`red_rally` 就在那儿——`_check_result` 只等 `red_rally`，
+这条假设在城寨页成立。劫掠者城寨只做到「面板收起 + 相机跳过去」，**详情得再点一下
+目标本身**（相机跳完后它就在屏幕正中）才展开。所以 `_wait_for("red_rally", 8.0)`
+每次都超时 → 每次搜索都被记成 `no_result` → 5 次烧完 → `_give_up`
+（`fail_reason=no_fortress_found`）。这就是「无法自动点集结」。
+
+复现脚本 `_probe_raider_search.py`（`logs/_cap_raider/rs_*.png`）：
+
+| 时刻 | `red_rally` |
+|---|---|
+| 点「搜索」后 0～20s（每 2s 采一帧，共 10 帧） | **一次都没出现** |
+| 点屏幕正中心 (960,540) 后 2s | **conf 1.000 命中** |
+
+计时脚本 `_probe_raider_cycle.py`：面板收起于点搜索后 **0.75s**（= 搜到了、相机到位；
+无结果时面板留在原地）；点正中心后 **0.72s** 内 `red_rally` 命中。点完那一帧的右栏
+OCR 确认弹出来的**就是劫掠者城寨的详情**（标题「劫掠者城寨」@(1318,317)、
+「推荐兵力：1,600,000等级5的战斗单位集结进攻」、集结按钮 (1356,717)-(1447,768)
+= `red_rally` @(1400,742)）。
+
+**修复**（`leader_sm._open_raider_detail`，只挂 `self._raider` 支路）：
+
+1. 等 `search_btn` 消失（**面板收起 = 搜到了**的判据，实测 0.75s）。按**轮数**上界
+   （`_RAIDER_PAN_ATTEMPTS = 8`）而不是墙钟——`leader_sm.time` 在单测里是不推进的
+   替身，墙钟循环会变成忙等；`_read_level`/`_verify_level` 同样是计数上界。
+2. 面板**没**收起（无结果 toast / 慢加载）就一下都不点直接返回：那时正中心那一下会
+   打在还盖着的面板上，把「没搜到」的判断搅浑。交给既有的 `no_result` 计数。
+3. 面板收起后 `_human.jitter(1.5s)` 等相机跳完，再点 `_EMPTY_GROUND`。
+
+**为什么只能挂劫掠者支路**：这一步的坐标与 `_EMPTY_GROUND` 是同一个点，语义**相反**
+（那里是「点空地关面板」）。普通城寨这时详情面板已经开着，点下去等于把要等的面板关掉。
+
+**风控**：点击走 `self._handle`（生产是 `JitteringHandleSource`），所以随机延迟
+（`click_delay`，Beta(2,5) 形状、0.1–0.5s）与高斯坐标散布照常生效。用户要求「偏移范围
+小一些」，故新增 `anchor_sigma.map_center = 4`（默认 σ=8，裁剪 ±3σ → 最大 ±12px）——
+目标是地图正中的城寨图标，偏移大了会点到旁边空地。实机两轮落点 (966,540) / (959,528)，
+都命中。
+
+**单测**（`test_leader_sm.py` 新增 3 条，先红后绿）：
+`test_raider_search_taps_center_when_panel_closes`（面板收起 → 点正中心，且
+`search_outcome == "found"`）、`test_raider_search_does_not_tap_when_panel_stays_open`
+（面板留着 → 一次都不点、记 `no_result`）、`test_normal_level_search_does_not_tap_center`
+（普通等级**不许**点，否则关掉刚弹出的详情）。`test_leader_sm.py` 57 passed；
+workers + infra + integration 子集 385 passed。
+
+**实机验证**：`_probe_raider_fix.py` 直接调**生产** `_open_raider_detail()`（真 handle +
+真识别器链），两轮都返回后 0.5s 内 `red_rally` conf 1.000 @(1400,742)。**只验到详情面板
+出现为止，没点 red_rally**，所以没发车——完整一轮（红集结 → 蓝集结 → 预设 → 行军）
+仍待实机。
+
+**未做**：劫掠者页「搜不到」时的提示文案是否与 `toast_no_fortress` 一致（那一页没有
+等级行，其余 UI 复用，推测一致）仍未验；`_recover_locked` 的「点空地关详情」在劫掠者
+支路上是否同样成立（同一个坐标，语义相反但那时详情确实开着，方向应该对）也没单独验。
+
+---
+
+## 2026-10-11 「解压出来的文件夹运行过一次就删不掉」（用户缺陷反馈 2）——根因 + 修复
+
+**用户报**：「打包解压开的文件夹，一旦运行一次后，退出了程序再删除这个文件夹都
+删不掉。是有什么隐藏的后台运行程序吗」
+
+**结论：有，是 adb 守护进程，不是我们的进程。**
+
+### 根因
+
+绿色包是解压即用、双击 exe 启动的，所以 **app 进程自己的 CWD 就是解压目录**。
+`infra/subproc.py:run()` 从不设 `cwd`，子进程默认继承父进程的 CWD。而 adb 客户端
+在本地没有 adb server 时会 fork 出一个**常驻**的
+`adb -L tcp:5037 fork-server server` 守护进程——它连客户端的工作目录句柄一起继承
+下去（PEB 里 `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory` 是 `{DosPath, Handle}`
+两半，句柄那一半是可继承的）。**Windows 不允许删除任何活进程还开着的目录**，于是
+app 退出之后文件夹照样删不掉，报「另一个程序正在使用此文件，进程无法访问」。
+任务管理器里找不到 `rok-assistant.exe`，所以看着像「隐藏的后台程序」。
+
+触发条件：**adb server 之前没在跑**（MuMu 没起、或被 kill 过）时，app 的第一次
+`adb connect` 就会 fork 出这个守护进程。MuMu 自己已经起过 adb server 的话不会。
+
+### 排查过程（先排除，再定机制）
+
+1. **扫全机进程的 CWD**（读 PEB，PowerShell + `NtQueryInformationProcess`）：
+   没有任何进程的工作目录指向用户目录；`adb.exe` 有，但它的 CWD 是 `C:\Windows\`。
+   ——**这一步一开始把我带偏了**：看 CWD 字符串会以为不是它，实际上钉住目录的是
+   那个**继承来的目录句柄**，不是 CWD 路径本身。
+2. **打包后的 app 自己会不会残留**（负对照）：把 `dist/rok-assistant` 整包复制成
+   「解压目录」，按双击的方式（CWD = exe 目录）跑
+   `rok-assistant.exe --selftest` → **10s 退出、rc=0、13/13 通过、零残留进程**，
+   之后那个目录**当场可删**。⇒ app 自己退出干净，钉住目录的不是它。
+3. **机制 A/B**（`_probe_cwdfix.py`）：忠实还原「app 的 CWD = 解压目录、起一次 adb、
+   然后退出」，只改子进程的 CWD 从哪儿来——
+   - A 继承 app 的 CWD → `删解压目录 → 失败：PermissionError: 另一个程序正在使用
+     此文件，进程无法访问`；`adb -P 5039 kill-server` 之后**立刻可删**。
+   - B 走 `subproc.run`（子进程 CWD = 系统临时目录）→ **当场可删**。
+   两轮都用 5039 端口另起一套 adb，不碰在用的 5037。
+
+### 修法
+
+`infra/subproc.run` 加 `kwargs.setdefault("cwd", neutral_cwd())`，`neutral_cwd()`
+返回系统临时目录（`tempfile.gettempdir()`，取不到就返回 `None` = 退回继承，不能因为
+这一步失败把 adb 起不来）。
+
+**为什么指临时目录**：那儿本来就是「用完就扔」的，钉住它没有副作用。实测守护进程钉着
+`C:\Users\…\Temp` 时，Temp 里的**文件和子目录照常增删**（句柄钉的是 Temp 自己，不是
+里面的东西）。**不能指 app 目录，子目录也不行**——子目录被钉住，父目录一样删不掉。
+
+**改在 `subproc.run` 这一层而不是只改 adb**：这一层本来就是「所有 fork 外部程序的
+地方都该走这里」的收口，而「别继承 app 的 CWD」对任何子进程都成立（将来再有 fork
+守护进程的子进程也一并修掉）。改动前先实测了中性 CWD 下 `MuMuManager.exe info -v all`
+（rc=0 / JSON 正常 / 0.13s）与 `adb devices` 都照常——MuMuManager 是 Qt 程序、在这条
+路径上出过事（见同文件 docstring 第 1 条），所以不敢想当然。
+
+### 验证
+
+- `_probe_cwdfix.py`：A 被钉住 = True，B 被钉住 = False，退出码 0。
+- `test_subproc.py` 新增 3 条（先红后绿）：`test_run_does_not_inherit_the_app_cwd`、
+  `test_neutral_cwd_is_not_the_app_dir_or_below_it`（子目录也不行）、
+  `test_real_child_really_lands_in_the_neutral_cwd`——最后这条**真起一个进程问它的
+  `os.getcwd()`**：spy 只能证明我们**传了** `cwd`，证明不了 `CreateProcess` 照做了。
+  `test_subproc.py` 12 passed；infra + `test_adb_handle_source.py` 252 passed。
+- 真机走一遍改动后的 adb 热路径（`create_handle_source` → `capture`）：
+  `shape=(1080,1920,3) mean=131.7`、`is_alive=True`。
+
+**已经踩上的用户**（旧包）：任务管理器结束 `adb.exe`（或 `adb kill-server`）后即可
+删除，不用重启；MuMu 会自己再把 adb 拉起来。
+
+## 2026-10-11 首启默认配置改为「两台模拟器、每台一个角色」（用户优化建议）
+
+**背景**：原来 `config.example.yaml` 只给一台模拟器 `mumu0`，里面塞了
+`char_leader`（车头角色名）和 `char_member`（成员角色名）两个角色。用户要求
+首启生成两份更贴近实际用法的默认：**两台模拟器，一台车头、一台填兵，每台只
+一个角色**，角色名分别是「集结手」「填兵号」。
+
+**改法**：`config.example.yaml` 的 `instances:` 重写为两条——
+- `mumu0` / name `模拟器0` / `mumu_index: 0` / 角色「集结手」`role: leader`；
+- `mumu1` / name `模拟器1` / `mumu_index: 1` / 角色「填兵号」`role: member`，
+  `fill_target_leaders: [{instance: mumu0, name: "集结手"}]`。
+
+跨实例填兵本来就是合法且已支持的路径（`RootConfig._cross_checks` 按
+`(instance, name)` 查表），所以 `mumu1` 填 `mumu0` 的车头不需要任何代码改动。
+首启拷贝逻辑 `app_paths.ensure_user_files()` 只认 `config.example.yaml`，无需改。
+
+**同步的文档**：`docs/配置说明.md`（第 2 步的「第一次用就只有一台」+ `instances`
+一节）、`docs/ACCEPTANCE.md` §2 要点列表。
+
+**验证**：`.venv/Scripts/python.exe` 载入改后的 example →
+`mumu0 车头 | 集结手 leader [7,6,5]` / `mumu1 填兵 | 填兵号 member [7] →
+(mumu0, 集结手)`，`RootConfig` 校验通过。未改任何代码，无需跑测试子集。
+
+## 2026-10-12 打包时可指定试用天数（默认 30）
+
+**背景**：试用期天数原本写死在 `state.TRIAL_DAYS = 30`（spec §5.5 要求它是代码常量、
+不进 `config.yaml`——配置是用户能直接改的文本文件）。需要能**在打包时**指定，
+本次要打一个 2 天试用的包。
+
+**改法**（保持「用户改不到」这条约束不变）：
+
+- `state.py`：常量改为 `try: from ._trial_override import TRIAL_DAYS / except
+  ImportError: TRIAL_DAYS = 30`。只吞 `ImportError`——生成物存在但坏了要照常抛，
+  静默退回 30 会把试用期变**长**（反向失效）。
+- `tools/build_package.py`：加 `--trial-days N`（默认 30，范围 1..3650）。构建时
+  在 PyInstaller **之前**写 `src/rok_assistant/infra/licensing/_trial_override.py`，
+  `finally` 里删掉（成败都删）。发现该文件**已存在**（上次残留）→ 构建直接失败，
+  不用错值构建。`main()` 顺带接受 `argv` 便于单测。
+- `rok-assistant.spec`：该模块只在构建时短暂存在，按文件存在与否补一条
+  `hiddenimports`，确保 PyInstaller 收进去。
+- `.gitignore`：忽略该生成物。
+
+**为什么不用 `_internal/trial_days.txt` 这类资源文件**：那又是一个用户可编辑的
+文本文件，等于把 §5.5 堵掉的口子从 `config.yaml` 挪个地方。编进 `.pyc` 的模块
+与「公钥写死在 `pubkey.py`」同一档防护。
+
+**验证**：`tests/unit/test_build_package_trial_days.py`（新增，写/删往返、残留拒绝、
+`--trial-days` 越界拒绝、`--skip-build` 不写生成物）+ 既有 licensing 全套 + 既有
+`test_trial_lasts_30_days`（覆盖「无覆盖文件 → 30」）→ 96 passed。
+
+## 2026-10-12 实机缺陷：体力弹窗收不掉 + 寨子被占后卡死（/systematic-debugging）
+
+**用户报的两条**：
+1. 「体力不足后能自主加体力，但会卡在体力界面不再有后续动作 → 一直重试 → 最后失败退出程序」；
+   追问确认症状是「弹窗压根关不掉，程序还在反复点」。
+2. 「搜到的寨子被其他玩家集结后不弹蓝色集结框 → 一直卡在这座寨子上，直到它消失才重新发起」；
+   要求「弹不出蓝色框就退回寨子搜索页搜下一座」。追问确认游戏会**自动跳到另一座没被集结的**寨子。
+
+### Phase 1 根因（读日志 + 实机帧，全部有证据）
+
+* **RC1/RC2（弹窗关没关没有独立证据）**：`_refill_ap()` 的返回值只是
+  `_close_ap_dialog()` 的结果，而后者**点一次 X 就当弹窗没了**。`ap_refill` 的
+  ROI 只有标题那条窄带（`[800,90,1300,170]`），模板一次失配调用方就以为关了，
+  于是再也不点 X，转头去怪 `march_btn`。`_normalize_view` 里那次补体力**一行日志
+  都没有**——实机复盘时看不见补了几口、弹窗到底关没关。
+* **RC3/RC4（异常被同状态重放，最后停机）**：`WorkerRunner` 在 step 异常时
+  **不重建 SM**（只有走到终态 + 冷却后才 `self.sm = self._sm_factory()`），
+  异常只在**同一个状态**退避重试，`_max_error_streak = max_consecutive_failures*2 = 6`
+  次后停机。于是「补 8 轮体力 → 异常 → 退避 → 再补 8 轮」循环，每次都把体力再补
+  一遍，直到报「连续 6 次 step 异常…停止」。**日志实证**：
+  `logs/rok_assistant_20260918_052316.log` 05:26:10→05:27:17 六次 march_btn/AP 异常
+  → 停机，与用户 bug 1 逐字吻合；`logs/rok_assistant_20261004_094816.log`
+  09:57:13→09:59:10 六次「归一化失败：卡在[未知]视图」→ 停机。
+* **RC5（丢失点击结果 + 归因过窄）**：`_click_red_rally` 丢掉 `_click_retry` 的
+  返回值；`_verify_unlocked` 把「10s 内没等到蓝色集结框」**一律**判成「被别人
+  集结」——「按钮没点到」「有模态压着」「就是没弹出来」三种都被记成同一句。
+* **RC6（恢复动作没有任何验证）**：`_recover_locked` 只点一下空地就走，不确认
+  上一座寨子的详情**真的收掉了**、重搜出来的是**新目标**。而 `red_rally`
+  (roi `[1200,660,1600,820]`) 与 `search_icon` (roi `[0,700,240,940]`) **不重叠**，
+  `_normalize_view` 见到放大镜就直接返回——**NORMALIZE 永远不会替我们收详情面板**。
+  这就是「一直卡在这座寨子上」的机制。
+
+### 排除掉的（别再走一遍）
+
+* **弹窗 X 坐标不是错的**：把 `(1638,120)` 画在失败帧上，十字正落在弹窗白色 X
+  字形上（中心 ≈ (1645,124)）。
+* **「体力不够」不是唯一解释**：失败帧里 AP 122/150、道具行可用（2,020 / 7,840 /
+  261…）、「使用」按钮是亮态。为什么游戏仍拒绝，**未证**（见下）。
+* **盘上的日志与帧全部早于 commit `fa4ccce`**，是比当前 HEAD 更旧的代码产出的，
+  所以现役代码的确切文案在任何日志里都搜不到。
+
+### Phase 4 改法（都是「把卡死改成本轮干净中止 + 补上验证」）
+
+* `_close_ap_dialog()`：**连续两次** `_find` 都是 None 才判「已关闭」（一次失配
+  不算），最多点 4 次 X，仍关不掉打明确 warning。返回值现在**真的**是「弹窗关没关」。
+* `_refill_ap()`：记 `eaten`（吃了几口），结尾 `logger.info("补行动力：点第 1 行
+  「领取/使用」1 次 + 第 2 行「使用」N 次（上限 3），弹窗已关闭/仍在场")`。
+* 新增 `StateMachine._wait_for_gone()`（`_wait_for` 的对偶）。
+* `_normalize_view` 的 AP 分支：补完仍关不掉 → 写 `fail_reason=ap_dialog_stuck`
+  并干净返回（**不再假装关掉了继续往下走**）；新增 `NORMALIZE→END` 边（注册在
+  `NORMALIZE→SEARCH_FORTRESS` **之前**，按注册顺序取第一条 guard 通过的转移）。
+* `_launch`：两处 AP `raise RuntimeError` 改为干净放弃（`fail_reason=no_action_points`
+  + LAUNCH→END 边）。重建 SM 后会重新走 NORMALIZE，由它收弹窗。
+* `_click_red_rally`：保留点击结果到 `ctx["red_rally_clicked"]`，没落地打 warning
+  （**这不等于城寨被占**）。`_verify_unlocked` 据它把原因分成 `click_missed` /
+  其余；其余再走新的 `_diagnose_missing_popup()`，把原因细分为
+  `detail_still_open` / `modal_<模板名>` / `no_popup`，日志与 `lock_cause` 都带原因。
+* 新增 `_dismiss_detail()`：点空地 → `_wait_for_gone("red_rally")` **确认**收掉，
+  两次不行再退到搜索页的返回键（`search_back`）再确认；都收不掉返回 False。
+  收不掉 → `fail_reason=stale_fortress_target` + 新增 `VERIFY_UNLOCKED→END` 边
+  （屏幕上那块 red_rally 是**上一座寨子的残留**，重搜也证明不了新目标，
+  **绝不**再点它一次）。收掉了 → 走既有的 `VERIFY_UNLOCKED→NORMALIZE→SEARCH_FORTRESS`，
+  即用户要的「退回搜索页搜下一座」。
+* 新增 `_abort_round()`（不 raise 的干净中止，写 `failed` / `last_rally_event=None`）；
+  `_recover_locked` 变成纯日志（收详情已在 `_verify_unlocked` 里做完并确认过）。
+* `runner.py`：新增 `_ENV_FAIL_REASONS = {no_action_points, ap_dialog_stuck,
+  stale_fortress_target}`——这些原因**下一轮会自愈**（重建 SM 后 NORMALIZE 再收一次
+  弹窗、寨子随时间消失），所以**不计入连续失败**（否则一次弹窗卡顿 = 连续 3 轮失败
+  = 收工，正是用户报的「最后失败退出程序」）。`no_action_points` 冷却用
+  `_NO_AP_COOLDOWN = 300s`（体力要靠自然恢复），其余用正常冷却。
+
+### 测试
+
+`tests/unit/workers/test_leader_sm.py` 新增 11 条（都先红后绿），
+`tests/unit/workers/test_runner.py` 新增 2 条：
+`test_runner_keeps_running_after_ui_stuck_aborts`（连续 4 轮 UI 类中止也不收工）、
+`test_runner_waits_long_when_out_of_action_points`（体力不足走 300s 长冷却且不计失败）。
+其中 `test_stale_target_ends_round_instead_of_reclicking_the_same_fortress` 断言
+`sm.history.count("CLICK_RED_RALLY") == 1`——钉住「不再反复点同一座寨子」。
+另加一条**跨模块哨兵** `test_env_fail_reasons_cover_every_leader_abort_reason`：
+runner 的 `_ENV_FAIL_REASONS` 与 leader_sm 的三个原因常量靠字符串字面量对齐，
+任一侧改名都不会有编译期错误、只会安静地退回「计入连续失败」——
+这条测试断言 leader_sm 的三个常量**都在**豁免名单里。
+全量：`pytest tests/ -q` → **947 passed / 0 failed**（946 那次 5m00s，哨兵另跑）。
+
+### 仍未解释的（留给下次实机取证）
+
+* **为什么 AP 122/150、道具可用，游戏仍拒绝行军**。三种待验假设：点「使用」后有
+  确认步骤；待发车的行军一直失败导致弹窗反复重现；**截图是冻结的**——09-18 那四张
+  卡死帧在 67s 内**逐像素完全相同**（连 AP 条都是），而 09-48 的帧是真的在变。
+* **09-48 的卡死是另一种未识别的游戏模式**（红色虚线行军线、城墙/旗帜结构、
+  11公里、绿色上箭头、「多选」「快捷战斗」）：放大镜可见但 `search_icon` 不匹配，
+  于是 NORMALIZE 永远抛「未知视图」。**本次未修**，是独立缺陷。
+* 下次实机看新日志即可分辨：`补行动力：… 弹窗仍在场`、`蓝色集结框未出现（第 N/5 次，
+  原因=…）`、`城寨详情弹窗收不掉（red_rally 仍在场）`。
+
+### 2026-10-13 GUI 企业级界面重构（令牌层 + 四段式主窗口）
+
+**由来**：界面已从「作者自用脚本」长成**随绿色包分发给非程序员**的工具（`docs/配置说明.md`
+就是写给他们的），但视觉层从没立过规范——全仓库 `setStyleSheet` 只有 5 处且都是临时补丁：
+`character_card.py` 的 `background:#500`、`main_window.py` 的 `color:#27ae60` / `#c0392b`、
+`config_dialog.py` 的裸 `red`。同一件「错误」在三个文件里是三种红。用户要求按企业级 B 端
+规范（对标 Ant Design 5 / 华为云控制台）重构。**两项决策由用户当场选定**：完整重构（含布局
+结构）；文案统一中文。
+
+**根因**：不是「配色不好看」，是**没有单一出处**。5 处散落的 `setStyleSheet` 各自跑偏，
+因为每处都是「当场挑个颜色」。所以第一刀不是改颜色，是立令牌。
+
+**新增**
+- `gui/theme.py`——间距 4/8/12/16/24/32、圆角 2/4/6/8、字号 12/14/16/20、中性灰阶、
+  品牌与功能色、状态标签五语义（`TAG_BG/TAG_FG/TAG_DOT` + `tag_style()` / `dot_style()`）、
+  全局 `QSS`（`string.Template` + `$TOKEN`）、`apply_theme()`。
+  色值落成**实色十六进制**而非令牌原文的 `rgba(0,0,0,0.88)`——Qt QSS 对 rgba 浮点 alpha
+  的解析各版本不一致，实色是白底上的等价值、行为确定。
+- `gui/flow_layout.py`——Qt 官方 `FlowLayout`（含 `hasHeightForWidth`）+ `clear_layout()`
+  （**先 `hide()` 再 `setParent(None)`**：直接脱父会把可见控件变成独立顶层窗口，在事件循环
+  处理 `deleteLater` 之前闪一下）。
+- `tests/unit/gui/test_theme.py`（28 条）、
+  `docs/superpowers/specs/2026-10-13-企业级界面重构-design.md`。
+
+**改**
+- `main_window.py`——四段式 `appHeader / appToolbar / content / QStatusBar`；卡片区由
+  `QVBoxLayout` 纵向堆叠（2 实例×2 角色 = 1720px 长条、宽屏大片留白）改 `FlowLayout` 自适应
+  网格；`QStackedWidget` 在「卡片网格 / `_EmptyState`」间切（空态**不放插画**，居中文案说清
+  下一步）；`license_label` 由裸彩色文字改标准状态标签；顶栏文案统一中文。
+- `character_card.py`——卡片 220×430 → **300×440**、白底 + 1px 弱描边 + 8px 圆角；状态标签
+  的**圆点与文字分属两个控件**（圆点不拼进 `status_label.text()`，多条测试按精确串断言）；
+  缩略图底色 `#222` → `#FAFAFA`（深灰在浅色界面里像个洞）；错误态由整块 `#500` 暗红填充改
+  **1px 红描边 + 红色标签**。
+- `config_dialog.py`——各页包进 `QScrollArea`（原 880×620 装不下全局页，小屏/高 DPI 下底部
+  控件被裁掉够不着）；底部独立按钮栏（分割线 + 右对齐「取消」/ 主按钮「保存」）；左树
+  `#configTree`、表格关网格线 / 表头 `#FAFAFA` / 行高 36；数字输入限宽 180（原被拉伸到 582px）；
+  `ERR_STYLE` 的裸 `red` → `theme.ERROR`；新增 `_set_inst_status()` 按 `●/○` 前缀上色
+  （**文本一字不改**，测试按子串断言）。窗口 1040×720，`CharacterEditDialog` 600×700
+  （表单自然最小宽 ~562px，再窄就挤出横向滚动条）。
+- `license_dialog.py`、`log_panel.py`（`objectName="logView"`，等宽与底色交全局 QSS）、
+  `labels.py`（新增 `state_kind()`：只给语义不给色值，与 `theme.py` 职责分开）。
+
+**Qt QSS 踩坑（写进 `theme.py` 注释，免得再踩）**
+1. `::down-arrow` **只认 `image:`**——照抄 CSS 的「0 尺寸盒子 + 三边透明边框」三角画法渲染成
+   一个**实心方块**；
+2. 只给 `::drop-down` 描边 → 箭头**整个消失**（`QStyleSheetStyle` 一接管这个子控件就不再用
+   基础样式的箭头图元）。最终一条 `::drop-down` / `::down-arrow` 都不给，接受 Fusion 那道
+   淡分隔线；
+3. **别碰 `QCheckBox::indicator`**——接管了不给 `image:`，未勾选的框会整个消失；
+4. QSS **不支持 `box-shadow`**，规范本身也要求「优先用 1px 分割线分区」，故一律描边 + 留白；
+5. `apply_theme` 里 `setStyle("Fusion")` 不能省——Windows 默认 `windowsvista` 会忽略
+   QComboBox / QSpinBox 的大量 QSS 属性；且必须在**建控件之前**调用（QSS 在 polish 时读
+   动态属性，`[primary="true"]` 才会生效）。
+
+**测试**：新增 `tests/unit/gui/test_theme.py` 31 条。重点不是渲染效果而是**一致性约束**——
+间距/圆角/字号单调递增、色值全是 `#RRGGBB`、五个语义的浅底+深字+点齐备、
+**QSS 占位符与令牌表双向对账**（用了没定义 / 定义了没用都报名字）。
+选 `Template.substitute()` 而不是 `safe_substitute()` 就是为这条：本次真踩到 `$sp_xs` /
+`$sp_2xl` 用了却没进令牌表，`substitute` 当场 KeyError，`safe_substitute` 会静默留下字面量。
+`test_apply_theme_switches_to_fusion` 里**先清样式表再读基础样式**——装了 QSS 后
+`QApplication.style()` 返回的是 `QStyleSheetStyle` 代理（`objectName` 空、没有 `baseStyle()`），
+读完再把样式表装回去（qapp 是全测试会话共用的）。
+`test_gui_smoke.py` 同步：`windowTitle == "RoK 助手"`、`开始运行` / `停止`。
+
+**验证**：GUI 相关子集 125 passed；离屏探针 `_probe_ui_theme.py` 导出四张 PNG 到 `_ui_shots/`
+（**离屏环境零字体，中文渲染成豆腐块，属环境现象不是缺陷**——能看的是版式与几何；
+用脚本打印控件几何做数值核对，比读图便宜）。全量 `pytest tests/ -q` →
+**978 passed / 0 failed**（5m04s，基线 947 + 31）。
+
+**重构自己带出来的一条缺陷（同日修）**：全局 QSS 的 `QWidget { font-family: … }` **盖掉了
+控件自己的 `setFont()`**——样式表的字体属性优先于控件字体，`setFont` 静默失效不报错。
+后果是激活对话框里机器码/激活码的**等宽字体被刷回雅黑**（等宽的意义就是让 `O/0`、`I/l`
+分得开，机器码要用户手抄或截图转述）。发现方式很便宜：构造对话框后**打印
+`widget.font().families()`**，不读图。修法 `theme.make_mono(widget)`：打
+`objectName="monoText"`，由 QSS 用比 `QWidget` 更具体的 `#monoText` 选择器把族钉回去，
+字号仍由 `setFont` 给。顺带把 `tools/license_tool.py`（发码工具，不进发行包）也接上同一套
+令牌——同一个仓库里没必要两处等宽字体栈、两套配色各写各的。
+测试 +3（`test_make_mono_pins_the_family_via_object_name` 只断言打了标记；
+`test_mono_text_actually_renders_monospace` 走完整链路读回字体——**只断言标记是不够的，
+选择器写错时那条照样绿**）。
+
+**仍未做**：实机开窗看一眼。业务零改动，但**版式只在离屏验证过**。
+
+## 2026-10-13 城寨等级扩到 1–15 · 两区间互斥（代码级；区间模板待采）
+
+**由来**：11–15 级寨子上线，目标等级不再止于 10。更关键的是：搜索面板上 **1–10 与 11–15
+不是一根连续滑条，而是两个互斥的区间**，由一个独立的区间控件切换——面板同一时刻只能停在
+一个区间上。所以「同一次搜索里混选两个区间」在游戏里根本走不通：另一个区间的等级搜不到。
+
+**四件事**（Task 1–5，均已提交评审）：
+
+1. **等级范围扩到 1–15、两区间互斥**（`infra/config.py`）：`MIN_TARGET_LEVEL=1` /
+   `MAX_TARGET_LEVEL=15` / `RANGE_BOUNDARY=10`，加 `level_range(lv) -> (low, high)`
+   （1–10 → (1,10)；11–15 → (11,15)）把「区间」这个量给出一个名字，供三处复用（校验互斥、
+   切面板区间、盲降降到底），不再三处各写一遍 `if lv > 10`。`_check_levels` 校验改成
+   1–15，并新增**区间互斥**：按区间下界去重后还剩两种即拒绝（报错含
+   「不能混选两个等级区间」）。`MAX_TARGET_LEVELS=3`（每角色等级数上限）不变；
+   `RAIDER_TARGET`(0) 与等级仍互斥。
+
+2. **GUI 改 15 个复选框、两区间视觉分隔**（`gui/config_dialog.py`）：15 个框，第 2 行留白
+   放一条分割线，11–15 落到第 3 行。**选满 3 个时的锁定只作用于当前区间**——另一区间的未选框
+   保持可点，因为「点它就是换区间」；锁掉等于不让人换区间。
+
+3. **车头设等级前先切区间**（`workers/leader_sm.py`）：新增 `_switch_level_range(target)`，
+   与 `tab_fortress`/`tab_raider` 同一套惯用法——**模板只裁未选中（灰）态，命中 ⇔ 当前不在该
+   区间 ⇔ 点它**；已在目标区间就不命中、`_click` 自动跳过，故**不需要先读状态**（「面板当前停在
+   哪个区间」本就不容易读准）。识别器 id 为 `level_range_low` / `level_range_high`。
+   盲降（读不出等级时的回退）落到**目标区间的下界**：1–10 落 1、11–15 落 11；点击次数由
+   `_blind_reset_clicks = (high - low) + 3` 给出——**1–10 仍是 (10-1)+3=12 点（与改动前逐字
+   相同）**，11–15 是 7 点。
+
+4. **跨区间缓存失步修复**：`_LEVEL_CACHE`（弱引用缓存上次面板等级，只服务盲降回退路径）里的
+   等级若**与目标不在同一区间就作废**（`level_range(cached)[0] != low`）——否则面板切了区间后
+   缓存还是另一个区间的旧值，盲降会按错误的起点点差量。`_verify_level` 同理：回读值与目标
+   **跨区间**时不补点（从 8 点 + 到不了 13），判失败交给 `no_result` 计数兜住本轮。
+
+**唯一外部依赖（本功能对真机尚未生效）**：区间控件的两张模板 PNG（`level_range_low` /
+`level_range_high` 的**灰态**）**需要实机截图裁剪，目前还没有**。识别器缺失时的行为按区间分岔：
+
+- **11–15 目标**：缺 `level_range_high` → `_switch_level_range` **抛 `RuntimeError`**（点不动
+  区间控件就会在 1–10 区间里搜，等于「配置要 13、实际搜 8」——宁可按异常结束本轮，不静默）。
+- **1–10 目标**：缺 `level_range_low` → **只 warning**，行为与改动前一致（旧模板包没有这个条目；
+  若面板实际停在 11–15 区间会搜错等级，但回读值不在目标区间会被 `_verify_level` 判失败并留 warning，
+  最终由 `no_result` 计数自然兜住本轮）。
+
+**所以**：模板采到之前，**11–15 目标在真机上走不到**，本功能对真机**尚未生效**；1–10 区间行为
+与改动前**逐字相同**。真机验收步骤见 `docs/PROGRESS.md` 待办（前置：先采区间控件模板 PNG）。
+**未改模板图、未换 YOLO 权重**，故**不重跑** `tools/calibrate_yolo_threshold.py`。
+
+**文档同步**：`config.example.yaml` 的 `target_levels` 注释、`docs/配置说明.md`（等级段与字段表）、
+`docs/ACCEPTANCE.md`（§3.6 的「level=11 应被拒」改成 level=16——11 现在合法了）、
+`docs/PROGRESS.md` 均已同步到 1–15 + 区间互斥。

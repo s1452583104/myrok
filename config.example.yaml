@@ -40,6 +40,8 @@ app:
     rapid_click_max: 0.8    # 上限。与 action_delay 独立
     anchor_sigma:           # 按目标覆盖散布 σ；缺省用 click_offset_px
       preset_slot: 3
+      map_center: 4         # 劫掠者城寨搜完后点「屏幕正中心」开详情面板那一下：
+                            # 目标是地图正中的城寨图标，偏移大了会点到旁边的空地
     member_response_delay_min: 10.0   # 成员号收到集结事件后延迟多久响应（秒）。
     member_response_delay_max: 60.0   # 两号同机、永远成对出现是强关联信号，错开它。
                                       # 0/0 = 关闭（默认关闭）
@@ -47,6 +49,10 @@ app:
 # 1 个「模拟器」= 1 个游戏账号 = 1 组角色（同一模拟器多账号切换暂不支持）
 # 接入方式二选一：按模拟器选择（推荐，在界面里点「扫描模拟器」按名字选）
 # 或手动填 adb 地址（非 MuMu 的模拟器走这条）
+#
+# 首启默认给两台模拟器、每台一个角色：mumu0 = 车头「集结手」，
+# mumu1 = 填兵号「填兵号」。按你自己的机器改——模拟器台数、
+# 角色名（必须和游戏内显示名一致）、目标等级 / 预设 / 兵种。
 instances:
   - id: mumu0              # 自动生成的内部标识，不用改（跨模拟器填兵时靠它引用）
     name: "模拟器0"        # 显示名，随便起；界面上用这个认机器
@@ -55,25 +61,27 @@ instances:
       # 整个配置至少 1 个 leader/either（member-only 模拟器合法，可跨模拟器填兵）；
       # 同一个模拟器内角色名不能重复。name 必须和游戏内显示名一致（OCR 验证用）。
       - id: char_leader
-        name: "车头角色名"       # ← 改成你的游戏内显示名
+        name: "集结手"           # ← 改成你的游戏内显示名
         role: leader            # leader=车头 | member=成员 | either=车头或成员
-        # 有序搜索列表，最多 3 个、1-10 且不重复。顺序完全自由（6→4→5 合法）：
-        # 从第一个开始搜，每级连搜 5 次无结果就换下一个，绕完一圈放弃本轮
+        # 有序搜索列表，最多 3 个、1-15 且不重复。顺序完全自由（6→4→5 合法）：
+        # 从第一个开始搜，每级连搜 5 次无结果就换下一个，绕完一圈放弃本轮。
+        # 1-10 与 11-15 是**两个互斥的区间**（游戏面板上由一个独立的区间控件
+        # 切换），同一次搜索不能混选——面板同一时刻只能停在一个区间上。
+        # 活动期间另有「劫掠者寨子」（不分等级的特殊寨子）：写成 target_levels: [0]，
+        # **只能单独一项**，不能和等级混着写
         target_levels: [7, 6, 5]
         march_preset: 1         # 组建部队弹窗里的预设槽位，1-5
         march_troop_types: [infantry]   # 可选 infantry(步兵) / cavalry(骑兵) / archer(弓兵)，可多选
 
+  - id: mumu1              # 第二台模拟器（MuMu 里多开的那一台）
+    name: "模拟器1"        # 显示名，随便起
+    mumu_index: 1          # MuMu 里的模拟器编号；在界面上按名字选，不用手填
+    characters:
       - id: char_member
-        name: "成员角色名"       # ← 改成你的游戏内显示名
+        name: "填兵号"           # ← 改成你的游戏内显示名
         role: member
         target_levels: [7]      # member 不开车，这一项不影响行为，但必填
         march_preset: 1
         march_troop_types: [infantry]
         fill_target_leaders:    # member/either 必填；leader 不能填
-          - { instance: mumu0, name: "车头角色名" }   # instance 填车头所在的 id，name 填车头角色名
-
-  # 第二个模拟器（MuMu 里多开一台）示例骨架：
-  # - id: mumu1
-  #   name: "二号机"
-  #   mumu_index: 1
-  #   characters: []
+          - { instance: mumu0, name: "集结手" }   # instance 填车头所在的 id，name 填车头角色名

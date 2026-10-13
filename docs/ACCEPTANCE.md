@@ -159,16 +159,24 @@ templates/
 
 **手动方式：** 复制 `config.example.yaml` 为 `config.yaml` 修改。要点：
 - `instances` 取代旧 `accounts`；1 实例 = 1 账号；`mumu_index` 与 `adb_address` 二选一
+- 首启默认生成**两台**模拟器、每台一个角色：车头「集结手」（`mumu0`）+
+  填兵号「填兵号」（`mumu1`，填给 `mumu0/集结手`）；按需增删
 - `role`: `leader`（车头，自己开寨）/ `member`（成员，只填兵）/ `either`（先开寨再填兵）
 - `member`/`either` 必填 `fill_target_leaders`（显式列表，可跨实例）；`leader` 不能配
-- `target_levels`（有序搜索列表，1–3 个、1–10、不重复；顺序完全自由）/ `march_preset` / `march_troop_types` 对每个角色必填
+- `target_levels`（有序搜索列表，1–3 个、1–15、不重复，且 **1–10 与 11–15 两区间互斥、不能混选**；顺序完全自由）/ `march_preset` / `march_troop_types` 对每个角色必填
+- `target_levels: [0]` = **劫掠者寨子**（活动期间不分等级的特殊寨子）。它**只能单独出现**，
+  与任何等级混写都会被拒；车头搜它时切「劫掠者城寨」页签并跳过等级设置
 - 校验命令见 `config.example.yaml` 头部注释
 
 ---
 
 ## §3 跑 5 项手动验收
 
-运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ Start，验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
+> **按钮名已改（2026-10-13 界面重构）**：顶栏原来是英文 `Start` / `Stop` / `Mode:`，
+> 现统一为 **「开始运行」/「停止」/「模式」**，窗口标题由 `rok-assistant` 改为「RoK 助手」。
+> 下面各项标题里的 `Start` / `Stop` 是当时的验收条目名，**照着点对应中文按钮即可**。
+
+运行时已接线（2026-09-10）：启动 GUI（`python -m rok_assistant.gui.main_window`）→ 开始运行，验收现在可以真跑（v1：每实例第一个角色一个 worker 线程，rally 事件由 RuntimeCoordinator 路由给成员）。
 
 ```bash
 python tools/verify.py
@@ -185,7 +193,7 @@ python tools/verify.py
 1. 启动 MuMu，确保 RoK 在主城
 2. 启动 GUI：`python -m rok_assistant.gui.main_window`
 3. 配置文件选择 `config.yaml`
-4. Start → 观察 `logs/rok_assistant_*.log` 看状态机走到 `END`
+4. 点「开始运行」→ 观察 `logs/rok_assistant_*.log` 看状态机走到 `END`
 5. GUI 上的 leader character card 应显示状态变化（`searching` → `forming` → `waiting` → `done`）
 
 ### 3.2 [x] Add 1 member, verify auto-switch + join
@@ -195,9 +203,9 @@ python tools/verify.py
 3. GUI 显示多张 card
 4. leader 开战后，member card 应自动从 `idle` → `switching` → `joining` → `done`
 
-### 3.6 [x] Invalid config (level=11) -> refused at startup
+### 3.6 [x] Invalid config (level=16) -> refused at startup
 
-1. config.yaml 改一个角色 `target_levels: [11]`
+1. config.yaml 改一个角色 `target_levels: [16]`
 2. 启动 GUI 应弹错误对话框，明确指出哪个字段错了
 3. 拒绝启动，进程退出
 

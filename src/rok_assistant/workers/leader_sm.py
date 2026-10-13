@@ -42,7 +42,7 @@ _QUEUE_SIDEBAR_DISMISS = (1550, 320)
 # 实测 **0.4s** 间隔连点 19 次零丢失）。原 _LEVEL_CLICK_PACE 取 0.35s，是**低于
 # 实测安全值**的取值——正因如此真机必须确认不丢点击。节奏值现由
 # anti_detection.rapid_click_min 持有（spec §5），这里不再有第二处硬编码 sleep。
-# 读不出等级时降到底的**余量**（秒表在下面 _blind_reset_clicks 里）。
+# 读不出等级时降到底的**余量**（算式在下面 _blind_reset_clicks 里）。
 # 1–10 区间算出来是 (10-1)+3 = 12 —— 与改动前的常量逐字相同；11–15 是 7。
 # 多点几下打在滑条端点上，无害。
 _LEVEL_BLIND_MARGIN = 3

@@ -1024,7 +1024,7 @@ class CharacterEditDialog(QDialog):
         self._refresh_level_order()
 
     def _on_raider_toggle(self, checked: bool) -> None:
-        """劫掠者寨子只能单选：勾上就清空并禁用 1–10 级。"""
+        """劫掠者寨子只能单选：勾上就清空并禁用 1–15 级。"""
         if checked:
             self._level_order = [RAIDER_TARGET]
             for cb in self.level_checks.values():
@@ -1040,6 +1040,9 @@ class CharacterEditDialog(QDialog):
 
         顺序是隐性状态（只存在于点击先后里），不显式显示的话用户无法
         确认 6→4→5 有没有生效。
+
+        锁定**只作用于当前区间**：另一区间（1–10 与 11–15 互斥）的未选框
+        保持可点——点它就是换区间，锁掉等于不让人换。
         """
         raider = RAIDER_TARGET in self._level_order
         if raider:
