@@ -100,7 +100,7 @@ def test_create_quiz_state_machine_forwards_the_config(monkeypatch):
     create_quiz_state_machine(
         char, handle, {"t": 1}, ocr, bank, solver,
         verify_delay=2.5, min_green_ratio=0.7,
-        max_questions_per_round=12, round_cooldown_min=3.0,
+        round_cooldown_min=3.0,
         parse_retries=4, entry_taps=[[10, 20]], auto_click=False)
 
     assert captured["args"] == (handle,)
@@ -111,7 +111,6 @@ def test_create_quiz_state_machine_forwards_the_config(monkeypatch):
     assert kwargs["recognizers"] == {"t": 1}
     assert kwargs["verify_delay"] == 2.5
     assert kwargs["min_green_ratio"] == 0.7
-    assert kwargs["max_questions_per_round"] == 12
     assert kwargs["round_cooldown_min"] == 3.0
     assert kwargs["parse_retries"] == 4
     assert kwargs["entry_taps"] == [(10, 20)]      # 转成元组

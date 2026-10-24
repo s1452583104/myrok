@@ -75,7 +75,6 @@ class QuizCoordinator(BaseCoordinator):
             char, handle, recognizers, self._ocr, self._bank, self._solver,
             verify_delay=quiz.verify_delay,
             min_green_ratio=quiz.min_green_ratio,
-            max_questions_per_round=quiz.max_questions_per_round,
             round_cooldown_min=quiz.round_cooldown_min,
             parse_retries=quiz.parse_retries,
             entry_taps=quiz.entry_taps,

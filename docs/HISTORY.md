@@ -2829,3 +2829,30 @@ runner 三处必须同一个字符串，散写字面量改名时不会报错、�
   并存帧不覆盖、补点预算两态）。
 - `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1341 passed**（前台跑）。
 - config.example.yaml / 配置说明.md（三种场次表）/ GUI 标签同步。
+
+### 场次改按星期几绑定、题量按场次固定（2026-10-24 夜间，用户拍板）
+
+用户拍板两条简化（原话：「不需要按 ocr 识别，直接按时间周几绑定场次即可。
+不需要配置题量，按场次固定题量」）：
+
+- 新增 `core/quiz/session.py`：`session_for_date`（周六=prelim / 周日=final /
+  其余=daily）、`current_session`、`SESSION_QUESTION_LIMITS`（日常 None 不限 /
+  初试 10 / 终试 20）。只依赖 datetime。
+- `core/quiz/screen.py`：删除 `detect_exam_type` 与 `EXAM_*` 常量——OCR 识别
+  场次整条路下线（题目帧认考试名不再需要，弹窗/活动主页双考试名并存的坑
+  随之消失）。
+- `workers/quiz_sm.py`：`_exam_type` → `_session`，每轮开始（`_reset_nav`）按
+  当天星期几绑定并打日志；`_exam_question_cap` → `_question_cap`（None=不限量，
+  `_read` 跳过封顶检查）；补点预算按场次分配（考试 2 次 ×0.8s / 日常 4 次 ×1.0s）；
+  删掉 READ 里的 `_update_exam_type` 调用。
+- 配置瘦身：`QuizConfig.max_questions_per_round` 连同 config.example.yaml /
+  GUI 表单 / labels 映射一并删除（pydantic 默认 extra=ignore，旧 config.yaml
+  残留键不影响加载）。答题页改为显示「今日（周X）场次：X · 固定 N 题」提示
+  （objectName=sessionHint），题量无处可配。
+- 测试：新增 tests/unit/core/test_quiz_session.py（星期映射写死 2026-10-19~25
+  真实日期、固定题量、注入 now）；test_quiz_sm.py 考试段重写为场次驱动，并加
+  autouse fixture 把场次钉在 daily——与真实星期几解耦（今天周六，不钉的话
+  旧用例会拿到初试预算而误判）；删除 screen 5 条 detect_exam_type 测试；
+  factory/config_loader/config_models/quiz_runtime/config_dialog 同步去键，
+  对话框新增 3 参数化场次提示用例。
+- `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1343 passed**（前台跑）。

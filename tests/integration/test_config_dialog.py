@@ -10,8 +10,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from rok_assistant.core.quiz.session import (
+    SESSION_DAILY, SESSION_FINAL, SESSION_PRELIM,
+)
 from rok_assistant.gui.config_dialog import ConfigDialog
 from rok_assistant.gui.config_dialog import CharacterEditDialog
+import rok_assistant.gui.config_dialog as config_dialog_mod
 from rok_assistant.gui.labels import ROLE_LABELS
 from rok_assistant.infra.mumu import MumuLocatorError, MumuNotRunningError
 
@@ -907,7 +911,7 @@ def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
     dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
     cur = dlg._stack.currentWidget()
     assert cur.findChild(QWidget, "page:quiz") is not None
-    for path in (("quiz", "max_rounds"), ("quiz", "max_questions_per_round"),
+    for path in (("quiz", "max_rounds"),
                  ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
                  ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
                  ("quiz", "parse_retries"), ("quiz", "auto_click"),
@@ -1096,7 +1100,7 @@ def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
     dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
     cur = dlg._stack.currentWidget()
     assert cur.findChild(QWidget, "page:quiz") is not None
-    for path in (("quiz", "max_rounds"), ("quiz", "max_questions_per_round"),
+    for path in (("quiz", "max_rounds"),
                  ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
                  ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
                  ("quiz", "parse_retries"), ("quiz", "auto_click"),
@@ -1262,3 +1266,24 @@ def test_quiz_instances_do_not_shadow_zhaiduo_pages(tmp_path, qapp, monkeypatch)
     dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))      # 答题模式
     assert dlg._stack.currentWidget().findChild(
         QWidget, "page:quiz") is not None
+
+
+@pytest.mark.parametrize("session,label,cap_text", [
+    (SESSION_PRELIM, "初试", "固定 10 题"),
+    (SESSION_FINAL, "终试", "固定 20 题"),
+    (SESSION_DAILY, "日常答题", "不限题量"),
+])
+def test_quiz_page_shows_todays_session_and_fixed_cap(
+        tmp_path, qapp, monkeypatch, session, label, cap_text):
+    """题量不进配置（用户 2026-10-24 拍板）：答题页按今日场次显示
+    「场次名 · 固定题量」提示；表单里不再有一轮最多答题数。"""
+    monkeypatch.setattr(config_dialog_mod, "current_session",
+                        lambda: session)
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
+    cur = dlg._stack.currentWidget()
+    hint = cur.findChild(QLabel, "sessionHint")
+    assert hint is not None
+    assert label in hint.text()
+    assert cap_text in hint.text()
+    assert ("quiz", "max_questions_per_round") not in dlg._widgets

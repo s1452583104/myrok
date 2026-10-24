@@ -398,7 +398,6 @@ class QuizConfig(BaseModel):
     fuzzy_threshold: float = Field(default=0.72, ge=0.0, le=1.0)  # 题库模糊匹配阈值
     verify_delay: float = Field(default=1.2, ge=0.0)      # 点完选项后多久截图看绿色
     min_green_ratio: float = Field(default=0.55, ge=0.0, le=1.0)
-    max_questions_per_round: int = Field(default=30, ge=1)
     round_cooldown_min: float = Field(default=10.0, ge=0.0)
     parse_retries: int = Field(default=2, ge=1)           # 同一题最多读几次再中止
     auto_click: bool = True                               # false = 只记日志不点击

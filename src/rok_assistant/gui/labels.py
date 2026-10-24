@@ -177,7 +177,6 @@ LOC_LABELS = {
     "fuzzy_threshold": "题库模糊匹配阈值",
     "verify_delay": "绿色判定等待",
     "min_green_ratio": "绿色像素占比阈值",
-    "max_questions_per_round": "一轮最多答题数",
     "round_cooldown_min": "轮间冷却",
     "parse_retries": "读题重试次数",
     "auto_click": "自动点击选项",

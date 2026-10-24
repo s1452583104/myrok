@@ -6,10 +6,10 @@
 入口带「距开始还有」倒计时时（进入按钮置灰）：原地轮询等开始，不点置灰
 按钮、不消耗导航步数（用户 2026-10-24 拍板：无限等待到开始）。
 
-三种场次（用户 2026-10-24 补充）：初试（周六，10 题）/ 终试（周日，
-20 题）固定时间入场、单题限时，题量上限按题目帧识别到的考试名自动
-封顶；周一到周五的日常答题任意时间可答、无单题时限，用配置的
-`max_questions_per_round` 兜底，补点预算也更宽。
+三种场次（用户 2026-10-24 拍板：**按星期几绑定，不靠 OCR 识别**）：
+初试（周六）固定 10 题、终试（周日）固定 20 题，都是固定时间入场、
+单题限时；周一至周五的日常答题任意时间可答、无单题时限、不限题量
+（答到活动结束算一轮）。补点预算按场次分配：考试从紧，日常从宽。
 
 **本模块绝不抛异常**：所有失败都写成 `ctx["fail_reason"] = <常量>` + END 边。
 抛异常会让 WorkerRunner 在同一状态退避重放，攒满 6 次直接停机——一次
@@ -26,8 +26,10 @@ import time
 from ..core.quiz.bank import QuizBank, normalize
 from ..core.quiz.models import ScreenQuestion
 from ..core.quiz.screen import (
-    EXAM_LABELS, EXAM_QUESTION_LIMITS, detect_exam_type, detect_quiz,
-    entry_countdown_active, find_quiz_entry, parse_question,
+    detect_quiz, entry_countdown_active, find_quiz_entry, parse_question,
+)
+from ..core.quiz.session import (
+    SESSION_DAILY, SESSION_LABELS, SESSION_QUESTION_LIMITS, current_session,
 )
 from ..core.quiz.solver import Solver
 from ..core.quiz.verify import pick_correct_option
@@ -72,7 +74,6 @@ class QuizStateMachine(StateMachine):
     def __init__(self, handle_source, ocr, bank: QuizBank, solver: Solver, *,
                  recognizers=None, verify_delay: float = 1.2,
                  min_green_ratio: float = 0.55,
-                 max_questions_per_round: int = 30,
                  round_cooldown_min: float = 10.0,
                  parse_retries: int = 2, entry_taps=None,
                  auto_click: bool = True, char_id: str = "?",
@@ -84,7 +85,6 @@ class QuizStateMachine(StateMachine):
         self._solver = solver
         self._verify_delay = float(verify_delay)
         self._min_green_ratio = float(min_green_ratio)
-        self._max_questions = int(max_questions_per_round)
         self._cooldown_min = float(round_cooldown_min)
         self._parse_retries = max(1, int(parse_retries))
         self._entry_taps = [tuple(int(v) for v in tap)
@@ -103,34 +103,20 @@ class QuizStateMachine(StateMachine):
         self._advance_waits = 0
         self._nav_steps = 0
         self._countdown_logged = False   # 倒计时等待已记过日志（避免每 20s 一条）
-        self._exam_type: str | None = None   # 本轮识别到的考试类型（见 _update_exam_type）
+        self._session: str = SESSION_DAILY   # 本场轮次的场次（_reset_nav 按星期几绑定）
         super().__init__(initial="IDLE", human=human)
         self.last_image = None
 
-    # ---- 考试类型与题量上限（初试 10 / 终试 20，用户 2026-10-24 补充） ----
+    # ---- 场次与题量上限（用户 2026-10-24 拍板：按星期几绑定，题量固定） ----
 
-    def _exam_question_cap(self) -> int:
-        """单轮题数上限：初试 10 / 终试 20（真实题量），日常答题或识别不到
-        考试名时用 `quiz.max_questions_per_round` 配置值兜底。"""
-        return EXAM_QUESTION_LIMITS.get(self._exam_type, self._max_questions)
-
-    def _update_exam_type(self, blocks) -> None:
-        """从题目帧识别考试类型（一轮内 sticky，`_reset_nav` 清零重认）。
-
-        只在 READ 的题目帧上调用：入场弹窗和活动主页会同时出现「初试」
-        「终试」，`detect_exam_type` 对那种画面返回 None——这里保持原状，
-        不会把上限设错。
-        """
-        exam = detect_exam_type(blocks)
-        if exam is None or exam == self._exam_type:
-            return
-        self._exam_type = exam
-        logger.info("[答题 %s] 识别到%s，单轮按 %d 题上限跑",
-                    self._char_id, EXAM_LABELS[exam], self._exam_question_cap())
+    def _question_cap(self) -> int | None:
+        """单轮题数上限：初试 10 / 终试 20（固定）；日常答题 None = 不限量，
+        答到活动结束算一轮。"""
+        return SESSION_QUESTION_LIMITS[self._session]
 
     def _click_retry_budget(self) -> tuple[int, float]:
         """补点预算（次数, 间隔秒）：考试限时从紧，日常答题从宽。"""
-        if self._exam_type is None:
+        if self._session == SESSION_DAILY:
             return PRACTICE_CLICK_RETRIES, PRACTICE_RETRY_DELAY
         return EXAM_CLICK_RETRIES, EXAM_RETRY_DELAY
 
@@ -257,7 +243,13 @@ class QuizStateMachine(StateMachine):
     def _reset_nav(self, ctx):
         self._nav_steps = 0
         self._countdown_logged = False
-        self._exam_type = None            # 新一轮重新识别考试类型
+        # 场次按当天星期几绑定（用户 2026-10-24 拍板，不靠 OCR 识别）：
+        # 周六=初试、周日=终试、周一至周五=日常答题。新一轮重新绑。
+        self._session = current_session()
+        cap = self._question_cap()
+        cap_text = f"固定 {cap} 题" if cap is not None else "不限题量"
+        logger.info("[答题 %s] 今日场次：%s（%s）", self._char_id,
+                    SESSION_LABELS[self._session], cap_text)
         ctx.pop("fail_reason", None)
         ctx["in_quiz"] = False
 
@@ -321,14 +313,15 @@ class QuizStateMachine(StateMachine):
         ctx.pop("round_over", None)
         ctx.pop("parse_verdict", None)
         ctx.pop("cooldown_why", None)
-        if self._answered >= self._exam_question_cap():
+        cap = self._question_cap()
+        if cap is not None and self._answered >= cap:
             ctx["round_over"] = True
-            ctx["cooldown_why"] = f"已达单轮上限 {self._exam_question_cap()} 题"
+            ctx["cooldown_why"] = (f"已达{SESSION_LABELS[self._session]}"
+                                   f"单轮上限 {cap} 题")
             return
         img = self._handle.capture()
         self.last_image = img
         blocks = self._ocr.detect_text(img)
-        self._update_exam_type(blocks)
         question = parse_question(blocks, img.shape[1])
         if question is not None:
             if normalize(question.text) != self._answered_key:

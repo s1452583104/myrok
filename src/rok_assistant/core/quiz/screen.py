@@ -265,28 +265,3 @@ def entry_countdown_active(blocks: Sequence[TextBlock]) -> bool:
     不含「还有」，不会误判。
     """
     return any(_COUNTDOWN_RE.search(text.strip()) for _box, text, _conf in blocks)
-
-
-# 考试类型（用户 2026-10-24 补充的活动规则）：初试周六、终试周日，都是
-# 固定时间入场（13:00/19:00 两场）、单题限时，初试 10 题、终试 20 题；
-# 周一到周五的日常答题任意时间可答、无单题时限、题量不固定。
-EXAM_PRELIM = "prelim"
-EXAM_FINAL = "final"
-EXAM_LABELS = {EXAM_PRELIM: "初试", EXAM_FINAL: "终试"}
-# 考试的单轮题量上限（真实题量）；日常答题用 quiz.max_questions_per_round
-EXAM_QUESTION_LIMITS = {EXAM_PRELIM: 10, EXAM_FINAL: 20}
-_EXAM_TYPE_PATTERNS = ((EXAM_PRELIM, re.compile(r"初试")),
-                       (EXAM_FINAL, re.compile(r"终试")))
-
-
-def detect_exam_type(blocks: Sequence[TextBlock]) -> str | None:
-    """题目帧上识别当前是初试还是终试；认不出返回 None（日常答题）。
-
-    **只在题目帧调用**：入场弹窗（「本场初试开始后将无法再……终试」）
-    和活动主页（初试历史卡 + 终试明天卡并存）都会同时出现两个考试名，
-    这种情况返回 None——调用方保持原状，避免把题量上限设错。
-    「复试」等旧写法不匹配（不是初试/终试）。
-    """
-    hits = [exam for exam, rx in _EXAM_TYPE_PATTERNS
-            if any(rx.search(text.strip()) for _box, text, _conf in blocks)]
-    return hits[0] if len(hits) == 1 else None

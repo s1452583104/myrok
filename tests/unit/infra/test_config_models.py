@@ -515,7 +515,6 @@ def test_quiz_config_defaults():
     assert cfg.fuzzy_threshold == 0.72
     assert cfg.verify_delay == 1.2
     assert cfg.min_green_ratio == 0.55
-    assert cfg.max_questions_per_round == 30
     assert cfg.round_cooldown_min == 10.0
     assert cfg.parse_retries == 2
     assert cfg.auto_click is True

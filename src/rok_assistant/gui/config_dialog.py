@@ -7,6 +7,7 @@ dict，保存时 RootConfig.model_validate 整体校验，避免编辑过程中�
 """
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 import uuid
 
@@ -24,6 +25,9 @@ from PyQt6.QtWidgets import (
 from pydantic import ValidationError
 
 from rok_assistant.core.handle_source import create_handle_source
+from rok_assistant.core.quiz.session import (
+    SESSION_LABELS, SESSION_QUESTION_LIMITS, current_session,
+)
 from rok_assistant.infra.config import (MAX_MARCH_PRESETS, MAX_TARGET_LEVELS,
                                         MAX_TARGET_LEVEL, MIN_TARGET_LEVEL,
                                         RANGE_BOUNDARY, level_range,
@@ -436,11 +440,30 @@ class ConfigDialog(QDialog):
         return box
 
     # ---------------- 答题模式页 ----------------
+    _WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+    def _session_hint(self) -> QLabel:
+        """「今日场次 · 固定题量」提示。
+
+        场次按星期几绑定、题量按场次固定（用户 2026-10-24 拍板：
+        不按 OCR 识别、题量不进配置），所以这里只做展示，没有输入控件。
+        """
+        session = current_session()
+        cap = SESSION_QUESTION_LIMITS[session]
+        cap_text = f"固定 {cap} 题" if cap is not None else "不限题量"
+        hint = QLabel(
+            f"今日（{self._WEEKDAY_CN[date.today().weekday()]}）场次："
+            f"{SESSION_LABELS[session]} · {cap_text}。题量按场次固定，不需配置"
+            f"（日常答题不限、初试 10 题、终试 20 题）。")
+        hint.setObjectName("sessionHint")
+        hint.setWordWrap(True)
+        return hint
+
     def _make_quiz_page(self) -> QWidget:
         """答题模式配置页：作答策略表单（模拟器实例是左侧子项）。
 
         覆盖 QuizConfig 除 instances 外的全部字段（spec §5）：
-        运行（轮数/题数/冷却/自动点击）、识别与判定（模糊阈值/绿色判定/重认）、
+        运行（轮数/冷却/自动点击）、识别与判定（模糊阈值/绿色判定/重认）、
         入口点击落点、大模型兜底。instances 按寨多多的先例做成树子项
         （「答题号 <名字>」），一台一页。
         """
@@ -462,8 +485,7 @@ class ConfigDialog(QDialog):
         rf.setSpacing(theme.SP_SM)
         rf.addRow("最多轮数", self._spin(("quiz", "max_rounds"),
                                         q["max_rounds"], 1, 999))
-        rf.addRow("一轮最多答题数(日常)", self._spin(("quiz", "max_questions_per_round"),
-                                             q["max_questions_per_round"], 1, 999))
+        rf.addRow(self._session_hint())
         rf.addRow("轮间冷却(分钟)", self._spin(("quiz", "round_cooldown_min"),
                                               q["round_cooldown_min"], 0.0, 1440.0,
                                               double=True))

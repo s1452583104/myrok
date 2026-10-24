@@ -25,7 +25,6 @@ CFG = {
         "fuzzy_threshold": 0.8,
         "verify_delay": 2.5,
         "min_green_ratio": 0.7,
-        "max_questions_per_round": 12,
         "round_cooldown_min": 3.0,
         "parse_retries": 4,
         "auto_click": False,
@@ -111,7 +110,6 @@ def test_sm_factory_receives_the_quiz_config():
     assert sm._solver is coord._solver
     assert sm._verify_delay == 2.5
     assert sm._min_green_ratio == 0.7
-    assert sm._max_questions == 12
     assert sm._cooldown_min == 3.0
     assert sm._parse_retries == 4
     assert sm._entry_taps == [(10, 20)]

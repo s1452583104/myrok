@@ -10,9 +10,10 @@ import numpy as np
 import pytest
 
 from rok_assistant.core.quiz.bank import QuizBank
-from rok_assistant.core.quiz.screen import EXAM_LABELS, parse_question
+from rok_assistant.core.quiz.screen import parse_question
 from rok_assistant.core.quiz.solver import Solver
 from rok_assistant.core.recognizer import BBox
+import rok_assistant.workers.quiz_sm as quiz_sm
 from rok_assistant.workers.quiz_sm import (
     ANSWER_NOT_ACCEPTED_REASON, QUIZ_ENTRY_MISSING_REASON,
     QUIZ_PARSE_FAILED_REASON, QUIZ_SCREEN_LOST_REASON, QuizStateMachine,
@@ -74,17 +75,14 @@ ENTER_XY = ((1443 + 1499) // 2, (849 + 882) // 2)   # (1471, 865)
 SHIPPED = [{"no": 1, "q": Q1_TEXT, "a": "最后的罗马人"}]
 
 
-def _qset(n, exam=None):
-    """第 n 道题的块（几何照 Q1 真实帧）；exam=None 时头部不带考试名。
+def _qset(n):
+    """第 n 道题的块（几何照 Q1 真实帧）。
 
-    题目帧头部带「初试」「终试」是 2026-10-24 实机截图证实的行为；
-    日常答题/习题演练的帧没有考试名（exam=None，头部沿用旧 fixture
-    的「国士无双-复试」写法）。
+    头部沿用 Q1 fixture 的「国士无双-复试」写法——场次不再从画面文字
+    识别（用户 2026-10-24 拍板：按星期几绑定），题目帧长什么样都行。
     """
-    header = ("国士无双-复试" if exam is None
-              else f"国士无双-{EXAM_LABELS[exam]}")
     return _blocks(
-        (1092, 60, 1485, 116, header, 0.75),
+        (1092, 60, 1485, 116, "国士无双-复试", 0.75),
         (752, 393, 809, 436, f"Q{n}", 0.63),
         (832, 394, 1197, 431, f"这是第{n}道测试题？", 0.89),
         (823, 597, 1032, 631, "选项甲", 0.81),
@@ -93,6 +91,15 @@ def _qset(n, exam=None):
         (1557, 758, 1767, 791, "选项丁", 0.81),
         (2245, 1151, 2316, 1192, "放弃", 0.67),
     )
+
+
+@pytest.fixture(autouse=True)
+def _pin_daily_session(monkeypatch):
+    """场次按星期几绑定（2026-10-24 用户拍板，不靠 OCR）：整套用例默认钉在
+    「日常答题」，与真实星期几解耦——今天是周六，不钉的话现有用例会拿到初试的
+    10 题上限和从紧补点预算而误判。考试场次的用例在内部自行覆盖。
+    """
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "daily")
 
 
 class _Clock:
@@ -421,16 +428,17 @@ def test_auto_click_false_only_logs_and_ends_the_round(tmp_path):
     assert bank.size == 1               # 没点、没验、没学
 
 
-# ---- 考试类型识别与题量上限（用户 2026-10-24 补充的活动规则） ----
+# ---- 场次绑定与题量上限（用户 2026-10-24 拍板：按星期几，不靠 OCR） ----
 #
 # 初试（周六）10 题、终试（周日）20 题，都是固定时间入场、单题限时；
-# 周一到周五的日常答题任意时间可答、无单题时限、题量不固定。
-# 识别只在 READ 的题目帧上做（弹窗/活动主页两个考试名并存，不是检测点）。
+# 周一至周五的日常答题任意时间可答、无单题时限、不限题量。
+# 场次在每轮开始（_reset_nav）按当天星期几绑定，与画面文字无关。
 
-def test_prelim_exam_caps_the_round_at_ten_questions(tmp_path):
-    """初试题目帧 → 单轮答满 10 题收轮，配置的 30 题上限不生效。"""
-    qs = [_qset(n, "prelim") for n in range(1, 12)]     # Q1..Q11
-    script = [(qs[0], None), (qs[0], None)]              # NORMALIZE / OPEN_QUIZ
+def test_prelim_session_caps_the_round_at_ten_questions(tmp_path, monkeypatch):
+    """周六（初试）→ 单轮答满 10 题收轮；不读画面上的考试名。"""
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "prelim")
+    qs = [_qset(n) for n in range(1, 12)]     # Q1..Q11
+    script = [(qs[0], None), (qs[0], None)]   # NORMALIZE / OPEN_QUIZ
     for i in range(10):
         script += [(qs[i], None),        # READ：第 i+1 题
                    (qs[i], "A"),         # VERIFY：有绿色，不补点
@@ -440,57 +448,51 @@ def test_prelim_exam_caps_the_round_at_ten_questions(tmp_path):
 
     assert sm.current == "END"
     assert sm.fail_reason is None
-    assert sm._exam_type == "prelim"
-    assert sm._answered == 10              # 不是配置兜底的 30
+    assert sm._session == "prelim"
+    assert sm._answered == 10              # 初试固定 10 题
 
 
-def test_final_exam_uses_the_twenty_question_limit(tmp_path):
-    """终试 → 20 题上限（不是初试的 10，也不是配置兜底值）。"""
+def test_final_session_uses_the_twenty_question_limit(tmp_path, monkeypatch):
+    """周日（终试）→ 20 题上限（不是初试的 10，也没有配置兜底）。"""
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "final")
     sm, _handle, _clock, _bank = _make(tmp_path, [(Q1, None), (Q1, None)])
-    assert sm._exam_question_cap() == 30                 # 未识别 → 配置值
-    sm._update_exam_type(_qset(1, "final"))
-    assert sm._exam_type == "final"
-    assert sm._exam_question_cap() == 20
-
-
-def test_daily_practice_keeps_the_configured_limit(tmp_path):
-    """日常答题（题目帧无考试名）→ 用配置的单轮题数上限兜底。"""
-    sm, _handle, _clock, _bank = _make(
-        tmp_path, [(Q1, None), (Q1, None)], max_questions_per_round=7)
-    sm._update_exam_type(_qset(1))                       # 无考试名
-    assert sm._exam_type is None
-    assert sm._exam_question_cap() == 7
-
-
-def test_exam_type_is_sticky_within_a_round_and_resets_between_rounds(tmp_path):
-    """识别结果一轮内保持；新一轮（_reset_nav）清零，重新识别。"""
-    sm, _handle, _clock, _bank = _make(tmp_path, [(Q1, None), (Q1, None)])
-    sm._update_exam_type(_qset(1, "prelim"))
-    sm._update_exam_type(_qset(2, "prelim"))     # 同轮重复识别 → 不刷日志也不变
-    assert sm._exam_type == "prelim"
     sm._reset_nav({})
-    assert sm._exam_type is None
+    assert sm._session == "final"
+    assert sm._question_cap() == 20
 
 
-def test_exam_type_survives_ambiguous_frames(tmp_path):
-    """两个考试名并存的帧（弹窗/活动主页）→ 返回 None，不覆盖已识别的类型。"""
+def test_daily_session_has_no_question_cap(tmp_path, monkeypatch):
+    """日常答题（周一至周五）→ 不限题量，答到活动结束算一轮。"""
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "daily")
     sm, _handle, _clock, _bank = _make(tmp_path, [(Q1, None), (Q1, None)])
-    sm._update_exam_type(_qset(1, "prelim"))
-    both = _qset(2, "prelim") + _blocks((865, 49, 979, 110, "终试", 0.57))
-    sm._update_exam_type(both)
-    assert sm._exam_type == "prelim"
+    sm._reset_nav({})
+    assert sm._session == "daily"
+    assert sm._question_cap() is None
 
 
-def test_retry_budget_is_tight_in_timed_exams_and_patient_in_practice(tmp_path):
+def test_session_is_bound_at_round_start_and_rebound_between_rounds(
+        tmp_path, monkeypatch):
+    """场次在每轮开始（_reset_nav）绑定；新一轮重新绑，不沿用上一轮。"""
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "prelim")
+    sm, _handle, _clock, _bank = _make(tmp_path, [(Q1, None), (Q1, None)])
+    sm._reset_nav({})
+    assert sm._session == "prelim"
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "daily")
+    sm._reset_nav({})
+    assert sm._session == "daily"
+
+
+def test_retry_budget_is_tight_in_timed_exams_and_patient_in_practice(
+        tmp_path, monkeypatch):
     """初试/终试有单题限时：补点 2 次；日常答题无时限：补点 4 次。"""
-    exam_sm, exam_handle, clock, _b = _make(
-        tmp_path, [(_qset(1, "prelim"), None)] * 40)
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "prelim")
+    exam_sm, exam_handle, clock, _b = _make(tmp_path, [(_qset(1), None)] * 40)
     _drive(exam_sm, clock, max_steps=400)
     exam_clicks = [c for c in exam_handle.clicks if c[2] == "quiz_option"]
     assert len(exam_clicks) == 3                    # 首点 + 2 次补点
 
-    practice_sm, practice_handle, clock2, _b2 = _make(
-        tmp_path, [(Q1, None)] * 40)
+    monkeypatch.setattr(quiz_sm, "current_session", lambda: "daily")
+    practice_sm, practice_handle, clock2, _b2 = _make(tmp_path, [(Q1, None)] * 40)
     _drive(practice_sm, clock2, max_steps=400)
     practice_clicks = [c for c in practice_handle.clicks
                        if c[2] == "quiz_option"]

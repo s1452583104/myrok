@@ -78,13 +78,12 @@ def test_example_config_has_quiz_section():
     from rok_assistant.infra.config import AppMode, load_config
     root = Path(__file__).resolve().parents[3]
     raw = yaml.safe_load((root / "config.example.yaml").read_text(encoding="utf-8"))
-    assert {"max_rounds", "max_questions_per_round", "round_cooldown_min",
+    assert {"max_rounds", "round_cooldown_min",
             "verify_delay", "llm"} <= set(raw["quiz"])
     assert "enabled" in raw["quiz"]["llm"]
 
     cfg = load_config(root / "config.example.yaml")
     assert cfg.quiz.max_rounds == 3
-    assert cfg.quiz.max_questions_per_round == 30
     assert cfg.quiz.round_cooldown_min == 10
     assert cfg.quiz.verify_delay == 1.2
     assert cfg.quiz.llm.enabled is False

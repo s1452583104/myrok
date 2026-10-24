@@ -6,8 +6,7 @@
 """
 from rok_assistant.core.quiz.models import LETTERS
 from rok_assistant.core.quiz.screen import (
-    detect_exam_type, detect_quiz, entry_countdown_active, find_quiz_entry,
-    parse_question,
+    detect_quiz, entry_countdown_active, find_quiz_entry, parse_question,
 )
 from rok_assistant.core.recognizer import BBox
 
@@ -263,43 +262,3 @@ def test_entry_countdown_matches_variant_and_merged_wordings():
         (1411, 742, 1537, 798, "距开始还有01:13:43", 0.75),
         (1443, 849, 1499, 882, "进入", 0.66),
     )) is True
-
-
-# ---- 考试类型识别（用户 2026-10-24 补充的活动规则） ----
-#
-# 国士无双分三种场次：初试（周六，10 题）、终试（周日，20 题）都是固定
-# 时间入场、单题限时；周一到周五的日常答题任意时间可答、无单题时限。
-# 状态机按识别到的类型决定单轮题量上限和补点预算。
-#
-# **检测点只在题目帧**：入场弹窗（「本场初试开始后将无法再……终试」）
-# 和活动主页（初试历史卡 + 终试明天卡并存）都会同时出现两个考试名，
-# 那种画面必须返回 None，由调用方保持原状。
-
-def test_detect_exam_type_prelim_on_a_question_frame():
-    """初试题目帧：头部考试名可见（1920×1080 真实帧坐标）。"""
-    blocks = Q1 + _blocks((865, 49, 979, 110, "初试", 0.57))
-    assert detect_exam_type(blocks) == "prelim"
-
-
-def test_detect_exam_type_final_on_a_question_frame():
-    blocks = Q1 + _blocks((865, 49, 979, 110, "终试", 0.57))
-    assert detect_exam_type(blocks) == "final"
-
-
-def test_detect_exam_type_none_for_daily_practice():
-    """日常答题/习题演练的题目帧没有考试名：返回 None，用配置兜底。"""
-    assert detect_exam_type(Q1) is None
-    assert detect_exam_type(FRAME_358) is None
-
-
-def test_detect_exam_type_none_when_both_names_coexist():
-    """弹窗/活动主页两个考试名并存：不猜，返回 None。"""
-    both = Q1 + _blocks((865, 49, 979, 110, "初试", 0.57),
-                        (900, 300, 1014, 360, "终试", 0.60))
-    assert detect_exam_type(both) is None
-
-
-def test_detect_exam_type_survives_garbled_ocr():
-    """OCR 把标题和考试名粘成一块（实机失败弹窗的「国初试无双」）也要认。"""
-    blocks = _blocks((865, 49, 1050, 110, "国初试无双", 0.57))
-    assert detect_exam_type(blocks) == "prelim"
