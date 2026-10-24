@@ -21,11 +21,9 @@ CFG = {
                                             "troops": ["infantry"]}]}]},
     ]},
     "quiz": {
-        "max_rounds": 4,
         "fuzzy_threshold": 0.8,
         "verify_delay": 2.5,
         "min_green_ratio": 0.7,
-        "round_cooldown_min": 3.0,
         "parse_retries": 4,
         "auto_click": False,
         "entry_taps": [[10, 20]],
@@ -55,15 +53,17 @@ def test_instances_come_from_the_quiz_section():
     assert [i.id for i in _coord()._instances()] == ["mumu0"]
 
 
-def test_max_rounds_is_the_quiz_section_not_the_app_section():
-    assert _coord()._max_rounds() == 4
+def test_quiz_runs_exactly_one_round_not_app_max_rounds():
+    """答题一天只能答一次（用户 2026-10-25 拍板）：恒一轮，与
+    app.max_rounds=99 无关——轮次配置已随冷却一并移除。"""
+    assert _coord()._max_rounds() == 1
 
 
-def test_stats_target_uses_quiz_max_rounds():
+def test_stats_target_is_one_round_per_instance():
     coord = _coord()
     coord.runners = {"mumu0:q0": MagicMock(rounds_ok=0, rounds_failed=0,
                                            rounds_env=0, rounds_done=0)}
-    assert coord.stats()["target"] == 4
+    assert coord.stats()["target"] == 1
     assert coord.stats()["fills"] == 0
 
 
@@ -110,7 +110,6 @@ def test_sm_factory_receives_the_quiz_config():
     assert sm._solver is coord._solver
     assert sm._verify_delay == 2.5
     assert sm._min_green_ratio == 0.7
-    assert sm._cooldown_min == 3.0
     assert sm._parse_retries == 4
     assert sm._entry_taps == [(10, 20)]
     assert sm._auto_click is False
@@ -122,4 +121,4 @@ def test_config_reads_only_the_quiz_section():
     coord = _coord()
     assert [i.id for i in coord._config.instances_for(AppMode.ZHAIDUO)] == ["z0"]
     assert [i.id for i in coord._instances()] == ["mumu0"]
-    assert coord._max_rounds() == 4          # 不是 app.max_rounds=99
+    assert coord._max_rounds() == 1          # 一天一轮，不是 app.max_rounds=99

@@ -911,14 +911,17 @@ def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
     dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
     cur = dlg._stack.currentWidget()
     assert cur.findChild(QWidget, "page:quiz") is not None
-    for path in (("quiz", "max_rounds"),
-                 ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
+    for path in (("quiz", "fuzzy_threshold"),
                  ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
                  ("quiz", "parse_retries"), ("quiz", "auto_click"),
                  ("quiz", "llm", "enabled"), ("quiz", "llm", "base_url"),
                  ("quiz", "llm", "model"), ("quiz", "llm", "api_key"),
                  ("quiz", "llm", "timeout_s")):
         assert path in dlg._widgets, f"答题页缺少控件绑定 {path}"
+    # 一天只能答一次（用户 2026-10-25 拍板）：轮次/冷却控件已移除
+    assert ("quiz", "max_rounds") not in dlg._widgets
+    assert ("quiz", "round_cooldown_min") not in dlg._widgets
+    assert cur.findChild(QLabel, "oneRoundHint") is not None
     assert dlg._entry_table.rowCount() == 0      # 默认无入口落点
 
 
@@ -926,8 +929,8 @@ def test_quiz_spin_writes_to_data(tmp_path, qapp, monkeypatch):
     dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
     dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
     assert dlg._data["quiz"]["fuzzy_threshold"] == 0.6
-    dlg._widgets[("quiz", "max_rounds")].setValue(5)
-    assert dlg._data["quiz"]["max_rounds"] == 5
+    dlg._widgets[("quiz", "parse_retries")].setValue(4)
+    assert dlg._data["quiz"]["parse_retries"] == 4
 
 
 def test_quiz_auto_click_checkbox(tmp_path, qapp, monkeypatch):
@@ -963,14 +966,17 @@ def test_quiz_entry_taps_table_edits_data(tmp_path, qapp, monkeypatch):
 
 def test_quiz_save_roundtrip(tmp_path, qapp, monkeypatch):
     dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
-    dlg._widgets[("quiz", "max_rounds")].setValue(7)
+    dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
     dlg._widgets[("quiz", "auto_click")].setChecked(False)
     dlg._add_entry_tap()
     assert dlg.save() is True
     loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
-    assert loaded["quiz"]["max_rounds"] == 7
+    assert loaded["quiz"]["fuzzy_threshold"] == 0.6
     assert loaded["quiz"]["auto_click"] is False
     assert loaded["quiz"]["entry_taps"] == [[0, 0]]
+    # 轮次/冷却键不该被写盘（一天只能答一次，用户 2026-10-25 拍板移除）
+    assert "max_rounds" not in loaded["quiz"]
+    assert "round_cooldown_min" not in loaded["quiz"]
 
 
 def test_quiz_validation_error_is_humanized(tmp_path, qapp, monkeypatch):
@@ -1100,14 +1106,17 @@ def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
     dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
     cur = dlg._stack.currentWidget()
     assert cur.findChild(QWidget, "page:quiz") is not None
-    for path in (("quiz", "max_rounds"),
-                 ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
+    for path in (("quiz", "fuzzy_threshold"),
                  ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
                  ("quiz", "parse_retries"), ("quiz", "auto_click"),
                  ("quiz", "llm", "enabled"), ("quiz", "llm", "base_url"),
                  ("quiz", "llm", "model"), ("quiz", "llm", "api_key"),
                  ("quiz", "llm", "timeout_s")):
         assert path in dlg._widgets, f"答题页缺少控件绑定 {path}"
+    # 一天只能答一次（用户 2026-10-25 拍板）：轮次/冷却控件已移除
+    assert ("quiz", "max_rounds") not in dlg._widgets
+    assert ("quiz", "round_cooldown_min") not in dlg._widgets
+    assert cur.findChild(QLabel, "oneRoundHint") is not None
     assert dlg._entry_table.rowCount() == 0      # 默认无入口落点
 
 
@@ -1115,8 +1124,8 @@ def test_quiz_spin_writes_to_data(tmp_path, qapp, monkeypatch):
     dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
     dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
     assert dlg._data["quiz"]["fuzzy_threshold"] == 0.6
-    dlg._widgets[("quiz", "max_rounds")].setValue(5)
-    assert dlg._data["quiz"]["max_rounds"] == 5
+    dlg._widgets[("quiz", "parse_retries")].setValue(4)
+    assert dlg._data["quiz"]["parse_retries"] == 4
 
 
 def test_quiz_auto_click_checkbox(tmp_path, qapp, monkeypatch):
@@ -1152,14 +1161,17 @@ def test_quiz_entry_taps_table_edits_data(tmp_path, qapp, monkeypatch):
 
 def test_quiz_save_roundtrip(tmp_path, qapp, monkeypatch):
     dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
-    dlg._widgets[("quiz", "max_rounds")].setValue(7)
+    dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
     dlg._widgets[("quiz", "auto_click")].setChecked(False)
     dlg._add_entry_tap()
     assert dlg.save() is True
     loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
-    assert loaded["quiz"]["max_rounds"] == 7
+    assert loaded["quiz"]["fuzzy_threshold"] == 0.6
     assert loaded["quiz"]["auto_click"] is False
     assert loaded["quiz"]["entry_taps"] == [[0, 0]]
+    # 轮次/冷却键不该被写盘（一天只能答一次，用户 2026-10-25 拍板移除）
+    assert "max_rounds" not in loaded["quiz"]
+    assert "round_cooldown_min" not in loaded["quiz"]
 
 
 def test_quiz_validation_error_is_humanized(tmp_path, qapp, monkeypatch):

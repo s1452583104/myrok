@@ -75,12 +75,15 @@ class QuizCoordinator(BaseCoordinator):
             char, handle, recognizers, self._ocr, self._bank, self._solver,
             verify_delay=quiz.verify_delay,
             min_green_ratio=quiz.min_green_ratio,
-            round_cooldown_min=quiz.round_cooldown_min,
             parse_retries=quiz.parse_retries,
             entry_taps=quiz.entry_taps,
             auto_click=quiz.auto_click,
             human=profile)
 
     def _max_rounds(self) -> int:
-        """`quiz.max_rounds`，**不是** `app.max_rounds`（spec §5）。"""
-        return self._config.quiz.max_rounds
+        """答题恒一轮（用户 2026-10-25 拍板：一天只能答一次，无法重复答）。
+
+        与 `app.max_rounds` 无关，也没有 `quiz.max_rounds` 可配——答满即
+        收工。runner 的停止检查在冷却休眠之前，所以不会白等 30s。
+        """
+        return 1

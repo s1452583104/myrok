@@ -459,12 +459,25 @@ class ConfigDialog(QDialog):
         hint.setWordWrap(True)
         return hint
 
+    def _one_round_hint(self) -> QLabel:
+        """「一天一轮」提示。
+
+        轮次/冷却配置已移除（用户 2026-10-25 拍板：答题一天只能答一次，
+        无法重复答）——答满本轮即自动收工，没有可配的旋钮。
+        """
+        hint = QLabel("答题一天一轮：答满本轮即自动收工"
+                      "（活动一天只能答一次，无法重复作答）")
+        hint.setObjectName("oneRoundHint")
+        hint.setWordWrap(True)
+        return hint
+
     def _make_quiz_page(self) -> QWidget:
         """答题模式配置页：作答策略表单（模拟器实例是左侧子项）。
 
         覆盖 QuizConfig 除 instances 外的全部字段（spec §5）：
-        运行（轮数/冷却/自动点击）、识别与判定（模糊阈值/绿色判定/重认）、
-        入口点击落点、大模型兜底。instances 按寨多多的先例做成树子项
+        运行（自动点击）、识别与判定（模糊阈值/绿色判定/重认）、
+        入口点击落点、大模型兜底。轮次/冷却没有配置（一天只能答一次，
+        用户 2026-10-25 拍板移除）。instances 按寨多多的先例做成树子项
         （「答题号 <名字>」），一台一页。
         """
         page = QWidget()
@@ -483,12 +496,8 @@ class ConfigDialog(QDialog):
         run = QGroupBox("运行")
         rf = QFormLayout(run)
         rf.setSpacing(theme.SP_SM)
-        rf.addRow("最多轮数", self._spin(("quiz", "max_rounds"),
-                                        q["max_rounds"], 1, 999))
         rf.addRow(self._session_hint())
-        rf.addRow("轮间冷却(分钟)", self._spin(("quiz", "round_cooldown_min"),
-                                              q["round_cooldown_min"], 0.0, 1440.0,
-                                              double=True))
+        rf.addRow(self._one_round_hint())
         auto = QCheckBox("自动点击选项")
         auto.setChecked(bool(q["auto_click"]))
         auto.setToolTip("取消 = 只认题、只把推荐答案写进日志，不点。"

@@ -511,16 +511,18 @@ def test_quiz_config_defaults():
     """默认值就是 spec §5 那张表：改默认值等于改行为，必须在这里留痕。"""
     cfg = QuizConfig()
     assert cfg.instances == []
-    assert cfg.max_rounds == 3
     assert cfg.fuzzy_threshold == 0.72
     assert cfg.verify_delay == 1.2
     assert cfg.min_green_ratio == 0.55
-    assert cfg.round_cooldown_min == 10.0
     assert cfg.parse_retries == 2
     assert cfg.auto_click is True
     assert cfg.entry_taps == []              # 空 = 只靠屏幕文字找入口
     assert cfg.llm.enabled is False          # 默认不发网络请求
     assert cfg.llm.timeout_s == 8.0
+    # 一天只能答一次（用户 2026-10-25 拍板）：轮次/冷却配置已移除，
+    # 模型上不该再有这两个字段（防止哪天被悄悄加回来）。
+    assert not hasattr(cfg, "max_rounds")
+    assert not hasattr(cfg, "round_cooldown_min")
 
 
 def test_quiz_llm_api_key_defaults_empty():

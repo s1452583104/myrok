@@ -2856,3 +2856,31 @@ runner 三处必须同一个字符串，散写字面量改名时不会报错、�
   factory/config_loader/config_models/quiz_runtime/config_dialog 同步去键，
   对话框新增 3 参数化场次提示用例。
 - `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1343 passed**（前台跑）。
+
+### 答题移除轮次/冷却配置，恒一天一轮（2026-10-25 早，用户拍板）
+
+用户拍板（原话：「答题模式下的运行轮次和冷却时间的配置请移除，因为一天
+只能答一次，无法重复答」）——只动答题（quiz）段，寨多多/宝石/公共段的
+轮次配置不动（那些模式本来就能反复跑）：
+
+- `QuizConfig` 删 `max_rounds` / `round_cooldown_min`（pydantic 默认
+  extra=ignore，旧 config.yaml 残留键不影响加载）；config.example.yaml
+  quiz 段同步删键加注释。
+- `quiz_sm.py`：删 `round_cooldown_min` 参数与 `_cooldown_min`；**删
+  COOLDOWN 状态**——READ/ANSWER/ADVANCE 的 round_over/semi_auto 边直通
+  END，动作 `_enter_cooldown` → `_end_round`（只打「本轮结束（答了 N 题）：
+  原因」日志，不再 `_wait_here`）；ctx 键 `cooldown_why` → `round_end_why`。
+- `quiz_runtime.py`：`_max_rounds()` 恒返回 1（docstring：一天只能答一次，
+  与 app.max_rounds 无关）。runner 的停止检查在冷却休眠之前 break，答满
+  即走，不白等 30s；环境类中止同样一轮即收工。
+- `factory.py` 删形参；`labels.py` 删 `round_cooldown_min` 标签映射
+  （`max_rounds` 映射保留——公共段还在用）；runner/labels 里的 COOLDOWN
+  通用状态映射保留（test_labels 钉着，gem 等模式可能用）。
+- GUI 答题页删「最多轮数」「轮间冷却(分钟)」两行输入框，新增「一天一轮」
+  提示 Label（objectName=oneRoundHint）。
+- 测试：test_quiz_sm 冷却用例改写为 `test_round_ends_at_once_without_
+  any_cooldown`（spy step 断言 COOLDOWN 从未出现、直通 END）；quiz_runtime
+  恒一轮 + stats target=1；config_models 加 not hasattr 反向断言；
+  config_loader 断言示例里两个键不存在；config_dialog 答题段（文件中重复
+  两遍，两处都改）去控件路径 + 反向断言 + oneRoundHint 存在性。
+- 本地探针 `_live_quiz_run*.py` 同步去参（不入库）。

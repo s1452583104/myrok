@@ -78,13 +78,13 @@ def test_example_config_has_quiz_section():
     from rok_assistant.infra.config import AppMode, load_config
     root = Path(__file__).resolve().parents[3]
     raw = yaml.safe_load((root / "config.example.yaml").read_text(encoding="utf-8"))
-    assert {"max_rounds", "round_cooldown_min",
-            "verify_delay", "llm"} <= set(raw["quiz"])
+    assert {"verify_delay", "llm"} <= set(raw["quiz"])
     assert "enabled" in raw["quiz"]["llm"]
+    # 一天只能答一次（用户 2026-10-25 拍板）：示例里不该再有轮次/冷却键
+    assert "max_rounds" not in raw["quiz"]
+    assert "round_cooldown_min" not in raw["quiz"]
 
     cfg = load_config(root / "config.example.yaml")
-    assert cfg.quiz.max_rounds == 3
-    assert cfg.quiz.round_cooldown_min == 10
     assert cfg.quiz.verify_delay == 1.2
     assert cfg.quiz.llm.enabled is False
     assert isinstance(cfg.instances_for(AppMode.QUIZ), list)

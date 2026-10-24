@@ -1,7 +1,8 @@
 """答题模式状态机（spec docs/superpowers/specs/2026-10-24-答题模式-design.md §6/§9）。
 
 一轮 = 收拾画面 → 进答题活动 → 逐题「读题 → 作答 → 验绿 → 学习 → 等翻页」
-→ 活动结束 → 冷却。**答到活动结束算一轮**（用户 2026-10-24 拍板）。
+→ 活动结束即收工。**一天一轮**（用户 2026-10-25 拍板：答到活动结束算
+一轮，无法重复答）——没有轮次/冷却配置，round_over 边直通 END。
 
 入口带「距开始还有」倒计时时（进入按钮置灰）：原地轮询等开始，不点置灰
 按钮、不消耗导航步数（用户 2026-10-24 拍板：无限等待到开始）。
@@ -74,7 +75,6 @@ class QuizStateMachine(StateMachine):
     def __init__(self, handle_source, ocr, bank: QuizBank, solver: Solver, *,
                  recognizers=None, verify_delay: float = 1.2,
                  min_green_ratio: float = 0.55,
-                 round_cooldown_min: float = 10.0,
                  parse_retries: int = 2, entry_taps=None,
                  auto_click: bool = True, char_id: str = "?",
                  human=None, clock=time.time, sleeper=time.sleep, rng=None):
@@ -85,7 +85,6 @@ class QuizStateMachine(StateMachine):
         self._solver = solver
         self._verify_delay = float(verify_delay)
         self._min_green_ratio = float(min_green_ratio)
-        self._cooldown_min = float(round_cooldown_min)
         self._parse_retries = max(1, int(parse_retries))
         self._entry_taps = [tuple(int(v) for v in tap)
                             for tap in (entry_taps or [])]
@@ -141,7 +140,7 @@ class QuizStateMachine(StateMachine):
         self.add_transition("READ", "END", self._abort_round,
                             guard=lambda ctx: ctx.get("fail_reason")
                             in (QUIZ_SCREEN_LOST_REASON, QUIZ_PARSE_FAILED_REASON))
-        self.add_transition("READ", "COOLDOWN", self._enter_cooldown,
+        self.add_transition("READ", "END", self._end_round,
                             guard=lambda ctx: ctx.get("round_over") is True)
         self.add_transition("READ", "READ", self._read,
                             guard=lambda ctx: ctx.get("parse_verdict") == "retry")
@@ -150,7 +149,7 @@ class QuizStateMachine(StateMachine):
         self.add_transition("ANSWER", "END", self._abort_round,
                             guard=lambda ctx: ctx.get("fail_reason") is not None)
         # 半自动（auto_click=false）：给完建议就收本轮，不能等一个不存在的点击
-        self.add_transition("ANSWER", "COOLDOWN", self._enter_cooldown,
+        self.add_transition("ANSWER", "END", self._end_round,
                             guard=lambda ctx: ctx.get("semi_auto") is True)
         self.add_transition("ANSWER", "VERIFY", self._verify)
 
@@ -165,11 +164,9 @@ class QuizStateMachine(StateMachine):
                             == ANSWER_NOT_ACCEPTED_REASON)
         self.add_transition("ADVANCE", "READ", self._enter_next,
                             guard=lambda ctx: ctx.get("next_question") is True)
-        self.add_transition("ADVANCE", "COOLDOWN", self._enter_cooldown,
+        self.add_transition("ADVANCE", "END", self._end_round,
                             guard=lambda ctx: ctx.get("round_over") is True)
         self.add_transition("ADVANCE", "ADVANCE", self._advance)
-
-        self.add_transition("COOLDOWN", "END", lambda ctx: None)
 
     # ---- step 覆写：所有等待都是「看时钟」，不是 sleep ----
 
@@ -190,11 +187,15 @@ class QuizStateMachine(StateMachine):
         logger.warning("[答题 %s] 本轮中止：%s", self._char_id,
                        ctx.get("fail_reason"))
 
-    def _enter_cooldown(self, ctx):
-        why = ctx.get("cooldown_why")
+    def _end_round(self, ctx):
+        """一轮收工：只留痕，不等待。
+
+        答题一天只能答一次（用户 2026-10-25 拍板）：没有轮间冷却，
+        round_over 边直通 END，答满就走。
+        """
+        why = ctx.get("round_end_why")
         logger.info("[答题 %s] 本轮结束（答了 %s 题）%s", self._char_id,
                     self._answered, f"：{why}" if why else "")
-        self._wait_here("COOLDOWN", self._cooldown_min * 60.0)
 
     # ---- IDLE → NORMALIZE ----
 
@@ -312,11 +313,11 @@ class QuizStateMachine(StateMachine):
         ctx.pop("fail_reason", None)
         ctx.pop("round_over", None)
         ctx.pop("parse_verdict", None)
-        ctx.pop("cooldown_why", None)
+        ctx.pop("round_end_why", None)
         cap = self._question_cap()
         if cap is not None and self._answered >= cap:
             ctx["round_over"] = True
-            ctx["cooldown_why"] = (f"已达{SESSION_LABELS[self._session]}"
+            ctx["round_end_why"] = (f"已达{SESSION_LABELS[self._session]}"
                                    f"单轮上限 {cap} 题")
             return
         img = self._handle.capture()
@@ -336,7 +337,7 @@ class QuizStateMachine(StateMachine):
                 self._wait_here("READ", _ADVANCE_INTERVAL)
                 return
             ctx["round_over"] = True
-            ctx["cooldown_why"] = "同一题反复出现"
+            ctx["round_end_why"] = "同一题反复出现"
             return
         # 读不出题：先处理断网弹框，再重读；耗尽后区分「结束」与「异常」。
         # 断网重试**也必须计入同一个有界计数**：断网期间弹框会在每次
@@ -355,7 +356,7 @@ class QuizStateMachine(StateMachine):
         at_map = self._matched("alliance_btn", img)
         if self._answered > 0 and (on_quiz_screen or at_map):
             ctx["round_over"] = True
-            ctx["cooldown_why"] = ("活动页已无题" if on_quiz_screen
+            ctx["round_end_why"] = ("活动页已无题" if on_quiz_screen
                                    else "已被送回地图")
             logger.info("[答题] 连续 %s 次读不出题目（%s），判本轮结束",
                         self._read_waits,
@@ -394,7 +395,7 @@ class QuizStateMachine(StateMachine):
                     self._q_clicks + 1)
         if not self._auto_click:
             ctx["semi_auto"] = True
-            ctx["cooldown_why"] = "auto_click=false，只给建议"
+            ctx["round_end_why"] = "auto_click=false，只给建议"
             return
         self._q_clicks += 1
         box = question.options[letter][1]
@@ -483,7 +484,7 @@ class QuizStateMachine(StateMachine):
                            ctx.get("clicked_letter"), self._advance_waits)
             return
         ctx["round_over"] = True
-        ctx["cooldown_why"] = "答完后答题界面已结束"
+        ctx["round_end_why"] = "答完后答题界面已结束"
         logger.info("[答题] 答完后读不出下一题（%s 次），判本轮结束",
                     self._advance_waits)
 

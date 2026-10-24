@@ -1,4 +1,7 @@
-"""答题状态机：一轮 = 进答题界面 → 逐题作答 → 活动结束 → 冷却。
+"""答题状态机：一轮 = 进答题界面 → 逐题作答 → 活动结束即收工。
+
+一天只能答一次（用户 2026-10-25 拍板）：没有轮数/冷却配置，也没有
+COOLDOWN 状态——round_over 边直通 END。
 
 测试用「按帧查表」的假 OCR（帧对象 → 块列表），不用真实模型：
 这里要验的是转移与判据，解析本身在 tests/unit/core/test_quiz_screen.py。
@@ -202,7 +205,7 @@ def test_one_round_answers_two_questions_then_ends_cleanly(tmp_path):
         (Q2, "B"),         # VERIFY：绿色 B
         (ACTIVITY, None),  # ADVANCE：读不出题 → 等 → 判本轮结束
     ]
-    sm, handle, clock, bank = _make(tmp_path, script, round_cooldown_min=0.0)
+    sm, handle, clock, bank = _make(tmp_path, script)
     _drive(sm, clock)
 
     assert sm.current == "END"
@@ -224,7 +227,7 @@ def test_round_ends_on_the_activity_page_without_failure(tmp_path):
     """活动结束后停在活动页（标题还是「国士无双」）：这是正常收尾，不是失败。"""
     sm, _handle, clock, _bank = _make(
         tmp_path, [(Q1, None), (Q1, None), (Q1, None), (Q1, "A"),
-                   (ACTIVITY, None)], round_cooldown_min=0.0)
+                   (ACTIVITY, None)])
     _drive(sm, clock)
     assert sm.current == "END" and sm.fail_reason is None
 
@@ -334,8 +337,7 @@ def test_open_quiz_waits_while_the_start_countdown_runs(tmp_path):
     sm, handle, clock, _bank = _make(
         tmp_path, [(COUNTDOWN, None)] * 6 + [(OPEN, None), (Q1, None),
                                             (Q1, None), (Q1, "A"),
-                                            (Q2, None), (Q2, None)],
-        round_cooldown_min=0.0)
+                                            (Q2, None), (Q2, None)])
     for _ in range(10):
         if sm.current == "OPEN_QUIZ":
             break
@@ -368,8 +370,7 @@ def test_open_quiz_clicks_enter_after_the_countdown_ends(tmp_path):
     sm, handle, clock, _bank = _make(
         tmp_path, [(COUNTDOWN, None)] * 6 + [(OPEN, None), (Q1, None),
                                             (Q1, None), (Q1, "A"),
-                                            (Q2, None), (Q2, None)],
-        round_cooldown_min=0.0)
+                                            (Q2, None), (Q2, None)])
     for _ in range(300):
         if sm.current == "READ":
             break
@@ -396,32 +397,38 @@ def test_env_reasons_are_not_counted_as_failures():
         assert reason in _ENV_FAIL_REASONS
 
 
-def test_cooldown_is_non_blocking_and_ends_after_the_window(tmp_path):
-    """冷却窗口**不 sleep**：Stop 要能在 2s 内 join 上（与宝石 WAIT 同套路）。"""
+def test_round_ends_at_once_without_any_cooldown(tmp_path):
+    """一天一轮（用户 2026-10-25 拍板）：round_over 直通 END。
+
+    没有 COOLDOWN 状态、没有冷却等待——spy 记下每一步所在的状态，
+    断言 COOLDOWN 从未出现，且不需要推进时钟就能走到 END。
+    """
     sm, _handle, clock, _bank = _make(
         tmp_path, [(Q1, None), (Q1, None), (Q1, None), (Q1, "A"),
-                   (ACTIVITY, None)], round_cooldown_min=10.0)
+                   (ACTIVITY, None)])
+    seen = []
+    orig_step = sm.step
+
+    def _spy(context=None):
+        orig_step(context)
+        seen.append(sm.current)
+
+    sm.step = _spy
     for _ in range(200):
-        if sm.current == "COOLDOWN":
+        if sm.is_terminal():
             break
         clock.advance(1.0)
         sm.step()
-    assert sm.current == "COOLDOWN"
 
-    frozen = clock.now
-    for _ in range(5):
-        sm.step()                       # 不推进时钟
-    assert sm.current == "COOLDOWN"
-    assert clock.now == frozen          # 没有 sleep
-
-    clock.advance(601)
-    sm.step()
     assert sm.current == "END" and sm.fail_reason is None
+    assert "COOLDOWN" not in seen          # 状态机上不再有冷却状态
+    assert seen[-1] == "END"               # 最后一步就是走进终态
+    assert "COOLDOWN" not in sm._not_before   # 也没有留下冷却等待条目
 
 
 def test_auto_click_false_only_logs_and_ends_the_round(tmp_path):
     sm, handle, clock, bank = _make(
-        tmp_path, [(Q1, None)], auto_click=False, round_cooldown_min=0.0)
+        tmp_path, [(Q1, None)], auto_click=False)
     _drive(sm, clock)
     assert handle.clicks == []
     assert sm.current == "END" and sm.fail_reason is None
@@ -443,7 +450,7 @@ def test_prelim_session_caps_the_round_at_ten_questions(tmp_path, monkeypatch):
         script += [(qs[i], None),        # READ：第 i+1 题
                    (qs[i], "A"),         # VERIFY：有绿色，不补点
                    (qs[i + 1], None)]    # ADVANCE：翻到下一题
-    sm, handle, clock, _bank = _make(tmp_path, script, round_cooldown_min=0.0)
+    sm, handle, clock, _bank = _make(tmp_path, script)
     _drive(sm, clock)
 
     assert sm.current == "END"

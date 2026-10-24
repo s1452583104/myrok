@@ -389,16 +389,16 @@ class QuizConfig(BaseModel):
     （min_length=1 + leader/member 交叉校验），答题套上去会当场加载失败。
     与 GemConfig 一样直接继承 BaseModel，自己写 id 唯一性校验。
 
-    字段取值只在这里校验上下界；**具体配几轮/几分钟不写进文档**，
-    要看实际值直接读 config.yaml。
+    没有轮次/冷却字段：答题一天只能答一次（用户 2026-10-25 拍板），
+    答满一轮即自动收工。
     """
 
     instances: list[QuizInstanceConfig] = Field(default_factory=list)
-    max_rounds: int = Field(default=3, ge=1)              # 跑满这么多轮自动收工
+    # 没有 max_rounds / round_cooldown_min：答题一天只能答一次（用户
+    # 2026-10-25 拍板），跑满一轮即收工，轮次与冷却配置已移除。
     fuzzy_threshold: float = Field(default=0.72, ge=0.0, le=1.0)  # 题库模糊匹配阈值
     verify_delay: float = Field(default=1.2, ge=0.0)      # 点完选项后多久截图看绿色
     min_green_ratio: float = Field(default=0.55, ge=0.0, le=1.0)
-    round_cooldown_min: float = Field(default=10.0, ge=0.0)
     parse_retries: int = Field(default=2, ge=1)           # 同一题最多读几次再中止
     auto_click: bool = True                               # false = 只记日志不点击
     # 从地图点进答题活动页的**固定落点序列**（像素），真机探针

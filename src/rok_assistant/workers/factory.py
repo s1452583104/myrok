@@ -76,7 +76,6 @@ def create_gem_state_machine(character, handle_source, recognizers, *,
 def create_quiz_state_machine(character, handle_source, recognizers, ocr, bank,
                               solver, *, verify_delay: float = 1.2,
                               min_green_ratio: float = 0.55,
-                              round_cooldown_min: float = 10.0,
                               parse_retries: int = 2, entry_taps=None,
                               auto_click: bool = True, human=None):
     """答题模式的状态机工厂。
@@ -85,8 +84,9 @@ def create_quiz_state_machine(character, handle_source, recognizers, ocr, bank,
     题库/求解器），而且它们**跨轮复用**（协调器建一次）。塞进
     `create_state_machine` 会让寨子那条路平白多两个必填参数。
 
-    题量不在参数里：按场次固定（`core.quiz.session`，星期几绑定），
-    没有可配置的单轮题数上限。
+    题量、轮次、冷却都不在参数里：题量按场次固定（`core.quiz.session`，
+    星期几绑定）；轮次恒为 1（答题一天只能答一次，用户 2026-10-25 拍板），
+    由协调器 `_max_rounds()` 收口，状态机内没有冷却状态。
 
     `event_bus` / `ledger` / `rally_tracker` 一个都不传：一台模拟器一个号，
     没有跨实例通信（spec §2）。
@@ -95,7 +95,6 @@ def create_quiz_state_machine(character, handle_source, recognizers, ocr, bank,
         handle_source, ocr=ocr, bank=bank, solver=solver,
         recognizers=recognizers,
         verify_delay=verify_delay, min_green_ratio=min_green_ratio,
-        round_cooldown_min=round_cooldown_min,
         parse_retries=parse_retries,
         entry_taps=[tuple(int(v) for v in tap) for tap in (entry_taps or [])],
         auto_click=auto_click, char_id=character.id, human=human)
