@@ -47,6 +47,12 @@ _COUNTDOWN_POLL = 20.0    # 入口「距开始还有」倒计时期间的轮询�
 _PARSE_INTERVAL = 1.0     # 读不出题时的重读间隔
 _ADVANCE_INTERVAL = 1.2   # 答完一题后等翻页的轮询间隔
 _ADVANCE_WAIT_MAX = 4     # 同一题最多再看几眼才判「没翻页」
+# 选项点击补点（2026-10-24 实机 0 分事故）：每题点击常发生在题目飞入
+# 动画中，游戏吞掉动画期间的点击；VERIFY 没绿色就原地再点同一个选项，
+# 最多补 `_CLICK_RETRIES` 次，仍不绿才按原逻辑走（不学这题，等倒计时
+# 归零自动翻页——那时 ADVANCE 会判「没翻页」累计真失败）。
+_CLICK_RETRIES = 2
+_RETRY_DELAY = 0.8        # 补点前让画面稳一稳
 
 # 归一化时要收掉的残留面板（与 gem_sm 同一套落点，理由见那边注释）
 _FORM_CLOSE_XY = (1716, 69)
@@ -84,6 +90,7 @@ class QuizStateMachine(StateMachine):
         self._pending_question: ScreenQuestion | None = None
         self._answered_key = ""       # 上一题的归一化题干（判「有没有翻页」）
         self._answered = 0
+        self._q_clicks = 0            # 本题已点了几次选项（补点计数）
         self._read_waits = 0
         self._advance_waits = 0
         self._nav_steps = 0
@@ -125,6 +132,8 @@ class QuizStateMachine(StateMachine):
                             guard=lambda ctx: ctx.get("semi_auto") is True)
         self.add_transition("ANSWER", "VERIFY", self._verify)
 
+        self.add_transition("VERIFY", "ANSWER", self._choose,
+                            guard=lambda ctx: ctx.get("retry_click") is True)
         self.add_transition("VERIFY", "LEARN", self._learn)
         self.add_transition("LEARN", "ADVANCE", self._advance)
 
@@ -335,6 +344,7 @@ class QuizStateMachine(StateMachine):
     def _choose(self, ctx):
         ctx.pop("fail_reason", None)
         ctx.pop("semi_auto", None)
+        ctx.pop("retry_click", None)
         question = self._pending_question
         if question is None:
             ctx["fail_reason"] = QUIZ_PARSE_FAILED_REASON
@@ -348,12 +358,14 @@ class QuizStateMachine(StateMachine):
         letter = decision.letter
         ctx["clicked_letter"] = letter
         ctx["answer_source"] = decision.source
-        logger.info("[答题] %s → %s. %s（来源：%s）", question.text, letter,
-                    decision.text, decision.source)
+        logger.info("[答题] %s → %s. %s（来源：%s，第 %d 次点击）",
+                    question.text, letter, decision.text, decision.source,
+                    self._q_clicks + 1)
         if not self._auto_click:
             ctx["semi_auto"] = True
             ctx["cooldown_why"] = "auto_click=false，只给建议"
             return
+        self._q_clicks += 1
         box = question.options[letter][1]
         self._click_xy(*box.center(), anchor="quiz_option")
 
@@ -376,7 +388,18 @@ class QuizStateMachine(StateMachine):
         boxes = {letter: box for letter, (_t, box) in question.options.items()}
         correct = pick_correct_option(img, boxes, min_ratio=self._min_green_ratio)
         if correct is None:
-            logger.info("[答题] 没看到绿色高亮（结算可能还没出来），这道题不学习")
+            # 没绿：结算没出来，或**这一票被游戏吞了**（实机 0 分事故：
+            # 点击发生在题目飞入动画中，游戏不响应）。补点计数还有额度
+            # 就回 ANSWER 再点一次同一个选项；额度用完才按「不学习」
+            # 放行（ADVANCE 会等翻页，始终不翻再判真失败）。
+            if self._q_clicks <= _CLICK_RETRIES:
+                ctx["retry_click"] = True
+                self._wait_here("VERIFY", _RETRY_DELAY)
+                logger.info("[答题] 没看到绿色高亮，%s 秒后补点（第 %d/%d 次）",
+                            _RETRY_DELAY, self._q_clicks + 1, _CLICK_RETRIES + 1)
+            else:
+                logger.info("[答题] 没看到绿色高亮（补点 %d 次仍无结算），"
+                            "这道题不学习", _CLICK_RETRIES)
             return
         ctx["correct_letter"] = correct
         text = question.options[correct][0]
@@ -392,6 +415,7 @@ class QuizStateMachine(StateMachine):
         question = self._pending_question
         if question is None:
             return
+        self._q_clicks = 0                # 一题学完，补点计数归零
         correct = ctx.get("correct_letter")
         if correct is not None:
             answer = question.options[correct][0]

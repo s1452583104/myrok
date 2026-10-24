@@ -264,6 +264,43 @@ def test_entry_taps_are_used_when_no_text_entry_is_found(tmp_path):
     assert (100, 200, "quiz_entry_tap") in handle.clicks
 
 
+# ---- VERIFY 无绿色时补点（2026-10-24 实机 0 分事故的修复） ----
+#
+# 实机复盘：每题只在 READ→ANSWER 点一次，且点击常发生在题目飞入动画中，
+# 游戏吞掉动画期间的点击；机器人不补点，只能等倒计时归零自动结算——
+# 10 题全部「未作答」，最终分数 0。修复：VERIFY 没看到绿色就原地补点
+# （同一坐标，有限次数），仍不绿才按原逻辑走（不学这题、等自动翻页）。
+
+def test_verify_without_green_retries_the_same_option(tmp_path):
+    """没绿 → 回 ANSWER 再点同一个选项；补点次数有界。"""
+    script = [(Q1, None)] * 40
+    sm, handle, clock, _bank = _make(tmp_path, script)
+    _drive(sm, clock, max_steps=400)
+    option_clicks = [c for c in handle.clicks if c[2] == "quiz_option"]
+    assert len(option_clicks) >= 2                     # 首点 + 至少一次补点
+    assert len({(c[0], c[1]) for c in option_clicks}) == 1   # 都点在同一个选项
+    assert sm.current == "END"
+    assert sm.fail_reason == ANSWER_NOT_ACCEPTED_REASON   # 补点仍不翻页=真失败
+
+
+def test_verify_green_does_not_retry(tmp_path):
+    """看到绿色（答对/答错都会有正确项高亮）→ 不补点，直接学习。
+
+    注意 ScriptedHandle 每次 capture 前进一帧：必须给足同一个题的帧，
+    否则 VERIFY 会拿到下一题的帧（绿色涂在别的坐标上），测的就不是
+    「有绿不补点」了。
+    """
+    script = [(Q1, "A")] * 8 + [(Q2, "A")] * 8
+    sm, handle, clock, bank = _make(tmp_path, script)
+    for _ in range(200):
+        if sm.is_terminal():
+            break
+        clock.advance(1.0)
+        sm.step()
+    option_clicks = [c for c in handle.clicks if c[2] == "quiz_option"]
+    assert len(option_clicks) == 2                     # 两题各点一次，没有补点
+
+
 def test_open_quiz_waits_while_the_start_countdown_runs(tmp_path):
     """倒计时未结束：不点置灰的进入，原地轮询；时钟不推进就什么都不做。"""
     sm, handle, clock, _bank = _make(
