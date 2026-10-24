@@ -59,6 +59,18 @@ Q2 = _blocks(
 Q1_TEXT = parse_question(Q1, W).text
 Q2_TEXT = parse_question(Q2, W).text
 
+# 初试倒计时未结束的答题页（1920×1080 真实帧，2026-10-24 用户截图）：
+# 「距开始还有 01:13:43」，进入按钮置灰。OPEN = 同一页去掉倒计时两块。
+COUNTDOWN = _blocks(
+    (806, 26, 1117, 103, "国士无双", 0.76),
+    (1445, 350, 1508, 384, "初试", 0.66),
+    (1411, 742, 1537, 772, "距开始还有", 0.75),
+    (1420, 771, 1532, 798, "01:13:43", 0.84),
+    (1443, 849, 1499, 882, "进入", 0.66),
+)
+OPEN = [b for b in COUNTDOWN if b[1] not in ("距开始还有", "01:13:43")]
+ENTER_XY = ((1443 + 1499) // 2, (849 + 882) // 2)   # (1471, 865)
+
 SHIPPED = [{"no": 1, "q": Q1_TEXT, "a": "最后的罗马人"}]
 
 
@@ -250,6 +262,56 @@ def test_entry_taps_are_used_when_no_text_entry_is_found(tmp_path):
         clock.advance(1.0)
         sm.step()
     assert (100, 200, "quiz_entry_tap") in handle.clicks
+
+
+def test_open_quiz_waits_while_the_start_countdown_runs(tmp_path):
+    """倒计时未结束：不点置灰的进入，原地轮询；时钟不推进就什么都不做。"""
+    sm, handle, clock, _bank = _make(
+        tmp_path, [(COUNTDOWN, None)] * 6 + [(OPEN, None), (Q1, None),
+                                            (Q1, None), (Q1, "A"),
+                                            (Q2, None), (Q2, None)],
+        round_cooldown_min=0.0)
+    for _ in range(10):
+        if sm.current == "OPEN_QUIZ":
+            break
+        clock.advance(1.0)
+        sm.step()
+    assert sm.current == "OPEN_QUIZ"
+
+    clock.advance(1.0)
+    sm.step()                       # 第一次轮询：看到倒计时 → 等待
+    assert handle.clicks == []      # 置灰的进入一下都没点
+    assert sm.fail_reason is None   # 等待不是失败
+
+    frozen = clock.now
+    for _ in range(5):
+        sm.step()                   # 时钟冻住：不重复截图、不点击
+    assert clock.now == frozen and handle.clicks == []
+    assert sm.current == "OPEN_QUIZ"
+
+    clock.advance(20.0)
+    sm.step()                       # 过一个轮询间隔：还在倒计时就继续等
+    assert handle.clicks == []
+    assert sm.current == "OPEN_QUIZ"
+
+
+def test_open_quiz_clicks_enter_after_the_countdown_ends(tmp_path):
+    """倒计时结束后：点进入 → 进答题页 → 开答。
+
+    6 帧倒计时顺带证明等待**不消耗导航步数**（_NAV_MAX=4，早耗光就打不进去了）。
+    """
+    sm, handle, clock, _bank = _make(
+        tmp_path, [(COUNTDOWN, None)] * 6 + [(OPEN, None), (Q1, None),
+                                            (Q1, None), (Q1, "A"),
+                                            (Q2, None), (Q2, None)],
+        round_cooldown_min=0.0)
+    for _ in range(300):
+        if sm.current == "READ":
+            break
+        clock.advance(1.0)
+        sm.step()
+    assert sm.current == "READ"
+    assert (*ENTER_XY, "quiz_entry") in handle.clicks
 
 
 def test_screen_that_never_advances_is_a_real_failure(tmp_path):

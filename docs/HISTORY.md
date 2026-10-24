@@ -2750,3 +2750,26 @@ runner 三处必须同一个字符串，散写字面量改名时不会报错、�
 - `pytest tests/integration/test_config_dialog.py -q` → **82 passed**（含答题模式界面化新增 12 条）。
 - `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1321 passed**（全套含答题界面化改动，无回归）。
 - 体积：logs 546MB→49MB，recordings 928MB→182MB。
+
+### 答题入口倒计时门禁（2026-10-24）
+
+用户截图 + MuMu 录屏（17s，地图→事件面板→国士无双→前往→答题页）实证：初试/终试
+没到开始时间时，活动页显示「距开始还有 01:13:43」（OCR 为两块：标签 + 时间），
+「进入」按钮置灰，点了不生效。旧逻辑会把这个置灰按钮当入口反复点，4 拍导航步数
+耗光后 `quiz_entry_missing` 中止。
+
+**用户拍板：无限等待到开始**（倒计时可能以小时计）。
+
+- `core/quiz/screen.py` 新增 `entry_countdown_active(blocks)`：匹配
+  `距[离开]?开?始还有`（含「距离开始还有」变体与标签时间合并块）；「距结束还有」
+  （活动已开、即将结束）不挡；「开始时间：13:00」常态文案不误判。
+- `workers/quiz_sm.py` `_open_quiz_step` 加门禁：倒计时期间不点进入、**不消耗
+  导航步数**（耗光 4 拍就打不进去了），按 `_COUNTDOWN_POLL = 20s` 经
+  `_not_before` 非阻塞轮询（Stop 随时响应），倒计时结束继续原导航逻辑；
+  日志只记一次（`_countdown_logged`）。
+- 不新增 fail_reason：等待不是失败，`runner.py` 的 `_ENV_FAIL_REASONS` 不用动。
+- 测试：`test_quiz_screen.py` 5 条（fixture 用用户截图的真实 OCR 坐标，1920×1080）
+  + `test_quiz_sm.py` 2 条（倒计时期间零点击/时钟冻结无动作/6 帧倒计时不耗步数）。
+- `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1328 passed**。
+  注意：全套测试在**后台 shell** 里跑会全量报 collection error（环境问题），
+  必须前台跑。

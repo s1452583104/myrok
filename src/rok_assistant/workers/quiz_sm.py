@@ -3,6 +3,9 @@
 一轮 = 收拾画面 → 进答题活动 → 逐题「读题 → 作答 → 验绿 → 学习 → 等翻页」
 → 活动结束 → 冷却。**答到活动结束算一轮**（用户 2026-10-24 拍板）。
 
+入口带「距开始还有」倒计时时（进入按钮置灰）：原地轮询等开始，不点置灰
+按钮、不消耗导航步数（用户 2026-10-24 拍板：无限等待到开始）。
+
 **本模块绝不抛异常**：所有失败都写成 `ctx["fail_reason"] = <常量>` + END 边。
 抛异常会让 WorkerRunner 在同一状态退避重放，攒满 6 次直接停机——一次
 「这题读不出来」不该升级成停机。
@@ -17,7 +20,9 @@ import time
 
 from ..core.quiz.bank import QuizBank, normalize
 from ..core.quiz.models import ScreenQuestion
-from ..core.quiz.screen import detect_quiz, find_quiz_entry, parse_question
+from ..core.quiz.screen import (
+    detect_quiz, entry_countdown_active, find_quiz_entry, parse_question,
+)
 from ..core.quiz.solver import Solver
 from ..core.quiz.verify import pick_correct_option
 from ..infra.logger import get_logger
@@ -38,6 +43,7 @@ ANSWER_NOT_ACCEPTED_REASON = "answer_not_accepted"
 _NAV_MAX = 4              # 进活动最多点几拍
 _NORMALIZE_ATTEMPTS = 5
 _NAV_SETTLE = 1.5         # 点完入口/落点后等动画
+_COUNTDOWN_POLL = 20.0    # 入口「距开始还有」倒计时期间的轮询间隔（秒）
 _PARSE_INTERVAL = 1.0     # 读不出题时的重读间隔
 _ADVANCE_INTERVAL = 1.2   # 答完一题后等翻页的轮询间隔
 _ADVANCE_WAIT_MAX = 4     # 同一题最多再看几眼才判「没翻页」
@@ -81,6 +87,7 @@ class QuizStateMachine(StateMachine):
         self._read_waits = 0
         self._advance_waits = 0
         self._nav_steps = 0
+        self._countdown_logged = False   # 倒计时等待已记过日志（避免每 20s 一条）
         super().__init__(initial="IDLE", human=human)
         self.last_image = None
 
@@ -204,6 +211,7 @@ class QuizStateMachine(StateMachine):
 
     def _reset_nav(self, ctx):
         self._nav_steps = 0
+        self._countdown_logged = False
         ctx.pop("fail_reason", None)
         ctx["in_quiz"] = False
 
@@ -212,6 +220,12 @@ class QuizStateMachine(StateMachine):
 
         `parse_question`（而不是 `detect_quiz`）才是「已进答题界面」的判据：
         活动页标题里也有「国士无双」，`detect_quiz` 在活动页就是 True。
+
+        倒计时门禁（2026-10-24 用户截图 + 录屏）：初试/终试没到开始时间时，
+        页面上是「距开始还有 hh:mm:ss」、进入按钮置灰——点了不生效。这时
+        **不点、不耗导航步数**，按 `_COUNTDOWN_POLL` 原地轮询等它开始
+        （倒计时可能以小时计，耗光 4 拍导航就打不进去了）；时钟不推进就
+        什么都不做，Stop 随时响应。
         """
         ctx.pop("fail_reason", None)
         img = self._handle.capture()
@@ -223,6 +237,15 @@ class QuizStateMachine(StateMachine):
             self._pending_question = question
             logger.info("[答题] 已在答题界面")
             return
+        if entry_countdown_active(blocks):
+            if not self._countdown_logged:
+                logger.info("[答题] 入口倒计时未结束（距开始还有），等待开始…")
+                self._countdown_logged = True
+            self._wait_here("OPEN_QUIZ", _COUNTDOWN_POLL)
+            return
+        if self._countdown_logged:
+            logger.info("[答题] 倒计时已结束，继续入口导航")
+            self._countdown_logged = False
         if self._nav_steps >= _NAV_MAX:
             ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
             logger.warning("[答题] 导航 %s 步仍未进入答题界面，本轮中止", _NAV_MAX)

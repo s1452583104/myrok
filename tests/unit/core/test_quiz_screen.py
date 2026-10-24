@@ -6,7 +6,7 @@
 """
 from rok_assistant.core.quiz.models import LETTERS
 from rok_assistant.core.quiz.screen import (
-    detect_quiz, find_quiz_entry, parse_question,
+    detect_quiz, entry_countdown_active, find_quiz_entry, parse_question,
 )
 from rok_assistant.core.recognizer import BBox
 
@@ -27,6 +27,19 @@ ACTIVITY = _blocks(
     (975, 431, 1106, 468, "习题演练", 0.71),
     (1263, 431, 1393, 468, "习题演练", 0.75),
     (1585, 878, 1648, 915, "进入", 0.67),
+)
+
+# 国士无双答题页·初试倒计时未结束（1920×1080 真实帧，2026-10-24 用户截图，
+# RapidOcrEngine 原样输出）：「距开始还有」与时间是分开两块，进入按钮置灰。
+COUNTDOWN = _blocks(
+    (806, 26, 1117, 103, "国士无双", 0.76),
+    (1445, 350, 1508, 384, "初试", 0.66),
+    (1410, 507, 1525, 537, "开始时间：", 0.75),
+    (1441, 537, 1510, 561, "13:00", 0.83),
+    (1440, 563, 1511, 591, "19:00", 0.78),
+    (1411, 742, 1537, 772, "距开始还有", 0.75),
+    (1420, 771, 1532, 798, "01:13:43", 0.84),
+    (1443, 849, 1499, 882, "进入", 0.66),
 )
 
 # Q1（2664×1200）：注意题干很短，中心 x≈1014 落在左列选项的 x 区间里
@@ -211,3 +224,41 @@ def test_find_quiz_entry_falls_back_to_the_activity_icon():
 def test_find_quiz_entry_returns_none_on_the_quiz_screen():
     assert find_quiz_entry(Q1) is None
     assert find_quiz_entry(FRAME_358) is None
+
+
+def test_entry_countdown_active_on_the_real_countdown_frame():
+    """倒计时未结束：「距开始还有」在，进入按钮置灰，点了也进不去。"""
+    assert entry_countdown_active(COUNTDOWN) is True
+
+
+def test_entry_countdown_inactive_on_the_open_activity_page():
+    """没有倒计时文案的活动页：入口可点，不能被误挡。"""
+    assert entry_countdown_active(ACTIVITY) is False
+
+
+def test_entry_countdown_ignores_start_time_labels():
+    """「开始时间：13:00」是活动页常态文案，不是倒计时，不能误挡。"""
+    blocks = [b for b in COUNTDOWN if b[1] not in ("距开始还有", "01:13:43")]
+    assert entry_countdown_active(blocks) is False
+
+
+def test_entry_countdown_ignores_the_end_countdown():
+    """「距结束还有」= 活动已开、即将结束：该进就进。"""
+    blocks = _blocks(
+        (1411, 742, 1537, 772, "距结束还有", 0.75),
+        (1420, 771, 1532, 798, "00:42:18", 0.84),
+        (1443, 849, 1499, 882, "进入", 0.66),
+    )
+    assert entry_countdown_active(blocks) is False
+
+
+def test_entry_countdown_matches_variant_and_merged_wordings():
+    """「距离开始还有」变体、以及标签和时间被 OCR 并成一块，都要认。"""
+    assert entry_countdown_active(_blocks(
+        (1411, 742, 1537, 772, "距离开始还有", 0.75),
+        (1443, 849, 1499, 882, "进入", 0.66),
+    )) is True
+    assert entry_countdown_active(_blocks(
+        (1411, 742, 1537, 798, "距开始还有01:13:43", 0.75),
+        (1443, 849, 1499, 882, "进入", 0.66),
+    )) is True

@@ -246,3 +246,22 @@ def find_quiz_entry(blocks: Sequence[TextBlock]) -> tuple[int, int] | None:
             continue
         return max(cands, key=lambda c: c[2])[0].center()
     return None
+
+
+# 入口倒计时：「距开始还有 01:13:43」。没到开始时间，「进入」按钮置灰，
+# 点了不生效（2026-10-24 用户截图 + 录屏实证）。兼容「距离开始还有」变体。
+_COUNTDOWN_RE = re.compile(r"距[离开]?开?始还有")
+
+
+def entry_countdown_active(blocks: Sequence[TextBlock]) -> bool:
+    """当前活动页的入口是否还在「距开始还有」倒计时中。
+
+    倒计时期间进入按钮置灰，调用方（quiz_sm）据此**原地等待**，而不是
+    反复点一个点不动的按钮。只认**开始**倒计时：「距结束还有」说明活动
+    已开、即将结束，该进就进，不能被它挡住。
+
+    文案变体（`距离开始还有`）与 OCR 把标签和时间并成一块
+    （`距开始还有01:13:43`）都能认；`开始时间：13:00` 这类常态文案
+    不含「还有」，不会误判。
+    """
+    return any(_COUNTDOWN_RE.search(text.strip()) for _box, text, _conf in blocks)
