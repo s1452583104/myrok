@@ -2426,3 +2426,327 @@ config.example.yaml 重新生成一份。」放在 `mode="before"` 而不是 `lo
 `docs/ACCEPTANCE.md` §2/§3 的 GUI 描述与「开始运行」位置；`docs/PROGRESS.md` 当前状态/已落地/待办
 与全量回归计数；本节。**未改** `templates/manifest.yaml`、未换 YOLO 权重，故不重跑
 `tools/calibrate_yolo_threshold.py`。
+
+## 2026-10-15 日志复盘（run 12:07）——归一化卡住改干净中止 + 成员重试路径补清理
+
+用户给了 `logs/rok_assistant_20261015_120747.log`（685 行，12:07:50–13:31:40，**5 ERROR / 12 WARNING**）
+问「异常是不是 bug、怎么修」。逐条落到根因后修了三处，**并撤回了我自己提错的一条**。
+
+### A. 4×「归一化失败：卡在[未知]/[战争列表]视图」——**是 bug，会停机级别**（已修）
+
+mumu1 的成员在 13:05:26 / 13:06:18 / 13:07:06 / 13:07:54 连抛 4 次。失败帧（`recordings/`）显示
+一个全屏「战争」面板，**标题栏被游戏 toast 横幅压住**：`alliance_btn` 0.23–0.29、`search_icon` 0.177，
+两个地图锚点全灭。`war_title` 在 13:05:26 那帧只拿 0.313——它是**纯 YOLO 判据**（manifest 没写
+`yolo_threshold`，走默认 0.5；模板腿在真实战争列表上只有 0.21–0.31，0.9 的阈值形同虚设），
+四帧 YOLO 置信度 0.313 / 0.592 / 0.669 / 0.683 **跨着 0.5**，所以 `member_sm.py` 里唯一那条
+「关战争面板」的分支时灵时不灵。
+
+**真正的缺陷不是阈值，是失败方式**：`member_sm._normalize_view` / `leader_sm._normalize_view`
+的兜底写的是 `raise RuntimeError`。`WorkerRunner` 收到 step 异常**不重建 SM**，只退避 10s
+**重进同一个状态**，于是同一帧被反复判、连续 `max_consecutive_failures*2 = 6` 次异常就停机。
+4/6 已经烧掉了——**再撞 2 次环境卡顿，那个 worker 就永久退出**。CLAUDE.md 明写「卡住了必须写成
+干净中止本轮」，`leader_sm._abort_round`（2026-10-12）已经改过这个坑，这两处漏网。
+
+**修法**：新增模块常量 `state_machine.NORMALIZE_STUCK_REASON = "normalize_stuck"`（两个 SM +
+runner 三处必须同一个字符串，散写字面量改名时不会报错、只会安静地退回「计入连续失败」——
+`test_env_fail_reasons_cover_every_abort_reason` 是那个缺口的哨兵）。两个 `_normalize_view`
+改为写 `ctx["failed"]/ctx["fail_reason"]` 并返回，各自在 `_setup()` 里、**通往其他目标的边之前**
+注册出口边（leader → `END`/`_abort_round`；member → `exit_state`/`_normalize_stuck`，波次模式
+回 IDLE 并丢掉起波窗口残留的信号）。`runner._ENV_FAIL_REASONS` 收编该原因 → 不计连续失败、
+冷却后重建 SM 重收一次残留面板。视图名照旧进 WARNING 日志，可归因。
+
+### B. 48×「联盟旗帜不可见，重试 (N/10)」+ 4× 收波——**是 bug，结构性的**（已修）
+
+算术先对上：4 波 × 11 + 4 = 48。
+
+根因：`_join_missed`（加入未生效的重试）把状态送回 `OPEN_WAR`，而 **`OPEN_WAR` 子图里没有任何
+一条边能回到 `NORMALIZE`**（唯一能到 NORMALIZE 的是 `_next_target`，而它要求 `joined=True`）。
+所以**一次验证失败就永久失去残留清理**（队列侧栏、战争面板 ✕、`search_back`/`map_btn`），
+只剩 `_open_war` 的「旗帜 → 列表」两步，而旗帜模板恰恰是失效的那一个。实机时序吻合：
+三个成员 13:22:14 行军后**同时**验证失败 → 13:22:24/55/56 三连 `加入未生效` → 计数器交错
+→ 13:24:23/38、13:25:02 收波，整波一个没填上。
+
+**修法**：两条 `_join_missed` 边的 to_state 改 `NORMALIZE`。**第一次改错了**——`_normalize_view`
+是「**进入** NORMALIZE 那条边」的动作（`SWITCH_TO_SELF → NORMALIZE`），把状态切回 NORMALIZE
+**不会跑它**，新写的回归用例当场把这一点抓出来（断言里 `(1671,64)` 没出现在点击序列里）。
+改成 `_join_missed` 里**显式调一次** `_normalize_view(ctx)`，to_state 保持 NORMALIZE 以便
+清理不掉时走出口边。
+
+### C. 17/17「本波填兵结束（已填 0 个：无）」——**日志 bug，功能是好的**（已修）
+
+`filled` 只在 `_next_target` 里添加，而配置里只点名了一个填兵目标（`config.yaml`），
+`_wave_has_more` 直接为假、`_next_target` 从不执行 → 一整波明明填成功了，日志却是「已填 0 个」。
+`_wave_done` 收波时把当前 `target_name` 一并计入。（`_wave_has_more` 的 docstring 早就写明
+`filled` 只在 `_next_target` 里填充——这次是它没覆盖到的收波路径。）
+
+### D. 1× `screencap returned undecodable data`（12:30:37）——**环境性，但有代码缺口**（已补）
+
+用户点 Stop 后 3 秒（模拟器正在收尾），预检 12:33:20 已通过。`capture()` 对「adb 退出码 0 但
+字节解不出图」这条路**没有重试**（`_run_checked` 只管非零退出），一次抖动就让 step 抛异常、
+白计一次连续失败。改成「解不出就强制重连重截一次，两次都解不出才抛」，异常文案带最后一次的
+字节数。**另注**：这类失败存下来的截图是**陈旧的**（`last_image` 来自上一次成功捕获）——
+12:30:37 那张显示的是城市视图（`map_btn` 0.997），与真实卡住原因无关，读图时别被带偏。
+
+### E. 3×「worker 在 2.0s 内未停止」——**非 bug**（不改）
+
+`_STOP_TIMEOUT = 2.0` 而单步 10–30s；`_stop_event` 只在步与步之间检查；残留线程仍被引用、
+可再次 `stop`；快速重启会让新旧线程短暂重叠。属设计内表现。
+
+### F. 13×「系统时间比记录锚点早 2246559 秒，按锚点计」——**非 bug，按设计**（不改）
+
+`guard.py` 的 `effective_now = max(now, last_seen)`，规范 §5.4，INFO 级别。副作用记录在案：
+有效时间取 `max`，所以到期按未来锚点算。
+
+### G. 车头空转 14 分钟（无 ERROR/WARNING，代价最大）——**我的修复方案是错的，已撤回**
+
+我一度判它卡在**城市视图**、`queue_verdict` 的清理清单缺 `map_btn` 点击。读了
+`leader_sm.queue_verdict` 才发现它**早就有**城市视图出口（点硬编码 `(72,1034)`），而且注释里
+明确写着「`map_btn` 模板是地图视图的『进入城市』城堡按钮 (92,985)，在城市视图不匹配、
+且**语义相反**，不能用它出城」。随后一个决定性探针在车头失败帧上量到
+**`map_btn` conf 0.997、中心 (92,995)**（= 地图视图的城堡按钮），`search_icon` 0.747 ——
+**那一帧是地图视图**，不是城市视图。真正的问题是 `queue_verdict` 的地图视图证明要求
+`alliance_btn` **或** `search_icon` 匹配，而该帧：简化模式隐藏了联盟旗帜（0.182）、
+放大镜 0.747 < 0.9、`queue_badge` 0.339 —— 三个独立边缘判据同时落空 → fail-closed 14 分钟，
+直到 30s 宽限把它放出去。**这需要一张真机在线帧才能定标，本次不动代码。**
+
+顺带记一条**代码库里尚未解决的矛盾**（我刻意没改，免得写下第二个错误）：`queue_verdict` 的注释说
+`map_btn` 是**地图**视图的城堡按钮（有本次测量支持），而 `leader_sm.py` / `member_sm.py` 的
+`_normalize_view` 注释说它是**城市**视图的按钮（与测量矛盾）。定标那次一起裁定。
+
+### 观测性
+
+`_set_status` 对相同状态去重，所以第 2–6 次连续异常在状态流/GUI 里**完全看不见**（只留一个
+`error` 值）。`runner` 的异常分支改成**先加计数再记日志**，日志带「连续 N/M 次，达上限即停机」——
+复盘 12:07 那次 4 连抛时，日志里读不出「还剩几次就停机」。
+
+### 未解（需要真机）
+
+13:06:18 / 13:07:06 / 13:07:54 三帧上 `war_title` 是匹配的，✕ 也按真实战争列表的几何
+（bbox (1654,46)-(1694,84)、面积 693，与 (1671,64) 逐字节吻合）点到了，**但面板一直开着**，
+直到集结准备倒计时在 ~13:07:57 归零才消失。静态帧分不清是「tap 没送达」还是「游戏在集结
+准备期拒绝关面板」。抖动可以排除（σ=8 裁剪 ±24px vs 40×38px 的 ✕ ≈ 2.5%）。
+
+### 测试
+
+全量 `pytest tests/ -q` → **1019 passed / 0 failed / 0 error**（4m20s）。本次新增 6 条
+（`test_adb_handle_source` +2 捕获重试、`test_member_sm` +2 收波计数与重试路径清理、
+`test_normalize_view` 3→5），另有 2 条既有用例改判据（原来断言抛 `RuntimeError`，
+现在断言干净中止 + `fail_reason`）。新增 `_Clock`（推进式假时钟）——原文件的 `_NoSleepTime`
+时间恒定，用在 `_wait_for` 超时路径上会死循环。
+
+## 2026-10-16 车头集结「被静默拒绝」是**误判**：queue_badge 模板混进地图背景（/systematic-debugging）
+
+### 用户报的现象
+
+12:19 那轮（`dist/rok-assistant/logs/rok_assistant_20261016_121842.log`）：
+
+```
+[12:19:49] worker mumu0/char_leader[阑珊寨子号] -> FORM_TROOP
+[12:20:07] [车头] 行军点击后队列徽标未出现：集结被游戏静默拒绝（同目标已有集结），本轮放弃
+[12:20:09] [车头] 本轮放弃：rally_rejected，冷却后自动重试
+[12:20:11] worker ... 第 1 轮失败结束：rally_rejected（连续失败 1/3）
+```
+
+用户明确说明：**「但车头的集结已经真实发起」**——集结真发出去了，判据却说被拒。
+
+### 根因：模板图里有背景，不是状态机的问题
+
+`leader_sm._launch` 点完行军的发射验证是 `_wait_for("queue_badge", timeout=10.0)`，
+10s 内 `_find("queue_badge")` 一直返回 None 才判 `rally_rejected`。所以问题在
+**queue_badge 认不认**。
+
+`templates/queue_badge.png` 是 46x46 的紧裁剪，但按钮体只占 x 4..44 / y 5..45，
+**四个角是地图背景**（实测 BGR `[94,114,50] [74,84,94] [114,106,54] [51,51,30]`）。
+`TM_CCOEFF_NORMED` 是整窗归一化相关、**没有掩膜**（`recognizers/template_match.py`），
+于是「按钮背后站什么景物」直接决定这一帧的分数。逐像素复核（`_probe_qscore.py`）：
+同一块按钮，四个实机帧上**内部区域与模板逐像素一致**，整窗分数却是
+
+| 帧 | 旧模板整窗分 | 内部区域差异 |
+|---|---|---|
+| `_q_16384` | **0.786**（< 0.85 → 漏检） | ≈0 |
+| `_q_16416` | 0.883 | ≈0 |
+| `_q_16448` | 0.883 | ≈0 |
+| `_q_16480` | 0.977 | ≈0 |
+
+阈值 0.85 正好卡在这个摆幅中间——**真发出了却判没发**。连锁后果：整轮作废、
+计入连续失败（3 次就收工），且 `mark_troops_out` / `mark_rally_launched`
+**没写进账本**（写点在这条 return 之后），账本继续声称「部队在家」，把同一个
+模板喂给集结门槛，弱化的是判据本身。
+
+### 修法（只改模板这一个变量）
+
+与另外几个队列图标同源（manifest 里 `queue_gather_icon` 等的注释「纯圆重裁
+（去头像背景角落）」）：**内缩 8px 重裁 46x46 → 30x30**，按钮体内零背景像素。
+
+| 量 | 旧 46x46 | 新 30x30 |
+|---|---|---|
+| 徽标可见帧 | 0.786 / 0.883 / 0.958 | 1.000 / 1.000 / 1.000 |
+| 徽标不可见帧（493 张 `recordings/failure_*` + 1 张实机帧，**全部 1920x1080**） | ≤0.358 | ≤0.489 |
+
+**阈值 0.85 有意不动**：去掉背景后它在两边各留 0.36 余量，本次只改模板。
+（旧 manifest 注释写「正 1.000/0.907，负 ≤0.710」——那是 4 个点的量法，看不见
+背景摆幅，正是它把这次漏检放过去的。）
+
+- 模板图 `templates/queue_badge.png`（**该目录 `*.png` 不入 git**，旧图备份在
+  `_bak_queue_badge_46x46_20261016.png`），`dist/rok-assistant/_internal/templates/`
+  同步更新；manifest 注释重写为新的实测表。
+- 新增锚点测试 `tests/unit/core/test_queue_badge_anchor.py`（8 条）：**先写、先在旧
+  模板上红**（`visible_a` 分 0.786 断言 matched → AssertionError，复现的就是那一轮），
+  改模板后全绿。fixture 是真实帧裁下的**队列列 ROI**（220x150，约 40KB/张；整帧
+  2MB 不进 git），测试里贴回 1920x1080 画布再喂识别器。裁片脚本 `_probe_mkfix.py`。
+
+### 验证
+
+- 生产装配（dist manifest + dist 权重 + dist 模板）跑 `_probe_qscore.py`：
+  `_q_16384` → **1.000 matched @ (1754,204)-(1784,234)**；无徽标帧 0.436 不命中。
+- `pytest tests/unit/core tests/unit/workers -q` → **387 passed**；全量另跑。
+
+### 两条**没做**的事（留档，别当成已实现）
+
+1. **本轮失败没有截图**：`runner._save_failure_screenshot()` 只在 `except` 分支调用，
+   干净中止（`fail_reason` 走 END）不留帧——所以「那 10 秒里徽标到底在不在」只能
+   用事后帧（12:25 抓的，部队还在行军、徽标在场）反推，拿不到失败瞬间的原帧。
+   这正是「判据由一帧得出、帧却没留下」的观测性缺口，值得单独改。
+2. **发射验证仍只认 `queue_badge` 一条腿**（防御纵深：任一队列图标命中即可算发射
+   成功）。这会改变门槛语义，需与用户确认后再动，本次不夹带。
+
+## 2026-10-16 · 统计条 + 文字/图文模式 + 启停异步化（GUI 观感与手感）
+
+用户一条需求拆成三件事：卡片区上方加统计条、加文字/图文显示模式开关、修「点开始/结束卡好几秒」。
+按 `enterprise-ui-optimizer` + `test-driven-development` 走，每件都先红后绿。
+
+### 卡顿的三个来源（先量再改）
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `MainWindow._on_start` | 主线程同步跑 `controller.start()`：adb 预检 + 载 ONNX，真机几秒 | 丢后台线程，点击当场返回，相位切「启动中」 |
+| `MainWindow._on_stop` | 主线程串行 `join` 每个 worker，每个最多 2s，号越多越久 | 同上 |
+| `_on_refresh`（2s 定时） | 每个角色走一趟：协调器全帧 JPEG 编码 → 卡片解码 → 平滑缩放 | 空闲不取 / 文字模式不取 / 字节没变不重画；编码前先缩到 480×270 |
+
+第三项最容易被忽略：画面绝大多数时候没变，而 1920×1080 按面积计价，号越多越贵。
+
+### 相位状态机
+
+`_running_mode: AppMode | None`（两态）换成 `_phase ∈ {IDLE, STARTING, RUNNING, STOPPING}` +
+`_run_mode`（相位所属模式）。**`_set_phase()` 是唯一变更入口**，`_sync_ui_state()` 从它推导
+全部按钮 enable 与文案（「启动中…」/「停止中…」）——spec §5.4「一个状态源推导」的原样延续。
+
+- 启动中两个按钮都不可点：既防重复启动，也不能「停一个还没起来的东西」。
+- `_on_run_finished`（自然收工）只在 `RUNNING` 时复位相位：收工与手动停止撞车时，
+  收尾归 `_on_stop_done`——否则 worker 还没 join 完，按钮就先亮了「可再启动」。
+- `closeEvent` 等后台任务收尾：QThread 不是守护线程，窗口先销毁就是
+  「QThread: Destroyed while thread is still running」→ abort。
+
+### 既有测试的时序假设要跟着改（6 处）
+
+启停从同步变异步，`test_mode_nav` / `test_gui_smoke` / `test_gui_license` 里
+「点完立刻断言」的 6 条必须改成转事件循环等结果（新增 `wait_until` 夹具，见 `tests/conftest.py`）。
+其中一条是**静默变空测**：`test_stopping_unlocks_everything` 直接戳 `w._running_mode`，
+改名后那只是个没人读的新属性、断言恰好都成立——已改成 `_set_phase`。
+
+### 显示模式：为什么是「单键行内改写」而不是 `yaml.safe_dump`
+
+`config.yaml` 里有 7 行注释在解释权重选型理由，而 `ConfigDialog` 早就在用 `yaml.safe_dump`
+把它们全抹掉。显示模式要落盘，但**不该再制造一处**。`infra/config.set_card_view()` 因此
+只认行：定位顶层 `app:` 段 → 替换/插入 `card_view` 那一行 → **回读校验通过才写盘**。
+解析不了、找不到 `app:` 段、回读不符 → 返回 False **且不碰文件**。
+
+两个已知边界（有意为之，非缺陷）：行内空映射 `app: {}` 形态拒绝改写；`app:` 段里缩进更深的
+同名键不认（那属于嵌套段，改它等于改错地方）。两者都走「返回 False + 状态栏提示本次未保存」。
+
+### 统计口径
+
+`RuntimeCoordinator.stats()` → `{ok, failed, env, rounds, fills, target}`。
+
+- 轮次按结局分开计数：以前只有一个 `rounds_done`，三种结局混在一起，当「完成个数」显示会虚高。
+  三者之和恒等于 `rounds_done`（有测试钉住）。
+- `target` = `max_rounds × 在跑角色数`；没有 runner 时给 0 而不是 `max_rounds`——
+  界面此时该显示 `0/0`，不是一份假目标。
+- 填兵次数落在 `ActionLedger.fill_count`（进程级）：SM 的 `ctx` 随每轮重建清零，
+  答不出「一共填了几次」。`total_fills()` 刻意**只读已存在的条目**、不走 `_get()`——
+  后者会给未知 char_id 建空条目，把 `has_record()` 顶成真，而它是集结门槛的 L0 准入判据：
+  为了显示一个数字去撬门槛是拿安全换好看。
+- 停止时先留存读数再丢 coordinator：用户点停止正是为了看这一轮的战绩。
+
+### 逐文件
+
+- `gui/theme.py`：`stat_value_style(kind)`（未知语义回落 default，不抛）、`make_segment(btn)`
+  （顺带 `setCheckable(True)`——不可勾选的话 `:checked` 永远不成立且不报错）、
+  `#statsBar` / `#statsValue` / `#statsName` / `QPushButton[segment="true"]` 四组 QSS。
+  分段开关的 `:checked` 必须盖过 `:hover`，否则选中项被鼠标划过就退回未选中样式。
+- `gui/mode_page.py`：统计条 + 分段开关（`view_mode_changed` 只在**用户点击**时发，
+  `set_view_mode` 不发——启动读配置那条路再发一次就成了「读配置→发信号→写配置」的空转）。
+- `gui/main_window.py`：相位机、`_run_async`、`_apply_view_mode`、`_on_refresh` 三道减法。
+- `gui/character_card.py`：`set_view_mode`、文字模式高度 `_CARD_H - _THUMB_H - SP_MD = 278`。
+- `coordination/runtime.py`：`_shrink_for_thumbnail()`（`INTER_AREA`，只缩不放，返回新数组
+  ——**不动原帧**，识别链还在读它，尺寸一变所有 ROI 坐标全错位）。
+- `gui/controller.py`：`card_view()` / `set_card_view()`（控制器是配置的唯一门面）。
+
+### 验证
+
+- 新增测试：`test_theme`(+5) / `test_mode_page_stats`(10) / `test_run_phase`(7) /
+  `test_refresh`(8) / `test_view_mode`(8) / `test_runtime_snapshot`(5) / `test_controller`(+4)。
+- 全套 **1098 passed**（5 分 28 秒）。收尾那一跑先红了一条，见下。
+- 离屏探针 `_probe_ui_theme.py`：统计条 48px、卡片 440→278px、日志仍 160px 不裁切；
+  文字模式与图文模式各出一张 `_ui_shots/*.png`。顺带修了探针里多模式重构后就失效的
+  `_content_stack` 引用（现在跑必崩）。
+- **实机复验未做**：统计条版式、分段开关手感、点开始/停止到底还卡不卡，都要开窗看。
+
+### 收尾跑出的一条假回归：`test_runner_counts_rounds_by_outcome`
+
+首跑 1097 passed + **1 failed**，单跑该文件、单跑 `tests/unit/workers` 全绿——
+典型的「只在全套负载下红」。根因不在被测代码，在**我自己写的用例**：
+
+`_run_env_rounds` 的等待循环是「`rounds_done >= n` 就 `stop()`」，而 `_EnvAbortSM`
+每轮只花 ~10ms，主线程 `sleep(0.02)` 醒来时 runner 早跑到第 4、5 轮了。计数
+**不是钉住的，是调度撞出来的**：空载偶尔冲过头，机器一忙必然冲。
+`_probe_runner_counts.py` 加 4 条烧 CPU 的线程后 20 次里中 7 次（空载 20 次里 0 次）。
+
+改法：`max_rounds=n_rounds`，让 runner **自己**在第 n 轮收工，等的是
+`stopped_reason is not None`（`_check_stop_conditions` 命中后主循环立刻 break，
+不再有下一轮），于是 `rounds_done == n` 是确定的。同文件里
+`test_runner_stops_after_consecutive_failures` 等三条本来就是这么写的，只有这条
+是新写的、漏了。
+
+**教训**：并发用例里「等条件成立再叫停」只适合断言 `>=`；一旦断言写死某个
+精确值，就必须让**被测对象自己**停在那个值上，不能靠主线程抢在它前面。
+
+变异验证：注掉 `rounds_failed += 1` → 该用例红；还原 → 绿。断言非空。
+
+## 2026-10-24 上下文经济性大清理（剔除无用资源）
+
+**触发**：用户要求「剔除无用的资源，避免占据过多的上下文资源，造成 token 的浪费」。
+**原则**：只删「文档已裁定可删」+「无引用且可重生」的；`CLAUDE.md` 的
+「千万不要把在用的清理掉」逐项核过引用（src/tools/tests/docs 全 grep）。
+
+### 删了什么（约 -6.6GB，根目录条目 ~130→62）
+
+| 对象 | 体积 | 理由 |
+|---|---|---|
+| `rok_assistant/datasets/` | 5.2GB | ultralytics 按 CWD 误落地的 COCO 下载；真实数据集在 `dataset/`（1.2GB 完好），互不相干 |
+| `logs/review/` 除 3 张 `_relabel_*.png` | ~421MB | `ingest_raw_imgs.py` 的覆盖图产出，`raw_imgs/`（310MB）还在，可重生 |
+| `recordings/` 9 月失败帧（463 张，留 1 张负样本） | ~850MB | 问题均已在 9 月修复/冻结；`recordings/diag/`（30MB）同删 |
+| `logs/_cap_raider/` | 84MB | 劫掠者抓帧；`templates/tab_raider.png` 已裁，探针还在 |
+| `logs/annotate/` | 22MB | `annotate_live.py --save` 生成物（09-21 清过一次，又长出来的） |
+| 根目录 38 个一次性探针 + 12 张 ROI 截图 | ~5MB | geom/tabs/text/tmpl/old/x/lvl/pred/perframe/panel/review/mktpl/runner_counts/roundtiming 系，无引用 |
+| `.pytest_tmp/` + 根 `__pycache__/` | — | 前者是已知问题 7 的毒化源 |
+
+### 保留了什么（在用的）
+
+- **验证件**：`_probe_tabchain/march/nav/noon/raider_search/raider_fix/cwdfix/cwdlocks/1015_fail/
+  mkfix/gem_*/gate_*/search_*/live_q/qscore/ui_theme/quiz_frames`——换权重/换页签/
+  未决项 16/17 定标还要重跑；`_probe_mkfix.py` 被 `test_queue_badge_anchor.py` 点名。
+- **文档点名的证据帧**：`_q_16*.png`（10-16 queue_badge 重裁根因表）、`_t_*.png`
+  （未决项 17 静态帧）、`logs/_probe_gate_live_mumu0.png`（未决项 16 的帧）、
+  `failure_mumu1_char_jy_20260915_001019.png`（`audit_empty_frames.py` docstring 负样本）。
+- **文本证据**：`_calib_v11/v12.txt`、`_cmp_v8_v9/v11_v12.txt`、`_boxcheck/`、
+  `rok_assistant_20261015_120747.log`、`_train_v*.log`（09-21 裁定保留）。
+- **源数据**：`raw_imgs/`（310MB 待入库素材）、`dati/`（题库与验收素材来源）、
+  `recordings/gem_probe/`（欠账 ③ 联络表）、10 月失败帧（46 张）。
+
+### 验证
+
+- `src/tools/tests` 全 grep：无任何代码引用被删文件。
+- `pytest tests/integration/test_config_dialog.py -q` → **82 passed**（含答题模式界面化新增 12 条）。
+- `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **1321 passed**（全套含答题界面化改动，无回归）。
+- 体积：logs 546MB→49MB，recordings 928MB→182MB。

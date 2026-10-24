@@ -239,6 +239,9 @@ def test_runner_stops_after_consecutive_failures(monkeypatch):
     assert r.rounds_done == 2
     assert r._fail_streak == 2
     assert r.stopped_reason is not None and "连续" in r.stopped_reason
+    # 停机文案必须模式中性：答题模式 answer_not_accepted 也会走到这里
+    assert "no_rally_found" in r.stopped_reason
+    assert "城寨" not in r.stopped_reason
     assert r.status == "done"
 
 
@@ -356,20 +359,60 @@ def test_runner_waits_long_when_out_of_action_points():
     assert r.stopped_reason is None
 
 
-def test_env_fail_reasons_cover_every_leader_abort_reason():
-    """runner 的环境类豁免名单必须**覆盖** leader_sm 实际写出的每个中止原因。
+def test_env_fail_reasons_cover_every_abort_reason():
+    """runner 的环境类豁免名单必须**覆盖**三个 SM 实际写出的每个环境类中止原因。
 
-    两边靠字符串字面量对齐（leader_sm 写 ctx["fail_reason"]，runner 按值查表），
+    两边靠字符串字面量对齐（SM 写 ctx["fail_reason"]，runner 按值查表），
     任一侧改名都不会有任何编译期错误——只会安静地退回「计入连续失败」，
     也就是用户报的「最后失败退出程序」原样复现。这条测试就是那个缺口的哨兵。
+
+    **只列环境类**：`march_rejected` / `collect_rejected` / `form_missing` 这些
+    是**真失败**，必须留在豁免名单外——它们进名单就等于「怎么失败都不会停」。
     """
-    from rok_assistant.workers import leader_sm
+    from rok_assistant.workers import gem_sm, leader_sm, member_sm
+    from rok_assistant.workers.quiz_sm import (
+        ANSWER_NOT_ACCEPTED_REASON, QUIZ_ENTRY_MISSING_REASON,
+        QUIZ_PARSE_FAILED_REASON, QUIZ_SCREEN_LOST_REASON,
+    )
     from rok_assistant.workers.runner import _ENV_FAIL_REASONS
-    for name in ("_NO_AP_REASON", "_AP_STUCK_REASON", "_STALE_TARGET_REASON"):
-        reason = getattr(leader_sm, name)
+    from rok_assistant.workers.state_machine import NORMALIZE_STUCK_REASON
+    named = [(leader_sm, n) for n in
+             ("_NO_AP_REASON", "_AP_STUCK_REASON", "_STALE_TARGET_REASON")]
+    # 归一化卡住由三个 SM 共用，常量定义在 state_machine（见那里的注释）
+    named.append((member_sm, "NORMALIZE_STUCK_REASON"))
+    named += [(gem_sm, n) for n in
+              ("QUEUE_UNKNOWN_REASON", "RADIAL_MENU_MISSING_REASON",
+               "RESOURCE_VIEW_FAILED_REASON", "GEM_CONFIRM_FAILED_REASON",
+               "GEM_OCR_MISSING_REASON")]
+    for mod, name in named:
+        reason = getattr(mod, name)
         assert reason in _ENV_FAIL_REASONS, (
-            f"{name}={reason!r} 不在 runner._ENV_FAIL_REASONS 里："
+            f"{mod.__name__}.{name}={reason!r} 不在 runner._ENV_FAIL_REASONS 里："
             "这条中止会被算成连续失败，攒够 3 轮就收工")
+    assert member_sm.NORMALIZE_STUCK_REASON is NORMALIZE_STUCK_REASON
+    assert leader_sm.NORMALIZE_STUCK_REASON is NORMALIZE_STUCK_REASON
+    assert gem_sm.NORMALIZE_STUCK_REASON is NORMALIZE_STUCK_REASON
+
+    # 答题模式：三条环境类必须在名单里，真失败必须不在
+    for reason in (QUIZ_ENTRY_MISSING_REASON, QUIZ_SCREEN_LOST_REASON,
+                   QUIZ_PARSE_FAILED_REASON):
+        assert reason in _ENV_FAIL_REASONS
+    assert ANSWER_NOT_ACCEPTED_REASON not in _ENV_FAIL_REASONS
+
+
+def test_gem_real_failures_are_not_env_exempt():
+    """宝石模式的三条**真失败**必须留在豁免名单外。
+
+    环境类豁免的语义是「这不是代码/配置的问题，别记失败」；`march_rejected`
+    这类是「点了没生效」——那是真出问题了，必须攒够失败次数停下来喊人。
+    """
+    from rok_assistant.workers import gem_sm
+    from rok_assistant.workers.runner import _ENV_FAIL_REASONS
+    for name in ("MARCH_REJECTED_REASON", "COLLECT_REJECTED_REASON",
+                 "FORM_MISSING_REASON"):
+        assert getattr(gem_sm, name) not in _ENV_FAIL_REASONS, (
+            f"gem_sm.{name} 不该被当成环境类豁免——那会让宝石模式"
+            "怎么失败都不停")
 
 
 def test_runner_stops_after_consecutive_step_errors():
@@ -423,6 +466,65 @@ def test_runner_publishes_worker_finished_on_natural_stop():
     assert got[0]["instance_id"] == "i1" and got[0]["char_id"] == "c1"
     assert "轮数上限" in got[0]["stopped_reason"]
     assert got[0]["rounds_done"] == 1
+
+
+def _run_env_rounds(reason, n_rounds):
+    """用 _EnvAbortSM 跑满 n_rounds 轮，返回 runner。轮数**正好**是 n_rounds。
+
+    `max_rounds=n_rounds` 让 runner **自己**在第 n 轮收工——不是靠主线程
+    数够了再 `stop()`。这不是风格问题：`_EnvAbortSM` 每轮只花 ~10ms，
+    主线程 `sleep(0.02)` 醒来时 runner 早跑到第 4、5 轮了，等主线程叫停
+    之后计数是多少全看调度。空载时偶尔冲过头，机器一忙（全套 1097 条一起
+    跑）就必然中——2026-10-16 全套里红的就是这条。
+
+    `max_consecutive_failures` 仍放到远大于 n_rounds：本用例要量的是
+    「每种结局各记了几轮」，被「连续失败收工」提前截断就量不到了
+    （环境中止本来也不计入连续失败）。
+    """
+    r = WorkerRunner(instance_id="i1", char_id="c1", char_name="x",
+                     sm_factory=lambda: _EnvAbortSM(reason),
+                     handle_source=MockHandleSource(
+                         screenshot=np.zeros((100, 100, 3), dtype=np.uint8)),
+                     event_bus=None, poll_interval=0.01, restart_cooldown=0.01,
+                     max_rounds=n_rounds, max_consecutive_failures=99)
+    r.start()
+    deadline = time.time() + 5
+    # 等 runner 自己撞上 max_rounds 收工（stopped_reason 非 None 即已 break）
+    while time.time() < deadline and r.stopped_reason is None:
+        time.sleep(0.02)
+    r.stop()
+    assert r.stopped_reason is not None, "主循环没跑起来，用例前提不成立"
+    assert r.rounds_done == n_rounds, (
+        f"轮数没钉在 {n_rounds} 上（实际 {r.rounds_done}）：收工条件没生效，"
+        "下面的分项断言就没有参照物了")
+    return r
+
+
+def test_runner_counts_rounds_by_outcome():
+    """轮次要**按结局分开**计数，界面统计条的「完成/失败/中止」从这里取。
+
+    原先只有一个 `rounds_done`，成功、真失败、环境中止混在一个数里，
+    直接拿它当「完成个数」会给出一个用户解释不了的高数字。
+    """
+    ok = _run_env_rounds(None, 3)                     # 终态但无 fail_reason = 成功
+    assert (ok.rounds_ok, ok.rounds_failed, ok.rounds_env) == (3, 0, 0)
+
+    bad = _run_env_rounds("no_fortress_found", 3)     # 真失败
+    assert (bad.rounds_ok, bad.rounds_failed, bad.rounds_env) == (0, 3, 0)
+
+    env = _run_env_rounds("stale_fortress_target", 3)  # 环境类中止
+    assert (env.rounds_ok, env.rounds_failed, env.rounds_env) == (0, 0, 3)
+
+
+def test_round_outcome_counters_sum_to_rounds_done():
+    """三个分项之和必须恒等于 `rounds_done`。
+
+    `_check_stop_conditions` 的「跑满 max_rounds 即收工」判的是 `rounds_done`；
+    分项一旦漏记某个分支，界面上「完成/失败/中止」加起来就对不上轮数，
+    用户会以为程序丢了轮次。
+    """
+    r = _run_env_rounds(None, 2)
+    assert r.rounds_ok + r.rounds_failed + r.rounds_env == r.rounds_done
 
 
 def test_runner_does_not_publish_worker_finished_on_user_stop():

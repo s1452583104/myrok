@@ -136,14 +136,30 @@ class AdbHandleSource:
             self._ensure_connected()
             return self._run(args)
 
+    # screencap 偶发返回半帧（PNG 传输被截断）：adb 退出码是 0，stdout 却是
+    # 一段解不出图的字节。2026-10-15 实机 run 12:07 12:30:37 出过一次（用户
+    # 点 Stop 后 3s，模拟器正在收尾）——`_run_checked` 只在子进程**非零退出**
+    # 时重连重试，这条路没有重试，一次抖动就让 step 抛异常、白计一次连续失败。
+    _CAPTURE_ATTEMPTS = 2
+
     def capture(self) -> np.ndarray:
         import cv2
-        proc = self._run_checked(
-            [self._adb_path, *self._serial_args(), "exec-out", "screencap", "-p"])
-        img = cv2.imdecode(np.frombuffer(proc.stdout, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise RuntimeError(f"screencap returned undecodable data from {self._address}")
-        return img
+        last_len = 0
+        for attempt in range(self._CAPTURE_ATTEMPTS):
+            proc = self._run_checked(
+                [self._adb_path, *self._serial_args(), "exec-out", "screencap", "-p"])
+            buf = np.frombuffer(proc.stdout, dtype=np.uint8)
+            last_len = len(buf)
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if img is not None:
+                return img
+            if attempt + 1 < self._CAPTURE_ATTEMPTS:
+                # 解不出图多半是这条连接上的传输坏了：强制重连再截一次
+                self._connected = False
+                self._ensure_connected()
+        raise RuntimeError(
+            f"screencap returned undecodable data from {self._address}"
+            f"（连续 {self._CAPTURE_ATTEMPTS} 次，最后一次 {last_len} 字节）")
 
     def click(self, x: int, y: int, anchor: str | None = None,
               rapid: bool = False) -> None:

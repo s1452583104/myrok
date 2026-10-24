@@ -12,6 +12,11 @@ app:
   screen_width: 1920        # 模板按 1920x1080 中文 UI 采集，勿改
   screen_height: 1080       # 必须和模拟器分辨率一致，否则点击坐标全部错位
   locale: zh-CN             # 游戏界面语言；模板与检测模型都按中文采集，勿改
+  # 角色卡片显示模式。主界面页头的「文字模式 / 图文模式」开关改的就是这一行，
+  # 手改也行（保存后点「刷新配置」）。
+  #   image = 图文：截屏缩略图 + 日志
+  #   text  = 文字：不展示截屏，卡片变矮，一屏能放更多卡（多开模拟器时更好用）
+  card_view: image
   # 留空 = 首启自动探测；探测不到就点「⚙ 配置」里的「自动检测 MuMu/adb 路径」
   # 或手动填 MuMu 安装目录下的 MuMuManager.exe / adb.exe
   mumu_manager_path: ""
@@ -86,8 +91,51 @@ zhaiduo:
           march_troop_types: [infantry]
           fill_target_leaders:    # member/either 必填；leader 不能填
             - { instance: mumu0, name: "集结手" }   # instance 填车头所在的 id，name 填车头角色名
-# 以下两个模式尚未实现（空壳）。保持 instances: []（或整段删掉）——程序按空处理，不会报错。
+# 宝石模式：一台模拟器一个号，长按地图按钮进资源查看视角，螺旋扫图找宝石，
+# 派兵采集直到右侧队列满，等一段时间再来一轮。面向非程序员的说明见
+# docs/配置说明.md 的「宝石模式」一节。
 gem:
+  queue_limit: 5        # 队列图标数 >= 这个值就算派满了，去等（1-7）
+  max_rounds: 10        # 扫图会话轮数上限，跑满自动收工
+  scan_rings: 3         # 回字形向外扩几圈（圈越多扫得越全、一轮越久）
+  scan_drag_px: 800     # 每步拖拽距离（像素）
+  scan_drag_ms: 500     # 每步拖拽时长（毫秒）
+  idle_wait_min: 20     # 队列满后的等待下限（分钟）
+  idle_wait_max: 30     # 上限
   instances: []
+    # 要跑宝石模式时按下面这样填（一台模拟器一个角色，多台就多几项）：
+    # - id: mumu0
+    #   name: "宝石号"
+    #   mumu_index: 0
+    #   characters:
+    #     - id: gem1
+    #       name: "宝石号"     # ← 必须和游戏内显示名一致
+# 答题模式：自动进「知识问答」活动，OCR 认题 → 随包题库 / 大模型 / 随机 作答，
+# 答完从绿色高亮反推正确答案写回学习题库，答到活动结束算一轮。
+# 面向非程序员的说明见 docs/配置说明.md 的「答题模式」一节。
 quiz:
+  max_rounds: 3              # 轮数上限
+  max_questions_per_round: 30  # 一轮最多答多少题（防止活动卡住时无限答）
+  round_cooldown_min: 10     # 一轮结束到下一轮之间的冷却（分钟）
+  fuzzy_threshold: 0.72      # 题库模糊匹配阈值（越高越严格）
+  verify_delay: 1.2          # 点完选项后等多久再截图看绿色（秒）
+  min_green_ratio: 0.55      # 选项里绿色像素占比达到多少算「正确答案」
+  parse_retries: 2           # 题干/选项认不出来时原地重认几次
+  auto_click: true           # false = 只判不点（半自动，建议先这样验一遍）
+  entry_taps: []             # 从地图进答题界面的额外点击点 [[x, y], ...]；
+                             # 空 = 只靠屏幕上的「进入 / 习题演练 / 活动」文字导航。
+                             # 走不通时先用 tools/quiz_entry_probe.py 在真机探一次
+  llm:                       # 题库里没有时才用；关掉=纯题库，未命中就随机选
+    enabled: false
+    base_url: "https://api.deepseek.com/v1"   # OpenAI 兼容地址
+    model: "deepseek-chat"
+    api_key: ""              # 留空 = 不调大模型
+    timeout_s: 8.0
   instances: []
+    # 要跑答题模式时按下面这样填（一台模拟器一个角色，多台就多几项）：
+    # - id: mumu0
+    #   name: "答题号"
+    #   mumu_index: 0
+    #   characters:
+    #     - id: q1
+    #       name: "答题号"     # ← 必须和游戏内显示名一致

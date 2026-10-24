@@ -1,6 +1,6 @@
 from __future__ import annotations
 import time
-from .state_machine import StateMachine
+from .state_machine import NORMALIZE_STUCK_REASON, StateMachine
 from ..core.recognizers.view_probe import View, ViewProbe
 from ..infra.logger import get_logger
 
@@ -107,12 +107,21 @@ class MemberStateMachine(StateMachine):
         self.add_transition("WAIT_LAUNCH_EVENT", "SWITCH_TO_SELF", self._switch_to_self,
                             guard=lambda ctx: time.time() >= self._respond_at)
         self.add_transition("SWITCH_TO_SELF", "NORMALIZE", self._normalize_view)
+        # 归一化收拾不了（探针说不出地图）→ 干净中止本轮，**必须**注册在
+        # 通往 OPEN_WAR 的边之前（注册序 = 优先级）。
+        # 以前这里是 `raise RuntimeError`：WorkerRunner 收到 step 异常不重建
+        # SM，只退避 10s 重进同一个状态，同一个面板被反复点，直到连续 6 次
+        # 异常把 worker 停掉。见 _normalize_view 尾部与 leader_sm._abort_round。
+        exit_state = "IDLE" if self._event_driven else "END"
+        self.add_transition(
+            "NORMALIZE", exit_state, self._normalize_stuck,
+            guard=lambda ctx: ctx.get("fail_reason") == NORMALIZE_STUCK_REASON)
         self.add_transition("NORMALIZE", "OPEN_WAR", self._open_war)
         # 耗尽出口必须注册在对应重试边之前：StateMachine.step 按注册顺序
         # 取第一个 from_state 匹配且 guard 通过的转移。
-        # 出口状态按模式分叉：波次模式回 IDLE 等下一个信号（不记轮次、不
-        # 进终态）；单发模式进 END 计一轮。
-        exit_state = "IDLE" if self._event_driven else "END"
+        # （出口状态 exit_state 在上面的 NORMALIZE 段已按模式分叉定好：
+        # 波次模式回 IDLE 等下一个信号——不记轮次、不进终态；单发模式进
+        # END 计一轮。）
         self.add_transition("OPEN_WAR", exit_state, self._exhausted,
                             guard=lambda ctx: ctx.get("war_attempts", 0) > _PANEL_MAX_ATTEMPTS)
         self.add_transition("OPEN_WAR", "OPEN_WAR", self._open_war,
@@ -134,7 +143,13 @@ class MemberStateMachine(StateMachine):
                             guard=lambda ctx: ctx.get("already_joined"))
         self.add_transition("FORM_TROOP", "LAUNCH", lambda ctx: None,
                             guard=lambda ctx: ctx.get("form_open"))
-        self.add_transition("FORM_TROOP", "OPEN_WAR", self._join_missed,
+        # 加入未生效 → **回 NORMALIZE**（不是直接 OPEN_WAR）。以前直接回
+        # OPEN_WAR，而 OPEN_WAR 子图里没有一条边能回到 NORMALIZE：验证失败
+        # 一次就永久失去残留清理（队列侧栏、战争面板 ✕、search_back /
+        # map_btn），只剩 _open_war 的「旗帜→列表」两步。2026-10-15 实机
+        # run：三个成员 13:22:14 行军后同时验证失败，之后 48 次「联盟旗帜
+        # 不可见，重试 (N/10)」全部来自这个死角，最后整波收空。
+        self.add_transition("FORM_TROOP", "NORMALIZE", self._join_missed,
                             guard=lambda ctx: not ctx.get("form_open"))
         self.add_transition("LAUNCH", "VERIFY_JOINED", self._launch)
         self.add_transition("VERIFY_JOINED", "JOIN_CHECKED", self._verify_join)
@@ -148,7 +163,7 @@ class MemberStateMachine(StateMachine):
         else:
             self.add_transition("JOIN_CHECKED", "END", lambda ctx: None,
                                 guard=lambda ctx: ctx.get("joined"))
-        self.add_transition("JOIN_CHECKED", "OPEN_WAR", self._join_missed,
+        self.add_transition("JOIN_CHECKED", "NORMALIZE", self._join_missed,
                             guard=lambda ctx: not ctx.get("joined"))
 
     def on_rally_launched(self, event: dict) -> None:
@@ -162,7 +177,11 @@ class MemberStateMachine(StateMachine):
         self._pending_event = None
         if self._event_driven:
             # 新波次：清掉上一波的进度与全部计数（收波只切状态、不清数据，
-            # 便于日志里看清上一波填了什么）
+            # 便于日志里看清上一波填了什么）。
+            # fail_reason/failed 也一起清：上一波的中止原因不能挂在新一波的
+            # status_update 上报里（GUI 会一直显示「归一化卡住」）。
+            ctx["fail_reason"] = None
+            ctx["failed"] = False
             ctx["filled"] = set()
             ctx["next_deadline"] = None
             ctx["join_attempts"] = 0
@@ -235,6 +254,14 @@ class MemberStateMachine(StateMachine):
                     name, _WAVE_TARGET_WAIT)
 
     def _wave_done(self, ctx):
+        # 收波时把**当前这个**目标也算进去：`filled` 只在 `_next_target`
+        # 里添加，而只配了一个填兵目标时（config.yaml 现状）`_wave_has_more`
+        # 直接为假、`_next_target` 从不执行 —— 于是一整波明明填成功了，
+        # 日志却是「已填 0 个：无」（2026-10-15 实机 17/17 条都是这么来的，
+        # 复盘时读不出到底填没填上）。
+        name = ctx.get("target_name")
+        if ctx.get("joined") and name:
+            ctx.setdefault("filled", set()).add(name)
         filled = ctx.get("filled") or set()
         # 收波即丢掉可能残留在起波窗口里的第二个信号：波次模式的 SM 跨波存活，
         # 留着它会在回到 IDLE 的瞬间再开一波（去填已经填过的车头，第一个目标
@@ -322,10 +349,32 @@ class MemberStateMachine(StateMachine):
                 or self._wait_for("search_icon", timeout=2.0)):
             # 2026-09-18 实机：简化模式下联盟快捷键整体不显示，城市视图
             # 归一化在此处误抛异常连续计败。放大镜与旗帜同为地图视图专属
-            # UI，任一可见即归一化成功。都不见时用探针说清卡在哪
+            # UI，任一可见即归一化成功。都不见时用探针说清卡在哪。
+            #
+            # **干净中止，不抛异常**（2026-10-15 实机 run 12:07 mumu1
+            # 13:05:26 起连抛 4 次、上限 6 次）：WorkerRunner 收到 step 异常
+            # 不重建 SM，只退避 10s 重进同一个状态，同一帧画面被反复判、
+            # 直到连续 6 次异常把 worker 停掉。写 fail_reason 走 NORMALIZE
+            # 出口边（见 _setup），runner 按 _ENV_FAIL_REASONS 不计连续失败，
+            # 冷却后重建 SM 重收一次残留面板。视图名照旧进日志，可归因。
             view = self._view_probe.probe(self._handle.capture()).view
-            raise RuntimeError(f"归一化失败：卡在[{view.value}]视图"
-                               "（联盟旗帜与放大镜均不可见）")
+            ctx["failed"] = True
+            ctx["fail_reason"] = NORMALIZE_STUCK_REASON
+            logger.warning("成员·归一化失败：卡在[%s]视图"
+                           "（联盟旗帜与放大镜均不可见），本轮中止", view.value)
+
+    def _normalize_stuck(self, ctx):
+        """归一化卡住的出口动作（NORMALIZE → IDLE/END）。
+
+        波次模式没有终态，中止即回 IDLE 等下一个信号——所以这里必须丢掉
+        起波窗口里可能残留的信号，否则回 IDLE 的瞬间会立刻再开一波、
+        白烧第一个目标的长窗口（与 `_wave_done` / `_exhausted` 同因）。
+        `fail_reason` **不清**：要让 runner 读到它按环境原因放行、并随
+        status_update 带给 GUI；下一个波次由 `_consume_event` 清。
+        """
+        self._pending_event = None
+        logger.warning("成员·归一化卡住，本轮中止（原因 %s）",
+                       ctx.get("fail_reason"))
 
     def _open_war(self, ctx):
         ctx["war_attempts"] = ctx.get("war_attempts", 0) + 1
@@ -445,6 +494,17 @@ class MemberStateMachine(StateMachine):
         ctx["panel_open"] = False   # 面板可能已被「+」点击带走，回 _open_war 重查
         self._handle.click(960, 300)
         logger.warning("成员·加入未生效，重开战争列表重试")
+        # 重开之前**先归一化**（残留清理：队列侧栏、面板 ✕、search_back /
+        # map_btn）。`_normalize_view` 是「进入 NORMALIZE 那条边」的动作，
+        # 光把状态切回 NORMALIZE 不会跑它——这里显式调一次，重试路径才有
+        # 清理。以前这条重试边直接回 OPEN_WAR，而 OPEN_WAR 子图里没有任何
+        # 一条边能回到 NORMALIZE：一次验证失败就永久失去清理，只剩
+        # 「旗帜 → 列表」两步（2026-10-15 实机 run 12:07：三个成员 13:22:14
+        # 行军后同时验证失败，随后 48 次「联盟旗帜不可见，重试 (N/10)」
+        # 全部出自这个死角，整波收空）。
+        # 清理不掉时 `_normalize_view` 会写 fail_reason，本边的 to_state
+        # 是 NORMALIZE，下一步由它的出口边干净结束本轮。
+        self._normalize_view(ctx)
 
     def _exhausted(self, ctx):
         if self._event_driven:

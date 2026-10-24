@@ -35,3 +35,27 @@ def _isolated_license_guard(tmp_path):
     guard_mod._set_guard_for_tests(guard_mod.Guard(st, fp, clock=lambda: now))
     yield
     guard_mod._set_guard_for_tests(None)
+
+
+@pytest.fixture
+def wait_until():
+    """等界面进入某个状态（2026-10-16：开始/停止改异步后需要）。
+
+    自己取 `QApplication.instance()` 而不是请求各测试文件的 `qapp` 夹具：
+    conftest 里的夹具解析不到测试模块内定义的夹具。
+
+    **必须 processEvents**：主窗口等的是跨线程信号，只 sleep 不转事件循环
+    永远等不到。
+    """
+    def _wait(pred, timeout: float = 5.0):
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if pred():
+                return True
+            time.sleep(0.005)
+        raise AssertionError(f"等待超时（{timeout}s）：界面没进入预期状态")
+
+    return _wait

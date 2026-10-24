@@ -3,6 +3,7 @@ import numpy as np
 from unittest.mock import MagicMock
 from rok_assistant.infra.anti_detection import AntiDetectionConfig, HumanProfile
 from rok_assistant.workers.member_sm import MemberStateMachine
+from rok_assistant.workers.state_machine import NORMALIZE_STUCK_REASON
 from rok_assistant.core.handle_source import MockHandleSource
 
 
@@ -198,6 +199,54 @@ def test_wave_failed_join_is_not_recorded_and_is_retried(monkeypatch):
     assert "Boss" not in (sm._ctx.get("filled") or set())
     # 交回 _join_missed 重试同一个目标：目标行的「+」被点了不止一次
     assert handle.clicks.count((1335, 161)) >= 2
+
+
+def test_wave_done_counts_the_target_it_just_filled(monkeypatch):
+    """只配一个填兵目标时，收波要记成「已填 1 个」，不能是「已填 0 个：无」。
+
+    `filled` 只在 `_next_target` 里添加，而单目标配置下 `_wave_has_more`
+    直接为假、`_next_target` 从不执行 —— 2026-10-15 实机 run 12:07 的
+    17/17 条「本波填兵结束（已填 0 个：无）」全是这么来的：明明填成功了，
+    复盘时却读不出到底填没填上。
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm(targets=("Boss",))
+    sm.on_rally_launched(_launch_event())
+    recs["fill_Boss"].recognize.return_value.matched = True
+    for _ in range(60):
+        sm.step()
+        if sm.current == "IDLE":
+            break
+    assert sm.current == "IDLE"
+    assert sm._ctx["filled"] == {"Boss"}
+
+
+def test_join_missed_goes_through_normalize(monkeypatch):
+    """加入未生效后必须回 NORMALIZE 清残留，不能直接重开战争列表。
+
+    回归 2026-10-15 实机 run 12:07：FORM_TROOP/JOIN_CHECKED 的失败边以前直接
+    指向 OPEN_WAR，而 OPEN_WAR 子图里**没有一条边能回到 NORMALIZE** —— 验证
+    失败一次就永久失去残留清理（队列侧栏、面板 ✕、search_back/map_btn），
+    只剩「旗帜 → 列表」两步。三个成员 13:22:14 行军后同时验证失败，随后的
+    48 次「联盟旗帜不可见，重试 (N/10)」全部出自这个死角，整波收空。
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", fake)
+    monkeypatch.setattr("rok_assistant.workers.member_sm.time", fake)
+    sm, handle, recs = _make_wave_sm()
+    # 战争面板残留态：旗帜被面板盖住、放大镜可见（关掉面板即归一化成功）
+    recs["alliance_btn"].recognize.return_value.matched = False
+    recs["search_icon"] = _mock_rec(matched=True)
+    sm._ctx["joined"] = False
+    sm.current = "JOIN_CHECKED"
+    sm.step()
+    # 重试路径上真的做了残留清理（面板 ✕），才回 NORMALIZE 重开列表
+    assert (1671, 64) in handle.clicks
+    assert sm.current == "NORMALIZE"
+    sm.step()
+    assert sm.current == "OPEN_WAR"
 
 
 def _runner_poll_interval() -> float:
@@ -499,8 +548,10 @@ def test_verify_join_refills_ap_when_popup_blocks_march(monkeypatch):
 
 def test_normalize_exits_search_then_finds_flag(monkeypatch):
     # 搜索面板开着时右下角联盟旗帜被底部搜索栏替换（搜索模式专属底栏）：先点 search_back
-    # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时应 RuntimeError
-    # （环境异常走 runner 错误路径），而不是静默继续
+    # 退出 —— 2026-09-11 实机发现。旗帜始终不出现时**干净中止本轮**
+    # （写 fail_reason、走 NORMALIZE 出口边进 END），不再抛 RuntimeError：
+    # runner 收到 step 异常不重建 SM，只退避 10s 重进同一状态，连续 6 次
+    # 异常就把 worker 停掉（2026-10-15 实机 run 12:07 的 4 连抛）。
     monkeypatch.setattr("rok_assistant.workers.state_machine.time", _FakeTime())
     sm, handle, _, _ = _make_sm()
     recs = sm._rec
@@ -508,13 +559,10 @@ def test_normalize_exits_search_then_finds_flag(monkeypatch):
     recs["war_title"].recognize.return_value.matched = False   # 无面板残留
     recs["queue_panel"].recognize.return_value.matched = False  # 无侧栏展开
     sm.on_rally_launched({"rally_id": "r1"})
-    try:
-        for _ in range(10):
-            sm.step()
-    except RuntimeError as e:
-        assert "卡在[" in str(e)
-    else:
-        raise AssertionError("应当抛 RuntimeError 而不是静默继续")
+    for _ in range(10):
+        sm.step()
+    assert sm.fail_reason == NORMALIZE_STUCK_REASON
+    assert sm.is_terminal()
     # 唯一一次点击是 search_back（map_btn 在 elif 分支未被触达）
     assert handle.clicks == [(50, 50)]
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..infra.logger import get_logger
 from ..infra.anti_detection import AntiDetectionConfig, HumanProfile
+from .state_machine import NORMALIZE_STUCK_REASON
 
 logger = get_logger(__name__)
 
@@ -48,6 +49,15 @@ _STATE_ZH = {
     "MEMBER:SWITCH_BACK": "成员·返回自己城市",
     # either 角色返城等待
     "WAIT_RETURN": "等待集结部队返城",
+    # 答题模式（不登记裸 NORMALIZE：寨多多的车头/成员 SM 也用它当裸状态名，
+    # 加一条会连带改掉那边的日志；答题的 NORMALIZE 由 gui/labels.py 兜住）
+    "OPEN_QUIZ": "打开答题活动",
+    "READ": "读题",
+    "ANSWER": "作答",
+    "VERIFY": "确认绿色高亮",
+    "LEARN": "写入学习题库",
+    "ADVANCE": "等下一题",
+    "COOLDOWN": "本轮结束，冷却中",
     # Runner 结束态
     "done": "已达停止条件，收工",
 }
@@ -56,18 +66,39 @@ def _zh(state: str) -> str:
     return _STATE_ZH.get(state, state)
 
 
-# 「本轮干不下去了」类 fail_reason（leader_sm 写入 ctx["fail_reason"]）：不是
-# 「附近没城寨了」这种真失败，而是环境/资源挡路——行动力弹窗收不掉、上一座
-# 寨子的详情收不掉、体力补不动。
+# 环境类失败原因：**不计入连续失败数**。语义是「这不是代码或配置的错，
+# 别记失败」——行动力不足、弹窗关不掉、目标城寨过期、画面停在收拾不掉的
+# 视图上，都属于「等一会儿/换个目标就好」。
 #
 # 为什么单独拎出来（2026-10-12 用户报「一直重试，最后失败退出程序」）：
-# `_check_stop_conditions` 连续 `_max_fail_streak`(=3) 轮失败就收工。这三种
+# `_check_stop_conditions` 连续 `_max_fail_streak`(=3) 轮失败就收工。这些
 # 原因本身都**会在下一轮自愈**——重建 SM 后 NORMALIZE 会再收一次弹窗，寨子
 # 也会随时间消失——所以把它们算成「连续失败」等于把一次弹窗卡顿升级成收工。
 # 不计入连续失败、冷却后接着跑；每轮照常打警告日志，fail_reason 也随
 # status_update 带给 GUI，用户看得见。
+#
+# 宝石模式新增 5 条，逐条说明为什么算环境类：
+#   queue_unknown        —— manifest 少配了 queue_*_icon，是配置缺口
+#   radial_menu_missing  —— 长按没唤出环形菜单（点偏了 / 菜单改版）
+#   resource_view_failed —— 点了「资源」但画面没进缩放视角（游戏改了入口）
+#   gem_confirm_failed   —— 连续 3 个候选都确认不了：地图上噪声多，是画面问题
+#   gem_ocr_missing      —— manifest 少配了 gem_dialog_title，是配置缺口
+# 反例（**必须留在名单外**）：march_rejected / collect_rejected /
+# form_missing —— 点了按钮没生效，那是真出问题了，得攒够失败停下来喊人。
+#
+# 答题模式新增 3 条环境类：
+#   quiz_entry_missing —— 找不到答题入口 / 活动没开（游戏界面改版或不在活动期）
+#   quiz_screen_lost   —— 答题页被弹窗/断线盖住，看不见题
+#   quiz_parse_failed  —— 一题没答就连续读不出题目（分辨率/识别问题）
+# 反例（**必须留在名单外**）：answer_not_accepted —— 点了选项画面不动，
+# 那是真的出了问题（点击被吞 / 游戏拒绝），得攒够失败停下来喊人。
 _ENV_FAIL_REASONS = frozenset({
-    "no_action_points", "ap_dialog_stuck", "stale_fortress_target"})
+    "no_action_points", "ap_dialog_stuck", "stale_fortress_target",
+    NORMALIZE_STUCK_REASON,
+    "queue_unknown", "radial_menu_missing", "resource_view_failed",
+    "gem_confirm_failed", "gem_ocr_missing",
+    "quiz_entry_missing", "quiz_screen_lost", "quiz_parse_failed",
+})
 
 # 体力不足要靠**自然恢复**（道具吃完了就只能等），不是等 30s 冷却：一轮搜完
 # 才发现体力不够，等几分钟再试才有意义。其余环境原因用正常冷却——下一轮的
@@ -128,6 +159,12 @@ class WorkerRunner:
         self._max_fail_streak = max_consecutive_failures
         self._max_error_streak = max_consecutive_failures * 2
         self.rounds_done = 0          # 已完成的轮数（成功+失败都算）
+        # 轮次按结局分开计数（GUI 统计条的「完成/失败/中止」读这三个）。
+        # 只有 rounds_done 时界面拿不到「打成了几个」，而它把三种结局混在
+        # 一起，当「完成个数」显示会虚高。三者之和恒等于 rounds_done。
+        self.rounds_ok = 0            # 正常收尾（fail_reason 为 None）
+        self.rounds_failed = 0        # 真失败（附近没寨子/寨子已锁/没找到集结）
+        self.rounds_env = 0           # 环境类中止（_ENV_FAIL_REASONS）
         self._fail_streak = 0         # 连续失败终态计数（成功清零）
         self._error_streak = 0        # 连续 step 异常计数（成功 step 清零）
         self.stopped_reason: str | None = None   # 非 None = 主循环已退出
@@ -177,12 +214,14 @@ class WorkerRunner:
                     if reason in _ENV_FAIL_REASONS:
                         # 环境/资源挡路（见 _ENV_FAIL_REASONS）：不算失败，
                         # 冷却后接着跑，别把它升级成「连续 N 轮失败，收工」
+                        self.rounds_env += 1
                         self._fail_streak = 0
                         logger.warning("worker %s/%s[%s] 第 %s 轮中止：%s"
                                        "（环境/资源问题，不计入连续失败）",
                                        self.instance_id, self.char_id,
                                        self.char_name, self.rounds_done, reason)
                     elif reason:
+                        self.rounds_failed += 1
                         self._fail_streak += 1
                         logger.warning("worker %s/%s[%s] 第 %s 轮失败结束：%s"
                                        "（连续失败 %s/%s）",
@@ -190,6 +229,7 @@ class WorkerRunner:
                                        self.char_name, self.rounds_done, reason,
                                        self._fail_streak, self._max_fail_streak)
                     else:
+                        self.rounds_ok += 1
                         self._fail_streak = 0
                         logger.info("worker %s/%s[%s] 第 %s/%s 轮完成",
                                     self.instance_id, self.char_id,
@@ -211,11 +251,17 @@ class WorkerRunner:
                 self._error_streak = 0
                 self._set_status(self.sm.current)
             except Exception as e:   # 任何异常：截图 + 记录 + 退避后继续（不杀线程）
-                logger.exception("worker %s/%s step failed: %s",
-                                 self.instance_id, self.char_id, e)
+                # 计数先加再记：`_set_status` 对相同状态去重，第 2–6 次连续
+                # 异常在状态流/GUI 里看不见（只留 `error` 这一个值），
+                # 「还剩几次就停机」只有这里能留痕——2026-10-15 实机复盘时
+                # 4 次连击在日志里完全读不出进度。
+                self._error_streak += 1
+                logger.exception("worker %s/%s step failed（连续 %s/%s 次，"
+                                 "达上限即停机）: %s",
+                                 self.instance_id, self.char_id,
+                                 self._error_streak, self._max_error_streak, e)
                 self._save_failure_screenshot()
                 self._set_status("error")
-                self._error_streak += 1
                 if self._error_streak >= self._max_error_streak:
                     self.stopped_reason = (
                         f"连续 {self._error_streak} 次 step 异常（疑似体力耗尽"
@@ -246,10 +292,12 @@ class WorkerRunner:
         if self._max_rounds is not None and self.rounds_done >= self._max_rounds:
             self.stopped_reason = f"已完成 {self.rounds_done} 轮，达到轮数上限"
         elif self._fail_streak >= self._max_fail_streak:
-            # 只统计「找不到可打的城寨」这类真失败；体力/弹窗类中止已在
-            # _run 里排除（见 _ENV_FAIL_REASONS），不会走到这里
+            # 只统计真失败；体力/弹窗类中止已在 _run 里排除（见
+            # _ENV_FAIL_REASONS），不会走到这里。文案必须模式中性——
+            # 寨多多/宝石/答题（如 answer_not_accepted）共用这条出口。
+            last = getattr(self.sm, "fail_reason", None) or "未知原因"
             self.stopped_reason = (f"连续 {self._fail_streak} 轮失败"
-                                   "（附近没有可集结的城寨），停止")
+                                   f"（最后一次：{last}），停止")
         if self.stopped_reason is None:
             return False
         logger.info("worker %s/%s[%s] %s", self.instance_id, self.char_id,

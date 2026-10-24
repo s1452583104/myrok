@@ -8,6 +8,15 @@ from dataclasses import dataclass, field
 
 logger = get_logger(__name__)
 
+# 「归一化卡住」类 fail_reason：画面停在一个本状态机收拾不掉的东西上
+# （全屏面板盖住地图 HUD，联盟旗帜/放大镜都不可见），探针只能报出卡在哪个视图。
+#
+# 定义在这里、而不是各自的 SM 里：member_sm / leader_sm 都要写它，runner 的
+# `_ENV_FAIL_REASONS` 也要按它放行——三处必须是同一个字符串，散着写字面量
+# 改名时不会有任何编译期错误，只会安静地退回「计入连续失败」
+# （test_env_fail_reasons_cover_every_abort_reason 是那个缺口的哨兵）。
+NORMALIZE_STUCK_REASON = "normalize_stuck"
+
 
 @dataclass
 class State:

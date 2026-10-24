@@ -27,7 +27,7 @@ from rok_assistant.core.handle_source import create_handle_source
 from rok_assistant.infra.config import (MAX_MARCH_PRESETS, MAX_TARGET_LEVELS,
                                         MAX_TARGET_LEVEL, MIN_TARGET_LEVEL,
                                         RANGE_BOUNDARY, level_range,
-                                        AppMode, MODE_LABELS,
+                                        AppMode, IMPLEMENTED_MODES, MODE_LABELS,
                                         RAIDER_LABEL, RAIDER_TARGET, RootConfig,
                                         load_config, target_short)
 from rok_assistant.infra.mumu import (
@@ -157,11 +157,13 @@ class ConfigDialog(QDialog):
         self._preview_labels.clear()
         self._instance_lists.clear()
         # 删掉已不存在的实例的记录，别让它在增删几次后越积越多
-        alive = {i["id"] for i in self._data["zhaiduo"]["instances"]}
+        alive = {f"zhaiduo:{i['id']}" for i in self._data["zhaiduo"]["instances"]}
+        alive |= {f"quiz:{i['id']}" for i in self._data["quiz"]["instances"]}
         self._autofilled_names = {k: v for k, v in self._autofilled_names.items()
                                   if k in alive}
 
         # 0=公共 1=寨多多 2=宝石 3=答题 4=YAML；实例页从 5 起
+        # （先全部寨多多实例、再全部答题实例——两种实例页都在固定页之后）。
         #
         # ⚠️ 五个固定页必须先全部 addWidget 完，实例页才能开始加。
         # 否则实例页会插进固定页中间，把 gem/quiz/yaml 整体下移 N 位，
@@ -177,12 +179,17 @@ class ConfigDialog(QDialog):
         z.setData(0, Qt.ItemDataRole.UserRole, ("page", 1))
         self._tree.addTopLevelItem(z)
 
-        for mode in (AppMode.GEM, AppMode.QUIZ):
-            self._stack.addWidget(self._scroll(self._make_locked_page(mode)))
-            it = QTreeWidgetItem([MODE_LABELS[mode]])
-            it.setData(0, Qt.ItemDataRole.UserRole,
-                       ("page", 2 + list((AppMode.GEM, AppMode.QUIZ)).index(mode)))
-            self._tree.addTopLevelItem(it)
+        # 宝石仍是占位页（配置项在演进，见 PROGRESS 欠账 ②）；答题 2026-10-24
+        # 起给真表单——IMPLEMENTED_MODES 里两个模式都能跑，页面不能只说指路。
+        self._stack.addWidget(self._scroll(self._make_locked_page(AppMode.GEM)))
+        it = QTreeWidgetItem([MODE_LABELS[AppMode.GEM]])
+        it.setData(0, Qt.ItemDataRole.UserRole, ("page", 2))
+        self._tree.addTopLevelItem(it)
+
+        self._stack.addWidget(self._scroll(self._make_quiz_page()))
+        q = QTreeWidgetItem([MODE_LABELS[AppMode.QUIZ]])
+        q.setData(0, Qt.ItemDataRole.UserRole, ("page", 3))
+        self._tree.addTopLevelItem(q)
 
         y = QTreeWidgetItem(["YAML 源码（高级）"])
         y.setData(0, Qt.ItemDataRole.UserRole, ("page", 4))
@@ -200,6 +207,15 @@ class ConfigDialog(QDialog):
             item.setData(0, Qt.ItemDataRole.UserRole, ("instance", idx))
             z.addChild(item)
             self._stack.addWidget(self._scroll(self._make_instance_page(idx)))
+
+        # 答题实例页跟在寨多多实例页后面：stack 下标 = 5 + 寨多多实例数 + idx。
+        # 答题「一台模拟器一个号」，页里没有角色表格，只有那一个角色的名字。
+        for idx, inst in enumerate(self._data["quiz"]["instances"]):
+            label = inst.get("name") or inst["id"]
+            item = QTreeWidgetItem([f"答题号  {label}"])
+            item.setData(0, Qt.ItemDataRole.UserRole, ("quiz_instance", idx))
+            q.addChild(item)
+            self._stack.addWidget(self._scroll(self._make_quiz_instance_page(idx)))
 
         self._tree.expandItem(z)          # 实例默认展开，否则用户看不见它们
 
@@ -238,6 +254,11 @@ class ConfigDialog(QDialog):
             self._stack.setCurrentIndex(key)
         elif kind == "instance":
             self._stack.setCurrentIndex(5 + key)
+        elif kind == "quiz_instance":
+            # 答题实例页排在寨多多实例页之后（_reload_tree 的填充顺序），
+            # 所以偏移要加上寨多多的实例数。
+            self._stack.setCurrentIndex(
+                5 + len(self._data["zhaiduo"]["instances"]) + key)
 
     # ---------------- 小部件帮手 ----------------
     def _bind(self, path: tuple, widget: QWidget) -> QWidget:
@@ -389,16 +410,336 @@ class ConfigDialog(QDialog):
         return page
 
     def _make_locked_page(self, mode: AppMode) -> QWidget:
+        """还没有表单的模式：只读页，告诉用户去 config.yaml 哪一段改。
+
+        2026-10-24 起只剩宝石模式走这里（IMPLEMENTED_MODES 里已能跑，页面就
+        不能再说「尚未开放」——那会让用户以为整个模式还不可用；但它的配置项
+        还在演进，表单维护成本高于直接改 YAML，所以指路而不是给表单）。
+        答题模式同日有了真表单（_make_quiz_page）。
+        """
         box = QWidget()
         box.setObjectName(f"page:{mode.value}")
         lay = QVBoxLayout(box)
         lay.addStretch(1)
-        msg = QLabel("该模式尚未开放，暂无配置项")
+        if mode in IMPLEMENTED_MODES:
+            text = (f"{MODE_LABELS[mode]}的实例在 config.yaml 的 "
+                    f"{mode.value}: 段里配置。\n"
+                    f"本页暂不提供表单，可在「YAML 源码（高级）」里直接改。")
+        else:
+            text = "该模式尚未开放，暂无配置项"
+        msg = QLabel(text)
         msg.setObjectName("emptyHint")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setWordWrap(True)                  # 两行文案不换行会被裁成一行
         lay.addWidget(msg)
         lay.addStretch(1)
         return box
+
+    # ---------------- 答题模式页 ----------------
+    def _make_quiz_page(self) -> QWidget:
+        """答题模式配置页：作答策略表单（模拟器实例是左侧子项）。
+
+        覆盖 QuizConfig 除 instances 外的全部字段（spec §5）：
+        运行（轮数/题数/冷却/自动点击）、识别与判定（模糊阈值/绿色判定/重认）、
+        入口点击落点、大模型兜底。instances 按寨多多的先例做成树子项
+        （「答题号 <名字>」），一台一页。
+        """
+        page = QWidget()
+        page.setObjectName("page:quiz")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        outer.setSpacing(theme.SP_LG)
+        q = self._data["quiz"]
+
+        hint = QLabel("答题模拟器（一台一个号）在左侧「答题模式」下添加；"
+                      "本页配置作答策略。")
+        hint.setObjectName("emptyHint")
+        outer.addWidget(hint)
+
+        # ---- 运行 ----
+        run = QGroupBox("运行")
+        rf = QFormLayout(run)
+        rf.setSpacing(theme.SP_SM)
+        rf.addRow("最多轮数", self._spin(("quiz", "max_rounds"),
+                                        q["max_rounds"], 1, 999))
+        rf.addRow("一轮最多答题数", self._spin(("quiz", "max_questions_per_round"),
+                                             q["max_questions_per_round"], 1, 999))
+        rf.addRow("轮间冷却(分钟)", self._spin(("quiz", "round_cooldown_min"),
+                                              q["round_cooldown_min"], 0.0, 1440.0,
+                                              double=True))
+        auto = QCheckBox("自动点击选项")
+        auto.setChecked(bool(q["auto_click"]))
+        auto.setToolTip("取消 = 只认题、只把推荐答案写进日志，不点。"
+                        "第一次真机验证建议先这样对一遍答案。")
+        auto.toggled.connect(lambda v: self._data_set(("quiz", "auto_click"), bool(v)))
+        self._bind(("quiz", "auto_click"), auto)
+        rf.addRow(auto)
+        outer.addWidget(run)
+
+        # ---- 识别与判定 ----
+        rec = QGroupBox("识别与判定")
+        rc = QFormLayout(rec)
+        rc.setSpacing(theme.SP_SM)
+        fuzz = self._spin(("quiz", "fuzzy_threshold"), q["fuzzy_threshold"],
+                          0.0, 1.0, double=True)
+        fuzz.setToolTip("题库模糊匹配的严格程度：题目差一两个字时仍能认出来。"
+                        "调高 = 只认非常像的；调低 = 更容易命中但可能答错。")
+        rc.addRow("题库模糊匹配阈值", fuzz)
+        delay = self._spin(("quiz", "verify_delay"), q["verify_delay"],
+                           0.0, 60.0, double=True)
+        delay.setToolTip("点完选项后等多久再截图看绿色高亮。"
+                         "日志里总学不到新题时，把它调大一点。")
+        rc.addRow("绿色判定等待(秒)", delay)
+        green = self._spin(("quiz", "min_green_ratio"), q["min_green_ratio"],
+                           0.0, 1.0, double=True)
+        green.setToolTip("选项区域里绿色像素占比达到多少算「正确答案」。"
+                         "实测正确选项在 0.97 以上。")
+        rc.addRow("绿色像素占比阈值", green)
+        retries = self._spin(("quiz", "parse_retries"), q["parse_retries"], 1, 10)
+        retries.setToolTip("题干或四个选项没认全时，原地重认几次再放弃本轮。")
+        rc.addRow("读题重试次数", retries)
+        outer.addWidget(rec)
+
+        # ---- 入口点击落点 ----
+        taps = QGroupBox("入口点击（从地图进答题界面）")
+        tv = QVBoxLayout(taps)
+        tv.setSpacing(theme.SP_SM)
+        self._entry_table = QTableWidget(0, 2)
+        self._entry_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._entry_table.setShowGrid(False)
+        self._entry_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self._entry_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        self._entry_table.verticalHeader().setVisible(False)
+        self._entry_table.verticalHeader().setDefaultSectionSize(36)
+        self._entry_table.setHorizontalHeaderLabels(["X 坐标", "Y 坐标"])
+        header = self._entry_table.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setStretchLastSection(True)
+        self._entry_table.setMaximumHeight(4 * 36 + 24)
+        tv.addWidget(self._entry_table)
+        tap_btns = QHBoxLayout()
+        tap_btns.setSpacing(theme.SP_SM)
+        add_tap = QPushButton("＋ 添加落点")
+        theme.make_dashed(add_tap)
+        add_tap.clicked.connect(self._add_entry_tap)
+        del_tap = QPushButton("删除选中落点")
+        theme.make_danger(del_tap)
+        del_tap.clicked.connect(self._delete_entry_tap)
+        tap_btns.addWidget(add_tap)
+        tap_btns.addWidget(del_tap)
+        tap_btns.addStretch(1)
+        tv.addLayout(tap_btns)
+        tap_hint = QLabel("留空 = 只靠屏幕文字（「进入 / 习题演练 / 活动」）找入口。"
+                          "走不通时用 tools/quiz_entry_probe.py 在真机上探一次，"
+                          "把打印的坐标填进来。")
+        tap_hint.setObjectName("emptyHint")
+        tap_hint.setWordWrap(True)
+        tv.addWidget(tap_hint)
+        outer.addWidget(taps)
+        self._refresh_entry_taps_table()
+
+        # ---- 大模型兜底 ----
+        llm = QGroupBox("大模型兜底（题库未命中时才用）")
+        lf = QFormLayout(llm)
+        lf.setSpacing(theme.SP_SM)
+        llm_on = QCheckBox("启用大模型")
+        llm_on.setChecked(bool(q["llm"]["enabled"]))
+        llm_on.setToolTip("关掉 = 纯题库，未命中就随机选，不发任何网络请求。")
+        llm_on.toggled.connect(
+            lambda v: self._data_set(("quiz", "llm", "enabled"), bool(v)))
+        self._bind(("quiz", "llm", "enabled"), llm_on)
+        lf.addRow(llm_on)
+        lf.addRow("API 地址", self._line(("quiz", "llm", "base_url"),
+                                        q["llm"]["base_url"]))
+        lf.addRow("模型", self._line(("quiz", "llm", "model"), q["llm"]["model"]))
+        key = self._line(("quiz", "llm", "api_key"), q["llm"]["api_key"])
+        key.setToolTip("留空 = 不调用大模型。密钥明文写在 config.yaml 里，"
+                       "别把那个文件发给别人。")
+        lf.addRow("API Key", key)
+        lf.addRow("超时(秒)", self._spin(("quiz", "llm", "timeout_s"),
+                                        q["llm"]["timeout_s"], 0.1, 120.0,
+                                        double=True))
+        outer.addWidget(llm)
+
+        # ---- 答题模拟器（实例入口）----
+        inst_box = QGroupBox("答题模拟器")
+        iv = QVBoxLayout(inst_box)
+        iv.setSpacing(theme.SP_SM)
+        inst_hint = QLabel("一台模拟器一个答题号，角色名须与游戏内显示名一致。"
+                           "点左侧「答题模式」下的条目进入配置；"
+                           "还没有答题号时点下面按钮添加。")
+        inst_hint.setObjectName("emptyHint")
+        inst_hint.setWordWrap(True)
+        iv.addWidget(inst_hint)
+        add_inst = QPushButton("＋ 添加答题模拟器")
+        theme.make_dashed(add_inst)
+        add_inst.clicked.connect(self._add_quiz_instance)
+        iv.addWidget(add_inst)
+        outer.addWidget(inst_box)
+
+        outer.addStretch(1)
+        return page
+
+    # ---- 入口点击落点（entry_taps）小编辑器 ----
+    def _refresh_entry_taps_table(self):
+        """按 self._data["quiz"]["entry_taps"] 重建落点表。
+
+        每格一个 QSpinBox（坐标不该让人手打数字——1920×1080 上打错一位
+        就点到了别的 UI 上）。行序即点击顺序，与 config 段语义一致。
+        """
+        taps = self._data["quiz"]["entry_taps"]
+        self._entry_table.setRowCount(len(taps))
+        width = int(self._data["app"].get("screen_width", 1920))
+        height = int(self._data["app"].get("screen_height", 1080))
+        for row, tap in enumerate(taps):
+            for col, value, limit in ((0, tap[0], width), (1, tap[1], height)):
+                spin = QSpinBox()
+                spin.setRange(0, limit)
+                spin.setMaximumWidth(140)
+                spin.setValue(int(value))
+                # valueChanged 在 setValue 时也会触发，写回去的是同一个值，
+                # 幂等；行号在建表时捕获，删行重建后自然重新对齐。
+                spin.valueChanged.connect(
+                    lambda v, r=row, c=col: self._on_entry_tap_changed(r, c, int(v)))
+                self._entry_table.setCellWidget(row, col, spin)
+
+    def _on_entry_tap_changed(self, row: int, col: int, value: int):
+        taps = self._data["quiz"]["entry_taps"]
+        if 0 <= row < len(taps):
+            tap = list(taps[row])
+            tap[col] = value
+            taps[row] = tap
+
+    def _add_entry_tap(self):
+        self._data["quiz"]["entry_taps"].append([0, 0])
+        self._refresh_entry_taps_table()
+
+    def _delete_entry_tap(self):
+        row = self._entry_table.currentRow()
+        taps = self._data["quiz"]["entry_taps"]
+        if 0 <= row < len(taps):
+            taps.pop(row)
+            self._refresh_entry_taps_table()
+
+    def _make_quiz_instance_page(self, idx: int) -> QWidget:
+        """答题模式的一个模拟器页：接入方式 + 那一个角色的名字。
+
+        与寨多多实例页同构（同一套扫描/挑选/测试连接机器），差异只有：
+        没有角色表格（一台恰好一个号），角色名直接摆在表单里。
+        """
+        inst = self._data["quiz"]["instances"][idx]
+        ref = ("quiz", idx)
+        page = QWidget()
+        page.setObjectName(f"page:quiz_instance:{idx}")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(theme.SP_XL, theme.SP_XL, theme.SP_XL, theme.SP_XL)
+        outer.setSpacing(theme.SP_LG)
+        form = QFormLayout()
+        form.setSpacing(theme.SP_SM)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
+
+        outer.addWidget(QLabel(f"模拟器 ID：{inst['id']}"))
+        name = self._line(("quiz", "instances", idx, "name"), inst.get("name", ""))
+        form.addRow("显示名", name)
+
+        mode = QComboBox()
+        mode.setMaximumWidth(220)
+        mode.addItems(["按模拟器选择", "手动填 adb 地址"])
+        self._mode_combos[ref] = mode
+        stack = QStackedWidget()
+
+        picker = QWidget()
+        pv = QVBoxLayout(picker)
+        pv.setContentsMargins(0, 0, 0, 0)
+        lst = QListWidget()
+        lst.setMaximumHeight(110)
+        lst.itemSelectionChanged.connect(lambda r=ref: self._on_instance_pick(r))
+        self._instance_lists[ref] = lst
+        self._bind(("quiz", "instances", idx, "mumu_index"), lst)
+        pv.addWidget(lst)
+        scan_row = QHBoxLayout()
+        scan_btn = QPushButton("扫描模拟器")
+        scan_btn.clicked.connect(self._rescan)
+        scan_hint = QLabel("（先启动模拟器，再点扫描）")
+        scan_row.addWidget(scan_btn)
+        scan_row.addWidget(scan_hint)
+        scan_row.addStretch(1)
+        pv.addLayout(scan_row)
+        stack.addWidget(picker)
+
+        addr = self._line(("quiz", "instances", idx, "adb_address"),
+                          inst.get("adb_address", ""))
+        stack.addWidget(addr)
+
+        is_manual = inst.get("mumu_index") is None
+        mode.setCurrentIndex(1 if is_manual else 0)
+        stack.setCurrentIndex(1 if is_manual else 0)
+        self._wire_access_mode(mode, stack, addr, ref)
+        form.addRow("接入方式", mode)
+        form.addRow("选择模拟器", stack)
+
+        # 一台恰好一个角色（NoRoleInstanceConfig._one_character 保证加载时
+        # 就在）；角色名是匹配游戏内账号的唯一凭据，直接摆进表单。
+        char = inst["characters"][0]
+        char_name = self._line(("quiz", "instances", idx, "characters", 0, "name"),
+                               char.get("name", ""))
+        char_name.setToolTip("必须和游戏内的显示名一致，程序按这个名字认账号。")
+        form.addRow("角色名", char_name)
+        outer.addLayout(form)
+        self._fill_instance_list(ref)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(theme.SP_SM)
+        test_btn = QPushButton("测试连接")
+        test_btn.clicked.connect(lambda _c, r=ref: self._test_connection(r))
+        del_btn = QPushButton("删除本答题模拟器")
+        theme.make_danger(del_btn)
+        del_btn.clicked.connect(lambda _c, i=idx: self._delete_quiz_instance(i))
+        btns.addWidget(test_btn)
+        btns.addWidget(del_btn)
+        btns.addStretch(1)
+        outer.addLayout(btns)
+        self._status_labels[ref] = QLabel()
+        outer.addWidget(self._status_labels[ref])
+        self._set_inst_status(ref, "○ 未测试")
+        self._preview_labels[ref] = QLabel()
+        outer.addWidget(self._preview_labels[ref])
+        return page
+
+    def _add_quiz_instance(self):
+        """添加一台答题模拟器（一台一个号，角色当场建好）。
+
+        id 前缀与首启模板/寨多多同构（mumuN）——答题与寨多多的实例 id 是
+        **两个独立命名空间**（各自校验唯一），所以允许重名。
+        """
+        used = {i["id"] for i in self._data["quiz"]["instances"]}
+        n = 0
+        while f"mumu{n}" in used:
+            n += 1
+        used_ids = {c["id"] for i in self._data["quiz"]["instances"]
+                    for c in i["characters"]}
+        k = 1
+        while f"q{k}" in used_ids:
+            k += 1
+        self._data["quiz"]["instances"].append({
+            "id": f"mumu{n}", "name": f"模拟器{n}", "mumu_index": None,
+            "adb_address": "", "window_title_pattern": "",
+            "characters": [{"id": f"q{k}", "name": "答题号"}]})
+        self._reload_tree()
+
+    def _delete_quiz_instance(self, idx: int):
+        inst = self._data["quiz"]["instances"][idx]
+        answer = QMessageBox.question(
+            self, "删除答题模拟器",
+            f"确定删除答题模拟器 {inst.get('name') or inst['id']}？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._data["quiz"]["instances"].pop(idx)
+        self._reload_tree()
 
     def _pick_file(self, line_edit: QLineEdit, title: str):
         f, _ = QFileDialog.getOpenFileName(self, title, line_edit.text(), "All files (*.*)")
@@ -463,17 +804,7 @@ class ConfigDialog(QDialog):
         mode.setCurrentIndex(1 if is_manual else 0)
         stack.setCurrentIndex(1 if is_manual else 0)
 
-        def _on_mode(i, i2=idx):
-            inst2 = self._data["zhaiduo"]["instances"][i2]
-            if i == 0:
-                inst2["adb_address"] = ""
-                addr.clear()
-                self._on_instance_pick(i2)   # 列表没选中就保持 mumu_index=None
-            else:
-                inst2["mumu_index"] = None
-                inst2["adb_address"] = addr.text()
-        mode.currentIndexChanged.connect(_on_mode)
-        mode.currentIndexChanged.connect(stack.setCurrentIndex)
+        self._wire_access_mode(mode, stack, addr, idx)
         form.addRow("接入方式", mode)
         form.addRow("选择模拟器", stack)
         outer.addLayout(form)
@@ -616,6 +947,51 @@ class ConfigDialog(QDialog):
 
     # ---- 扫描模拟器 / 按名字选中 ----
 
+    # 实例引用（ref）有两种形态：int = 寨多多实例下标；("quiz", idx) = 答题
+    # 实例下标。两种模式的实例页共用下面同一套机器（扫描列表 / 按名字选中 /
+    # 测试连接 / 接入方式接线），差别只是数据落在哪一段。用 ref 而不是把两套
+    # 逻辑各写一份——寨多多页踩过的坑（自动填名不覆盖用户输入、切模式清地址）
+    # 答题页必须一模一样地继承，复制必然漂移。
+    @staticmethod
+    def _is_quiz_ref(ref) -> bool:
+        return isinstance(ref, tuple)
+
+    def _instance_at(self, ref) -> dict:
+        if self._is_quiz_ref(ref):
+            return self._data["quiz"]["instances"][ref[1]]
+        return self._data["zhaiduo"]["instances"][ref]
+
+    def _inst_field_path(self, ref, field: str) -> tuple:
+        if self._is_quiz_ref(ref):
+            return ("quiz", "instances", ref[1], field)
+        return ("zhaiduo", "instances", ref, field)
+
+    def _autofill_key(self, ref, inst_id: str) -> str:
+        """自动填名的记账键。**必须带模式前缀**：两个模式的实例 id 是独立
+        命名空间（都允许 mumu0），不带前缀会互相覆盖对方「这名是自动填的」
+        记录，表现为换选时用户自己敲的名字被冲掉。"""
+        mode = "quiz" if self._is_quiz_ref(ref) else "zhaiduo"
+        return f"{mode}:{inst_id}"
+
+    def _wire_access_mode(self, combo: QComboBox, stack: QStackedWidget,
+                          addr: QLineEdit, ref):
+        """接入方式下拉的公共接线：按模拟器选 / 手动填 adb 地址，二选一。
+
+        切到「按模拟器选择」要清掉手填的地址（没选中任何模拟器时
+        mumu_index 保持 None）；切到手动则清 mumu_index、地址跟输入框走。
+        """
+        def _on(i):
+            inst = self._instance_at(ref)
+            if i == 0:
+                inst["adb_address"] = ""
+                addr.clear()
+                self._on_instance_pick(ref)   # 列表没选中就保持 mumu_index=None
+            else:
+                inst["mumu_index"] = None
+                inst["adb_address"] = addr.text()
+        combo.currentIndexChanged.connect(_on)
+        combo.currentIndexChanged.connect(stack.setCurrentIndex)
+
     def _rescan(self):
         """跑一次 MuMuManager 列出所有模拟器，填进各模拟器页的列表。
 
@@ -639,9 +1015,9 @@ class ConfigDialog(QDialog):
         for idx in list(self._instance_lists):
             self._fill_instance_list(idx)
 
-    def _fill_instance_list(self, idx: int):
+    def _fill_instance_list(self, ref):
         """把缓存里的扫描结果渲染成列表行；失败时显示一行提示让人重试。"""
-        lst = self._instance_lists.get(idx)
+        lst = self._instance_lists.get(ref)
         if lst is None:
             return
         lst.blockSignals(True)     # 重建期间别触发 itemSelectionChanged
@@ -658,7 +1034,7 @@ class ConfigDialog(QDialog):
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 lst.addItem(item)
                 return
-            wanted = self._data["zhaiduo"]["instances"][idx].get("mumu_index")
+            wanted = self._instance_at(ref).get("mumu_index")
             for e in self._scanned:
                 mark = "●" if e["running"] else "○"
                 state = "运行中" if e["running"] else "未启动"
@@ -673,28 +1049,29 @@ class ConfigDialog(QDialog):
         finally:
             lst.blockSignals(False)
 
-    def _on_instance_pick(self, idx: int):
+    def _on_instance_pick(self, ref):
         """列表选中某台模拟器 → 记下它的编号（按名字选，不再手填数字）。"""
-        lst = self._instance_lists.get(idx)
+        lst = self._instance_lists.get(ref)
         if lst is None:
             return
         item = lst.currentItem()
         if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
             return
-        self._data_set(("zhaiduo", "instances", idx, "mumu_index"),
+        self._data_set(self._inst_field_path(ref, "mumu_index"),
                        int(item.data(Qt.ItemDataRole.UserRole)))
         # 显示名留空时顺手填上模拟器名字，省得用户再想一个。
         # 只在「空着」或「还是我们上次填的那个」时才动它：用户点几行比较一下
         # 是常态，若不跟着换，最后会留下「选的是如愿、名字却是 15634025219」；
         # 而用户自己敲的名字则绝不覆盖。
-        inst = self._data["zhaiduo"]["instances"][idx]
+        inst = self._instance_at(ref)
         name = (inst.get("name") or "").strip()
-        if not name or name == self._autofilled_names.get(inst["id"]):
+        key = self._autofill_key(ref, inst["id"])
+        if not name or name == self._autofilled_names.get(key):
             picked = self._instance_name(inst["mumu_index"])
             if picked:
                 inst["name"] = picked
-                self._autofilled_names[inst["id"]] = picked
-                w = self._widgets.get(("zhaiduo", "instances", idx, "name"))
+                self._autofilled_names[key] = picked
+                w = self._widgets.get(self._inst_field_path(ref, "name"))
                 if isinstance(w, QLineEdit):
                     w.setText(picked)
 
@@ -723,15 +1100,15 @@ class ConfigDialog(QDialog):
             kind = "default"
         label.setStyleSheet(f"color:{theme.TAG_FG[kind]};")
 
-    def _test_connection(self, idx: int):
+    def _test_connection(self, ref):
         """spec §5：查模拟器在线 -> adb 截一帧显示缩略图，确认连的是这台。"""
         import cv2
-        inst = self._data["zhaiduo"]["instances"][idx]
+        inst = self._instance_at(ref)
         if inst.get("mumu_index") is None and not inst.get("adb_address"):
             self._set_inst_status(
-                idx, "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
+                ref, "○ 未配置：请先选一台模拟器，或手动填 adb 地址")
             return
-        self._set_inst_status(idx, "● 测试中…")
+        self._set_inst_status(ref, "● 测试中…")
         QApplication.processEvents()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -742,17 +1119,17 @@ class ConfigDialog(QDialog):
                 adb_path=self._data["app"].get("adb_path", "adb"))
             img = handle.capture()
         except Exception as e:  # 连不上/截图失败都要给非程序员能读懂的提示
-            self._set_inst_status(idx, f"○ {self._explain_connect_error(inst, e)}")
-            self._preview_labels[idx].clear()
+            self._set_inst_status(ref, f"○ {self._explain_connect_error(inst, e)}")
+            self._preview_labels[ref].clear()
             return
         finally:
             QApplication.restoreOverrideCursor()
         self._set_inst_status(
-            idx, f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
+            ref, f"● 已连接，截图 {img.shape[1]}x{img.shape[0]}")
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w, _ = rgb.shape
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
-        self._preview_labels[idx].setPixmap(QPixmap.fromImage(qimg).scaled(
+        self._preview_labels[ref].setPixmap(QPixmap.fromImage(qimg).scaled(
             320, 180, Qt.AspectRatioMode.KeepAspectRatio))
 
     def _explain_connect_error(self, inst: dict, e: Exception) -> str:

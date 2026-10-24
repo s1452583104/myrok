@@ -11,6 +11,10 @@ class ActionLedgerEntry:
     troops_out_since: float = 0.0
     last_rally_launched_ts: float = 0.0
     last_fill_ts: float = 0.0
+    # 累计填兵次数（界面统计条读它）。`last_fill_ts` 只留最后一次，
+    # 答不出「一共填了几次」；计数放这里而不是 SM 的 ctx：ctx 随每轮
+    # 重建清空，而统计要跨轮累加。
+    fill_count: int = 0
     written: bool = False
 
 
@@ -73,7 +77,18 @@ class ActionLedger:
         with self._lock:
             e = self._get(char_id)
             e.last_fill_ts = ts
+            e.fill_count += 1
             e.written = True
+
+    def total_fills(self) -> int:
+        """全角色累计填兵次数（GUI 统计条读它）。
+
+        **只读**：遍历已存在的条目，不经过 `_get()`。`_get()` 会为未知
+        char_id 建空条目，那会把 `has_record()` 顶成真 —— 而它是集结门槛的
+        L0 准入判据，为了显示一个数字去撬门槛是拿安全换好看。
+        """
+        with self._lock:
+            return sum(e.fill_count for e in self._entries.values())
 
     def has_record(self, char_id: str) -> bool:
         with self._lock:

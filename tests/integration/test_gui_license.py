@@ -48,7 +48,7 @@ class _FakeController(QObject):
         self.config_loaded = True
         self.started = False
 
-    def characters(self):
+    def characters(self, mode=AppMode.ZHAIDUO):
         return []
 
     def load_config(self):
@@ -66,6 +66,18 @@ class _FakeController(QObject):
 
     def snapshot(self, char_id):
         return None
+
+    def stats(self):
+        # 真控制器一定有这个方法（界面统计条每 2s 读一次）。替身缺了它，
+        # 定时器一响就是在 Qt 槽里抛 AttributeError —— PyQt6 直接 abort 进程。
+        return {}
+
+    def card_view(self):
+        # 真控制器从 config.yaml 读显示模式；替身固定图文。
+        return "image"
+
+    def set_card_view(self, mode):
+        return True
 
 
 @pytest.fixture
@@ -115,12 +127,15 @@ def test_expired_start_does_not_start_controller(monkeypatch, window):
     assert "试用已结束" in w.statusBar().currentMessage()
 
 
-def test_trial_start_still_starts(monkeypatch, window):
+def test_trial_start_still_starts(monkeypatch, window, wait_until):
+    from rok_assistant.gui.main_window import MainWindow
     monkeypatch.setattr(guard_mod, "current_guard",
                         lambda: _StubGuard("trial", 12))
     ctrl = _FakeController()
     w = window(ctrl)
     w._pages[AppMode.ZHAIDUO].start_btn.click()
+    # 启动在后台线程上跑（点击当场返回），要转事件循环等它回来
+    wait_until(lambda: w._phase == MainWindow.RUNNING)
     assert ctrl.started is True
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 import threading
 import time
 import weakref
-from .state_machine import StateMachine
+from .state_machine import NORMALIZE_STUCK_REASON, StateMachine
 from .queue_gate import GateDecision
 from ..core.recognizers.pixel_stat import (
     PRESET_COL_HALF_X, PRESET_CX, PRESET_PITCH, PRESET_TOP, slot_center)
@@ -363,6 +363,14 @@ class LeaderStateMachine(StateMachine):
         # 注册：StateMachine 按注册顺序取第一条 guard 通过的转移）
         self.add_transition("NORMALIZE", "END", self._abort_round,
                             guard=lambda ctx: ctx.get("fail_reason") == _AP_STUCK_REASON)
+        # 归一化收拾不了（探针说不出地图）→ 同上，干净结束本轮。
+        # 2026-10-15 实机 run 12:07：这里以前是 `raise RuntimeError` ——
+        # WorkerRunner 收到 step 异常不重建 SM，只退避 10s 重进 NORMALIZE，
+        # 同一帧反复判，连续 6 次异常把 worker 停掉。与 _abort_round 的注释
+        # 是同一个坑，那条路径 2026-10-12 改了，这条漏网。
+        self.add_transition("NORMALIZE", "END", self._abort_round,
+                            guard=lambda ctx: ctx.get("fail_reason")
+                            == NORMALIZE_STUCK_REASON)
         self.add_transition("NORMALIZE", "SEARCH_FORTRESS", self._search_fortress)
         self.add_transition("SEARCH_FORTRESS", "SELECT_LEVEL", self._select_level)
         self.add_transition("SELECT_LEVEL", "CONFIRM_SEARCH", self._confirm_search)
@@ -487,7 +495,14 @@ class LeaderStateMachine(StateMachine):
             logger.warning("[归一化] 放大镜模板失配但探针确认在地图视图，"
                            "按归一化成功处理")
             return
-        raise RuntimeError(f"归一化失败：卡在[{view.value}]视图")
+        # 干净结束本轮（走上面的 NORMALIZE→END 出口边），不抛异常：
+        # 抛异常会被 WorkerRunner 当成「一次可退避重放的步骤失败」，在同一
+        # 状态下反复重放直到连续 6 次把 worker 停掉。视图名照旧进日志。
+        logger.warning("[归一化] 失败：卡在[%s]视图（放大镜不可见），本轮中止",
+                       view.value)
+        ctx["failed"] = True
+        ctx["fail_reason"] = NORMALIZE_STUCK_REASON
+        self.last_rally_event = None
 
     def _search_fortress(self, ctx):
         if not self._click_retry("search_icon", attempts=3):

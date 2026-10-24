@@ -1,8 +1,13 @@
 """gui/labels.py：界面文案映射 + 校验错误路径翻译。"""
 import pytest
 from rok_assistant.gui.labels import (
-    LABEL_ROLES, ROLE_LABELS, STATE_LABELS, humanize_loc, role_label, state_label,
+    LABEL_ROLES, ROLE_LABELS, STATE_LABELS, humanize_loc, role_label,
+    state_kind, state_label,
 )
+
+# runner.py:_STATE_ZH 里答题模式的七个状态：卡片上不能露英文原值。
+QUIZ_STATES = ("OPEN_QUIZ", "READ", "ANSWER", "VERIFY",
+               "LEARN", "ADVANCE", "COOLDOWN")
 
 
 def test_role_labels_round_trip():
@@ -32,6 +37,18 @@ def test_state_labels_have_no_duplicate_aliases():
     """每个键一个值就够了；同值多键（IDLE 与 LEADER:IDLE）是刻意的，
     但空值/空键一定是写漏了。"""
     assert all(k and v for k, v in STATE_LABELS.items())
+
+
+def test_quiz_states_are_translated_to_chinese():
+    for key in QUIZ_STATES:
+        assert key in STATE_LABELS, f"缺答题状态 {key}"
+        assert state_label(key) != key, f"{key} 没有中文文案"
+
+
+def test_quiz_state_kinds():
+    for key in QUIZ_STATES:
+        want = "warning" if key == "COOLDOWN" else "info"
+        assert state_kind(key) == want, key
 
 
 def test_humanize_loc_translates_keys_and_one_bases_indexes():
@@ -69,3 +86,15 @@ def test_all_anti_detection_fields_have_chinese_labels():
     import dataclasses
     for f in dataclasses.fields(AntiDetectionConfig):
         assert f.name in LOC_LABELS, f"缺 {f.name} 的中文名"
+
+
+def test_gem_role_has_a_label():
+    assert role_label("gem") == "宝石采集"
+    # LABEL_ROLES 是反查表：config_dialog 靠它把下拉文案转回内部值
+    assert LABEL_ROLES["宝石采集"] == "gem"
+
+
+def test_quiz_role_has_a_label():
+    """答题角色的卡片标题要显示「自动答题」，不是英文原文也不是宝石。"""
+    assert role_label("quiz") == "自动答题"
+    assert LABEL_ROLES["自动答题"] == "quiz"

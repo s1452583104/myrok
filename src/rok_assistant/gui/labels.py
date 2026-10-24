@@ -12,7 +12,11 @@ from __future__ import annotations
 from ..infra.config import AppMode, MODE_LABELS
 
 # ---- 分工 ----
-ROLE_LABELS = {"leader": "车头", "member": "成员", "either": "车头或成员"}
+# "gem" 与 "quiz" 都不是 RoleEnum 的成员，只用于界面：宝石/答题模式的角色
+# 没有分工，卡片标题得有个词可显示。config_dialog 的分工下拉是写死的三元组
+# （`for r in ("leader", "member", "either")`），不会因为这些键多出一项。
+ROLE_LABELS = {"leader": "车头", "member": "成员", "either": "车头或成员",
+               "gem": "宝石采集", "quiz": "自动答题"}
 LABEL_ROLES = {v: k for k, v in ROLE_LABELS.items()}
 
 # ---- 兵种 ----
@@ -62,6 +66,14 @@ STATE_LABELS = {
     "MEMBER:END": "成员任务完成",
     # 车头或成员
     "WAIT_RETURN": "等待部队回城",
+    # 答题（文案与 workers/runner.py:_STATE_ZH 保持一致）
+    "OPEN_QUIZ": "打开答题活动",
+    "READ": "读题",
+    "ANSWER": "作答",
+    "VERIFY": "确认绿色高亮",
+    "LEARN": "写入学习题库",
+    "ADVANCE": "等下一题",
+    "COOLDOWN": "本轮结束，冷却中",
     # 通用终态
     "END": "本轮完成",
     "DONE": "本轮完成",
@@ -92,6 +104,7 @@ STATE_KINDS = {
     # 需关注
     "paused": "warning",
     "cooldown": "warning",
+    "COOLDOWN": "warning",
     # 中性（歇着，没在跑）
     "idle": "default",
     "IDLE": "default",
@@ -160,6 +173,20 @@ LOC_LABELS = {
     "locale": "界面语言",
     "max_rounds": "最大轮数",
     "max_consecutive_failures": "连续失败上限",
+    # 答题模式（quiz: 段）
+    "fuzzy_threshold": "题库模糊匹配阈值",
+    "verify_delay": "绿色判定等待",
+    "min_green_ratio": "绿色像素占比阈值",
+    "max_questions_per_round": "一轮最多答题数",
+    "round_cooldown_min": "轮间冷却",
+    "parse_retries": "读题重试次数",
+    "auto_click": "自动点击选项",
+    "entry_taps": "入口点击落点",
+    "llm": "大模型兜底",
+    "base_url": "API 地址",
+    "model": "模型",
+    "api_key": "API Key",
+    "timeout_s": "超时",
 }
 
 

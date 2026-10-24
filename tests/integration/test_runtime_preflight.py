@@ -1,5 +1,6 @@
 import pytest
 
+from rok_assistant.coordination import base_runtime as BR
 from rok_assistant.coordination import runtime as RT
 from rok_assistant.coordination.event_bus import EventBus
 from rok_assistant.infra.config import RootConfig
@@ -27,7 +28,7 @@ def test_start_runs_preflight_before_building_recognizers(monkeypatch):
         order.append("recognizers")
         raise AssertionError("预检失败时不该装配识别器")
 
-    monkeypatch.setattr(RT, "preflight", _fake_preflight)
+    monkeypatch.setattr(BR, "preflight", _fake_preflight)
     monkeypatch.setattr(RT.TemplateRegistry, "load", _fake_load)
     coord = RT.RuntimeCoordinator(RootConfig.model_validate(CFG),
                                   event_bus=EventBus())

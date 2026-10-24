@@ -1,10 +1,14 @@
 from __future__ import annotations
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .anti_detection import AntiDetectionConfig
+from .logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RoleEnum(str, Enum):
@@ -29,9 +33,9 @@ MODE_LABELS = {
     AppMode.QUIZ: "答题模式",
 }
 
-# 已实现的模式。加模式时把它的枚举成员挪进来即可——这是「某个模式做完了」
-# 的唯一开关，界面据此决定开始按钮是否可点、内容区是卡片还是占位。
-IMPLEMENTED_MODES = frozenset({AppMode.ZHAIDUO})
+# 已实现的模式。GuiController.start() 与 ModePage 都读它——**只有这一处**
+# 决定「界面上哪些模式可点」。加模式时改这里 + MODE_LABELS，别去改按钮。
+IMPLEMENTED_MODES = frozenset({AppMode.ZHAIDUO, AppMode.GEM, AppMode.QUIZ})
 
 
 class FillLeader(BaseModel):
@@ -212,13 +216,19 @@ class CharacterConfig(BaseModel):
         return self
 
 
-class InstanceConfig(BaseModel):
+class InstanceBase(BaseModel):
+    """一个模拟器实例的公共字段与校验。
+
+    抽出来是因为宝石模式也要「一台模拟器一个账号」，字段与校验一字不差；
+    复制一份的下场是两份 `_instance_checks` 慢慢漂移（PROGRESS 已知问题 16
+    就是同一类漂移）。**只放两模式共有的东西**：mumu/adb 二选一。
+    """
+
     id: str
     name: str = ""
     mumu_index: int | None = Field(default=None, ge=0)
     adb_address: str = ""
     window_title_pattern: str = ""  # Win32 备用路线；ADB 路线用不到
-    characters: list[CharacterConfig]
 
     @model_validator(mode="after")
     def _instance_checks(self):
@@ -226,6 +236,14 @@ class InstanceConfig(BaseModel):
             raise ValueError(f"Instance {self.id}: mumu_index 或 adb_address 必须填一个")
         if self.mumu_index is not None and self.adb_address:
             raise ValueError(f"Instance {self.id}: mumu_index 与 adb_address 只能填一个")
+        return self
+
+
+class InstanceConfig(InstanceBase):
+    characters: list[CharacterConfig]
+
+    @model_validator(mode="after")
+    def _character_names_unique(self):
         # leader/either 要求在 RootConfig 层校验：member-only 实例可跨实例 fill leader
         names = [c.name for c in self.characters]
         if len(names) != len(set(names)):
@@ -233,8 +251,39 @@ class InstanceConfig(BaseModel):
         return self
 
 
+class NoRoleCharacterConfig(BaseModel):
+    """无分工模式的角色（宝石 / 答题共用）。
+
+    **刻意没有 role / target_levels / march_presets**：这两种模式一台模拟器
+    一个号、流程固定，既没有分工也没有预设槽。把这些字段搬过来只会让
+    「填了但不生效」变成可能——用户配了 role: leader 却什么都不发生，
+    比字段不存在更难查。
+    """
+
+    id: str
+    name: str = Field(min_length=1)
+
+
+class NoRoleInstanceConfig(InstanceBase):
+    characters: list[NoRoleCharacterConfig]
+
+    @model_validator(mode="after")
+    def _one_character(self):
+        if len(self.characters) != 1:
+            raise ValueError(
+                f"Instance {self.id}: 该模式一台模拟器恰好 1 个角色"
+                f"（收到 {len(self.characters)} 个）")
+        return self
+
+
+# 别名：config.yaml 与既有测试零改动。**不要**再写第二套类定义。
+GemCharacterConfig = NoRoleCharacterConfig
+GemInstanceConfig = NoRoleInstanceConfig
+QuizInstanceConfig = NoRoleInstanceConfig
+
+
 class ModeConfig(BaseModel):
-    """一个模式的专属配置。宝石/答题现在是空壳，所以允许空。"""
+    """有分工模式的配置骨架（当前由 ZhaiduoConfig 继承并加严校验）。"""
     instances: list[InstanceConfig] = Field(default_factory=list)
 
 
@@ -243,8 +292,8 @@ class ZhaiduoConfig(ModeConfig):
 
     **校验跟着数据走，不跟着模式走**：原来挂在 RootConfig 上的 _cross_checks
     整块搬到这里，因为「至少一个 leader/either」「填兵目标互相指向」这些规则
-    说的是**角色之间**的关系，而角色只存在于某个模式里。宝石/答题现在没有角色，
-    硬套「至少一个 leader」会让它们当场加载失败。
+    说的是**角色之间**的关系，而角色只存在于某个模式里。宝石/答题的角色没有
+    role 概念，硬套「至少一个 leader」会让它们当场加载失败。
     """
     instances: list[InstanceConfig] = Field(min_length=1)
 
@@ -283,6 +332,93 @@ class ZhaiduoConfig(ModeConfig):
         return self
 
 
+class GemConfig(BaseModel):
+    """宝石模式的专属配置（spec §4.2）。
+
+    字段取值只在这里校验上下界；**具体配几级 / 等几分钟不写进文档**，
+    要看实际值直接读 config.yaml。
+    """
+
+    # 队列图标数 >= 这个值 = 派满了，去等（spec §6.2）
+    queue_limit: int = Field(default=5, ge=1, le=7)
+    # 扫图会话轮数上限（一轮 = 螺旋扫一遍 + 沿途派兵）
+    max_rounds: int = Field(default=10, ge=1)
+    # 回字形向外扩几圈
+    scan_rings: int = Field(default=3, ge=1)
+    # 每步拖拽距离与时长
+    scan_drag_px: int = Field(default=800, ge=100)
+    scan_drag_ms: int = Field(default=500, ge=100)
+    # 队列满后的等待下限/上限（分钟）
+    idle_wait_min: float = Field(default=20.0, gt=0)
+    idle_wait_max: float = Field(default=30.0, gt=0)
+    instances: list[GemInstanceConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _checks(self):
+        if self.idle_wait_max < self.idle_wait_min:
+            raise ValueError(
+                f"gem.idle_wait_max（{self.idle_wait_max}）不能小于"
+                f"idle_wait_min（{self.idle_wait_min}）")
+        ids = [i.id for i in self.instances]
+        if len(ids) != len(set(ids)):
+            raise ValueError("gem 实例 id 重复")
+        char_ids = [c.id for i in self.instances for c in i.characters]
+        if len(char_ids) != len(set(char_ids)):
+            raise ValueError("gem 角色 id 重复")
+        return self
+
+
+class QuizLLMConfig(BaseModel):
+    """答题模式的大模型兜底（OpenAI 兼容接口）。
+
+    `api_key` 是明文落在 config.yaml 里的（绿色包里用户自己保管）；
+    `enabled=False` 时**完全不发网络请求**，题库外直接随机。
+    """
+
+    enabled: bool = False
+    base_url: str = "https://api.deepseek.com/v1"
+    model: str = "deepseek-chat"
+    api_key: str = ""
+    timeout_s: float = Field(default=8.0, gt=0)
+
+
+class QuizConfig(BaseModel):
+    """答题模式的专属配置（spec §5）。
+
+    **不继承 ModeConfig**：那是寨多多专属的 `instances: list[InstanceConfig]`
+    （min_length=1 + leader/member 交叉校验），答题套上去会当场加载失败。
+    与 GemConfig 一样直接继承 BaseModel，自己写 id 唯一性校验。
+
+    字段取值只在这里校验上下界；**具体配几轮/几分钟不写进文档**，
+    要看实际值直接读 config.yaml。
+    """
+
+    instances: list[QuizInstanceConfig] = Field(default_factory=list)
+    max_rounds: int = Field(default=3, ge=1)              # 跑满这么多轮自动收工
+    fuzzy_threshold: float = Field(default=0.72, ge=0.0, le=1.0)  # 题库模糊匹配阈值
+    verify_delay: float = Field(default=1.2, ge=0.0)      # 点完选项后多久截图看绿色
+    min_green_ratio: float = Field(default=0.55, ge=0.0, le=1.0)
+    max_questions_per_round: int = Field(default=30, ge=1)
+    round_cooldown_min: float = Field(default=10.0, ge=0.0)
+    parse_retries: int = Field(default=2, ge=1)           # 同一题最多读几次再中止
+    auto_click: bool = True                               # false = 只记日志不点击
+    # 从地图点进答题活动页的**固定落点序列**（像素），真机探针
+    # tools/quiz_entry_probe.py 测出来后填进来。空列表 = 只靠屏幕文字
+    # （进入 / 习题演练 / 活动）找入口；找不到就报 quiz_entry_missing。
+    entry_taps: list[tuple[int, int]] = Field(default_factory=list)
+    llm: QuizLLMConfig = Field(default_factory=QuizLLMConfig)
+
+    @model_validator(mode="after")
+    def _checks(self):
+        ids = [i.id for i in self.instances]
+        if len(ids) != len(set(ids)):
+            raise ValueError("quiz 实例 id 重复")
+        char_ids = [c.id for i in self.instances for c in i.characters]
+        if len(char_ids) != len(set(char_ids)):
+            raise ValueError("quiz 角色 id 重复")
+        return self
+
+
 class AppConfig(BaseModel):
     screen_width: int = 1920
     screen_height: int = 1080
@@ -302,6 +438,10 @@ class AppConfig(BaseModel):
     # 连续多少轮以失败终态（no_fortress_found/locked_fortress/no_rally_found）
     # 后自动停止；连续 step 异常则按此数的 2 倍计（异常不走终态）
     max_consecutive_failures: int = Field(default=3, ge=1)
+    # 角色卡片的显示模式：image = 图文（截屏缩略图 + 日志），
+    # text = 文字（不展示截屏，卡片变矮、一屏放更多卡）。
+    # 主界面页头的分段开关改它，落盘走 set_card_view()（只动这一行）。
+    card_view: Literal["text", "image"] = "image"
     anti_detection: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
 
 
@@ -315,8 +455,8 @@ LEGACY_FLAT_INSTANCES_HINT = (
 class RootConfig(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     zhaiduo: ZhaiduoConfig
-    gem: ModeConfig = Field(default_factory=ModeConfig)
-    quiz: ModeConfig = Field(default_factory=ModeConfig)
+    gem: GemConfig = Field(default_factory=GemConfig)
+    quiz: QuizConfig = Field(default_factory=QuizConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -338,8 +478,12 @@ class RootConfig(BaseModel):
             raise ValueError(LEGACY_FLAT_INSTANCES_HINT)
         return data
 
-    def instances_for(self, mode: AppMode) -> list[InstanceConfig]:
-        """该模式的实例列表。模式 → 配置段的映射只有这一处。"""
+    def instances_for(self, mode: AppMode) -> list[InstanceBase]:
+        """该模式的实例列表。模式 → 配置段的映射只有这一处。
+
+        返回类型是**公共基类**：寨多多给 `InstanceConfig`、宝石给
+        `GemInstanceConfig`，两者是兄弟，没有共同的子类关系。
+        """
         return getattr(self, mode.value).instances
 
 
@@ -387,3 +531,109 @@ def load_config(path: Path) -> RootConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return RootConfig.model_validate(raw)
+
+
+# ---------------- 单键行内改写 ----------------
+# 为什么不用 yaml.safe_dump 整份重写：config.yaml 是用户手改的文件，里面
+# 有一整块解释 YOLO 权重取舍的注释（还有他自己的排版）。safe_dump 会把注释
+# 全部清掉——切一下显示模式就删掉用户的注释，代价和收益完全不成比例。
+# 配置对话框保存时就是这个行为，那是历史包袱，不该再扩大。
+
+_APP_HEAD_RE = re.compile(
+    r"^(?P<indent>[ \t]*)app[ \t]*:[ \t]*(?:#.*)?(?P<eol>\r?\n)?$")
+_CARD_VIEW_LINE_RE = re.compile(
+    r"^(?P<indent>[ \t]*)card_view[ \t]*:(?P<tail>[^\n\r]*)")
+_DEFAULT_INDENT = 2
+
+
+def set_card_view(path: Path, value: str) -> bool:
+    """把 `app.card_view` 写进 config.yaml，**只动这一行**。
+
+    成功返回 True。文件解析不了、找不到 `app:` 段、或改写后回读值不符，
+    一律返回 False **且不碰文件**——改坏用户的配置比不保存严重得多。
+    调用方在 False 时保留本次会话内的切换生效，只是不持久化。
+    """
+    if value not in ("text", "image"):
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+        raw = yaml.safe_load(text)
+    except (OSError, yaml.YAMLError):
+        logger.warning("读取/解析 %s 失败，card_view 仅本次会话生效", path)
+        return False
+    if not isinstance(raw, dict):
+        logger.warning("%s 顶层不是映射，card_view 仅本次会话生效", path)
+        return False
+
+    new_text = _rewrite_app_key(text, "card_view", value)
+    if new_text is None:
+        logger.warning("%s 里没有顶层 app: 段，card_view 仅本次会话生效", path)
+        return False
+
+    # **先回读确认再写盘**：写坏再回滚，不如压根不写。
+    try:
+        back = yaml.safe_load(new_text)
+    except yaml.YAMLError:
+        logger.warning("改写后的 YAML 解析失败，未写入 %s", path)
+        return False
+    app_node = back.get("app") if isinstance(back, dict) else None
+    if not isinstance(app_node, dict) or app_node.get("card_view") != value:
+        logger.warning("改写未落到 app.card_view，未写入 %s", path)
+        return False
+
+    try:
+        path.write_text(new_text, encoding="utf-8")
+    except OSError:
+        logger.warning("写入 %s 失败，card_view 仅本次会话生效", path)
+        return False
+    return True
+
+
+def _rewrite_app_key(text: str, key: str, value: str) -> str | None:
+    """在文本里定位顶层 `app:` 段，替换/插入 `key: value` 那一行。
+
+    返回新文本；找不到 `app:` 段返回 None。不解析、不重排——只认行。
+    """
+    lines = text.splitlines(keepends=True)
+
+    head = None
+    for i, line in enumerate(lines):
+        m = _APP_HEAD_RE.match(line)
+        if m and not m.group("indent"):        # 只认顶层 app:（缩进过的不是它）
+            head = i
+            break
+    if head is None:
+        return None
+
+    # 段范围：app: 之后，直到第一个顶格的非空非注释行
+    end = head + 1
+    key_indent = None
+    while end < len(lines):
+        body = lines[end].strip()
+        if not body or body.startswith("#"):
+            end += 1
+            continue
+        indent = len(lines[end]) - len(lines[end].lstrip(" \t"))
+        if indent == 0:
+            break
+        if key_indent is None:
+            key_indent = indent
+        end += 1
+
+    indent = " " * (key_indent if key_indent is not None else _DEFAULT_INDENT)
+    eol = "\r\n" if lines[head].endswith("\r\n") else "\n"
+
+    for i in range(head + 1, end):
+        m = _CARD_VIEW_LINE_RE.match(lines[i])
+        # 只认 app 段**直接子级**的那一行：缩进更深的同名键属于别的嵌套段
+        # （YAML 里它挂在上一级键下面），改它等于改错了地方。
+        if not m or m.group("indent") != indent:
+            continue
+        # 保住行尾注释（用户可能写了「# 不要改」这类说明）
+        tail_comment = re.search(r"[ \t]+#.*$", m.group("tail"))
+        suffix = tail_comment.group(0) if tail_comment else ""
+        lines[i] = f"{m.group('indent')}{key}: {value}{suffix}{eol}"
+        return "".join(lines)
+
+    lines.insert(head + 1, f"{indent}{key}: {value}{eol}")
+    return "".join(lines)

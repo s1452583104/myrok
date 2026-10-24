@@ -137,6 +137,45 @@ def test_failure_surfaces_after_retry():
         src.capture()
 
 
+def test_capture_retries_on_undecodable_data():
+    """screencap 退出码 0 但字节解不出图（半帧/传输截断）→ 重连重截一次。
+
+    2026-10-15 实机 run 12:07 12:30:37 出过一次（用户点 Stop 后 3s）：
+    这条路上没有重试（`_run_checked` 只管非零退出），一次抖动就让 step
+    抛异常、白计一次连续失败。
+    """
+
+    class HalfFrameAdb(FakeAdb):
+        def __init__(self):
+            super().__init__()
+            self.screencap_attempts = 0
+
+        def _stdout(self, args):
+            if "screencap" in args:
+                self.screencap_attempts += 1
+                if self.screencap_attempts == 1:
+                    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8   # 截断的 PNG 头
+            return super()._stdout(args)
+
+    fake = HalfFrameAdb()
+    src = AdbHandleSource(adb_address="127.0.0.1:16384", adb_path="adb", _runner=fake)
+    out = src.capture()
+
+    assert out.shape == (4, 4, 3)
+    assert fake.screencap_attempts == 2, "解不出图应重截一次"
+    assert sum(1 for c in fake.calls if "connect" in c) == 2, "重截前应重连"
+
+
+def test_capture_raises_with_byte_count_when_still_undecodable():
+    """两次都解不出才抛，且要带上字节数——否则日志里只有一句「解不出」，
+    读的人分不清是空 stdout、还是几百字节的垃圾。"""
+    fake = FakeAdb(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+    src = AdbHandleSource(adb_address="127.0.0.1:16384", adb_path="adb", _runner=fake)
+    with pytest.raises(RuntimeError, match=r"undecodable.*16 字节"):
+        src.capture()
+    assert sum(1 for c in fake.calls if "screencap" in c) == 2
+
+
 def test_is_alive_true_when_device_listed():
     fake = FakeAdb()
     src = AdbHandleSource(adb_address="127.0.0.1:16384", adb_path="adb", _runner=fake)

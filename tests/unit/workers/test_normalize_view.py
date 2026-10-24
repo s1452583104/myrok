@@ -7,6 +7,7 @@ from rok_assistant.core.handle_source import MockHandleSource
 from rok_assistant.core.recognizers.view_probe import View, ViewVerdict
 from rok_assistant.workers.leader_sm import LeaderStateMachine
 from rok_assistant.workers.member_sm import MemberStateMachine
+from rok_assistant.workers.state_machine import NORMALIZE_STUCK_REASON
 
 _RESIDUAL_IDS = ("war_title", "queue_panel", "rally_attack_popup", "ap_refill",
                  "form_title", "replace_popup", "menu_expanded",
@@ -38,13 +39,33 @@ def _leader(monkeypatch, view, search_icon_matched=False):
     return sm
 
 
-def _member(monkeypatch, view):
+def _member(monkeypatch, view, event_driven=False):
     handle = MockHandleSource(screenshot=np.zeros((100, 100, 3), dtype=np.uint8))
     recs = {k: _rec(matched=False) for k in _RESIDUAL_IDS}
     recs["search_icon"] = _rec(matched=False)
-    sm = MemberStateMachine(handle, recs, fill_target_leaders=[], char_id="c1")
+    sm = MemberStateMachine(handle, recs, fill_target_leaders=[], char_id="c1",
+                            event_driven=event_driven)
     _probe_stub(monkeypatch, sm, view)
     return sm
+
+
+class _Clock:
+    """推进式假时钟。
+
+    本文件既有的用例靠真实时间跑（见文件末尾 `_NoSleepTime` 的说明），但
+    「归一化卡住」路径必然走满 `_wait_for` 的超时（8s + 6s + 2s），不换
+    时钟一条用例要烧十几秒。`_NoSleepTime`（时间恒定）在这里不能用：deadline
+    永远到不了，`_wait_for` 会死循环。
+    """
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
 
 
 def test_probe_map_counts_as_normalized(monkeypatch):
@@ -54,23 +75,76 @@ def test_probe_map_counts_as_normalized(monkeypatch):
     sm._normalize_view({})          # 不得抛异常
 
 
-def test_probe_failure_names_the_view(monkeypatch):
+def test_probe_failure_aborts_cleanly_with_reason(monkeypatch):
+    """探针说不在地图 → 干净结束本轮（写 fail_reason），**不抛异常**。
+
+    2026-10-15 实机 run 12:07（mumu1 13:05:26 起连抛 4 次，上限 6 次）：
+    这里以前是 `raise RuntimeError` —— WorkerRunner 收到 step 异常**不重建
+    SM**，只退避 10s 重进同一个状态，同一个面板被反复点，直到连续 6 次异常
+    把 worker 停掉（用户报的「一直重试，最后失败退出程序」）。
+    与 leader_sm._abort_round 的注释同一个坑，那条路径当时改了，这两处漏网。
+    """
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _Clock())
     sm = _leader(monkeypatch, View.TROOP_FORM, search_icon_matched=False)
-    with pytest.raises(RuntimeError, match=r"卡在\[创建部队\]视图"):
-        sm._normalize_view({})
+    ctx = {}
+    sm._normalize_view(ctx)
+    assert ctx["fail_reason"] == NORMALIZE_STUCK_REASON
+    assert ctx["failed"] is True
 
 
-def test_unknown_view_also_named(monkeypatch):
-    """一个锚点都不命中时说「未知」，不能默认成「地图」。"""
+def test_unknown_view_also_named(monkeypatch, caplog):
+    """一个锚点都不命中时说「未知」，不能默认成「地图」——日志里要能读出
+    卡在哪，只是不再靠异常传播。"""
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _Clock())
     sm = _leader(monkeypatch, View.UNKNOWN, search_icon_matched=False)
-    with pytest.raises(RuntimeError, match=r"卡在\[未知\]视图"):
-        sm._normalize_view({})
+    with caplog.at_level("WARNING"):
+        sm._normalize_view(sm._ctx)
+    assert sm._ctx["fail_reason"] == NORMALIZE_STUCK_REASON
+    assert "未知" in caplog.text
 
 
-def test_member_normalize_failure_names_the_view(monkeypatch):
+def test_leader_normalize_stuck_ends_round(monkeypatch):
+    """卡住 → 下一拍走 NORMALIZE→END 出口边，runner 据此重建 SM 重试。"""
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _Clock())
+    sm = _leader(monkeypatch, View.UNKNOWN, search_icon_matched=False)
+    sm.step()                                  # IDLE -> NORMALIZE（写 fail_reason）
+    assert sm.current == "NORMALIZE" and not sm.is_terminal()
+    sm.step()                                  # NORMALIZE -> END
+    assert sm.is_terminal()
+    assert sm.fail_reason == NORMALIZE_STUCK_REASON
+
+
+def test_member_normalize_stuck_ends_round(monkeypatch):
+    """单发模式成员（either 的内嵌成员）：同样走出口边进 END。"""
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _Clock())
     sm = _member(monkeypatch, View.RALLY_POPUP)
-    with pytest.raises(RuntimeError, match=r"卡在\[集结弹窗\]视图"):
-        sm._normalize_view({})
+    sm.current = "SWITCH_TO_SELF"
+    sm.step()                                  # SWITCH_TO_SELF -> NORMALIZE
+    assert sm.current == "NORMALIZE"
+    sm.step()                                  # NORMALIZE -> END
+    assert sm.is_terminal()
+    assert sm.fail_reason == NORMALIZE_STUCK_REASON
+
+
+def test_wave_member_normalize_stuck_returns_to_idle(monkeypatch):
+    """波次模式成员没有终态：卡住时回 IDLE 等下一个信号，且丢掉起波窗口
+    里残留的信号（留着会在回 IDLE 的瞬间再开一波，与 _wave_done 同因）。"""
+    monkeypatch.setattr("rok_assistant.workers.state_machine.time", _Clock())
+    sm = _member(monkeypatch, View.UNKNOWN, event_driven=True)
+    sm._pending_event = {"instance_id": "i1", "char_id": "c0", "name": "Boss"}
+    sm.step()                                  # IDLE -> WAIT_LAUNCH_EVENT
+    sm.step()                                  # -> SWITCH_TO_SELF
+    sm.step()                                  # -> NORMALIZE（写 fail_reason）
+    assert sm.current == "NORMALIZE"
+    sm.step()                                  # -> IDLE
+    assert sm.current == "IDLE"
+    assert sm.fail_reason == NORMALIZE_STUCK_REASON
+    assert sm._pending_event is None
+
+    # 新一波开始：上一波的中止原因不能挂在新一波的状态上报里
+    sm._pending_event = {"instance_id": "i1", "char_id": "c0", "name": "Boss"}
+    sm.step()                                  # IDLE -> WAIT_LAUNCH_EVENT
+    assert sm.fail_reason is None
 
 
 def test_form_troop_failure_names_the_view(monkeypatch):

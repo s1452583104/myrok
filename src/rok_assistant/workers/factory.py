@@ -3,6 +3,8 @@ from ..infra.config import CharacterConfig, RoleEnum
 from .leader_sm import LeaderStateMachine
 from .member_sm import MemberStateMachine
 from .either_sm import EitherStateMachine
+from .gem_sm import GemStateMachine
+from .quiz_sm import QuizStateMachine
 from .queue_gate import QueueGate
 
 
@@ -47,3 +49,52 @@ def create_state_machine(character: CharacterConfig, handle_source, recognizers:
                                   march_presets=[(p.preset, list(p.troops))
                                                  for p in character.march_presets])
     raise ValueError(f"Unknown role: {character.role}")
+
+
+def create_gem_state_machine(character, handle_source, recognizers, *,
+                             queue_limit: int, scan_rings: int,
+                             scan_drag_px: int, scan_drag_ms: int,
+                             idle_wait_min: float, idle_wait_max: float,
+                             human=None):
+    """宝石模式的状态机工厂。
+
+    与 `create_state_machine` 并列而不是合并：寨子那个按 `character.role`
+    分三路，宝石模式**没有分工**（一个实例一个号，既不开车也不填兵），
+    参数全来自 `GemConfig`。硬塞进同一个函数只会让两边都变难读。
+
+    `ledger` / `rally_tracker` / `event_bus` 一个都不传：宝石模式一台机器
+    一个号、各干各的，没有跨实例通信（spec §2）。
+    """
+    return GemStateMachine(
+        handle_source, recognizers,
+        queue_limit=queue_limit, scan_rings=scan_rings,
+        scan_drag_px=scan_drag_px, scan_drag_ms=scan_drag_ms,
+        idle_wait_min=idle_wait_min, idle_wait_max=idle_wait_max,
+        char_id=character.id, human=human)
+
+
+def create_quiz_state_machine(character, handle_source, recognizers, ocr, bank,
+                              solver, *, verify_delay: float = 1.2,
+                              min_green_ratio: float = 0.55,
+                              max_questions_per_round: int = 30,
+                              round_cooldown_min: float = 10.0,
+                              parse_retries: int = 2, entry_taps=None,
+                              auto_click: bool = True, human=None):
+    """答题模式的状态机工厂。
+
+    与宝石工厂并列而不是合并：答题的依赖比宝石多两个活对象（OCR 引擎、
+    题库/求解器），而且它们**跨轮复用**（协调器建一次）。塞进
+    `create_state_machine` 会让寨子那条路平白多两个必填参数。
+
+    `event_bus` / `ledger` / `rally_tracker` 一个都不传：一台模拟器一个号，
+    没有跨实例通信（spec §2）。
+    """
+    return QuizStateMachine(
+        handle_source, ocr=ocr, bank=bank, solver=solver,
+        recognizers=recognizers,
+        verify_delay=verify_delay, min_green_ratio=min_green_ratio,
+        max_questions_per_round=max_questions_per_round,
+        round_cooldown_min=round_cooldown_min,
+        parse_retries=parse_retries,
+        entry_taps=[tuple(int(v) for v in tap) for tap in (entry_taps or [])],
+        auto_click=auto_click, char_id=character.id, human=human)

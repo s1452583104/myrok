@@ -55,6 +55,7 @@ REQUIRED_RESOURCES = [
     "配置说明.md",          # README-用户.txt 直接指到它，缺了用户就找不到
     "onnxruntime",
     "rapidocr_onnxruntime/models",
+    "templates/quiz/quiz_bank.json",   # 答题模式的地面真值；缺了只能靠 LLM/随机
 ]
 
 # 顶层（app 目录与 _internal）绝不允许出现的名字。

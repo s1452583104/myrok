@@ -19,8 +19,70 @@
   字段语义与约束见 `docs/ACCEPTANCE.md`，`role` 定义见 `infra/config.py` 的 `RoleEnum`。
 - 运行：无头驱动 `_run_goal.py`，banner `max_rounds=10 max_consecutive_failures=3`。
 
-## 当前状态（2026-10-13）
+## 当前状态（2026-10-24）
 
+- **答题模式已实现（2026-10-24，代码级）**：一台模拟器一个号，自动进《万国觉醒》
+  知识问答活动，OCR 还原题干与四个选项 → **随包题库（1076 条）→ 大模型兜底 → 随机**
+  三级作答 → 点完选项后从绿色高亮反推正确答案写回学习题库 → 答到活动结束
+  （或答满题数）算一轮。新增 `core/quiz/`（纯逻辑：认题/题库/验证/LLM/求解）、
+  `workers/quiz_sm.py`（状态机）、`coordination/quiz_runtime.py`（`QuizCoordinator`）、
+  `templates/quiz/quiz_bank.json`（随包题库）、`tools/quiz_acceptance.py`（素材验收）与
+  `tools/quiz_entry_probe.py`（真机入口探针）；`IMPLEMENTED_MODES` 加入 `AppMode.QUIZ`，
+  宝石/答题的配置页改为「去 config.yaml 对应段里配」的指路文案。
+  设计见 `docs/superpowers/specs/2026-10-24-答题模式-design.md`，
+  计划见 `docs/superpowers/plans/2026-10-24-答题模式.md`。
+  **实机一次没跑过**——入口点击路径（`entry_taps`）要先用探针在真机上探一次，
+  再按半自动（`auto_click: false`）对一遍答案，才建议开自动点击。
+- **宝石模式已实现到「能跑」（2026-10-18，代码级，阶段 0–4 完成；
+  2026-10-19 收尾 fix round `373687f` 已合入）**：一台模拟器一个号，
+  数右侧队列 → 长按地图/城堡按钮唤出环形菜单 → 点「资源」进缩放视角 → 回字形螺旋扫图 +
+  YOLO 找宝石 → 点开放大 → 双确认 → 点蓝色「采集」→ 创建部队 → **只点「行军」**，
+  循环到队列派满（`queue_limit` 5–7 队），再等 20~30 分钟下一轮。
+  **新增**：`workers/gem_sm.py`（宝石状态机）、`coordination/base_runtime.py`
+  （从 `RuntimeCoordinator` 抽出的共用骨架 `BaseCoordinator`）、
+  `coordination/gem_runtime.py`（`GemCoordinator`，只覆写 3 个钩子）；
+  `IMPLEMENTED_MODES` 加入 `AppMode.GEM`（`infra/config.py`）。
+  主窗口改成**每模式一本卡册**（`_cards_by_mode` + `_cards` 只读属性指向当前那本），
+  日志/缩略图/显示模式按模式归属；宝石角色没有分工，卡片标题显示「（宝石采集）」
+  （`gui/labels.py` 的 `ROLE_LABELS` 加 `"gem"`——**它不是 `RoleEnum` 成员**，
+  只用于界面文案）。设计见 `docs/superpowers/specs/2026-10-17-宝石模式-design.md`，
+  计划见 `docs/superpowers/plans/2026-10-17-宝石模式.md`。
+  **阶段 5（数据集入库与重训）与阶段 6（真机端到端）未做**——所以宝石模式的 YOLO 腿
+  还挂在旧权重上（那个模型**没有**宝石类），识别只剩模板腿一条腿，
+  **功能可用但识别率低**；**配置界面的宝石页仍锁着**（见下面欠账 ②）。
+  **实机一次没跑过**——阶段 0 的两个探针脚本已写好但没在真机上执行过。
+- **卡片区统计条 + 文字/图文模式 + 启停不卡主线程（2026-10-16，代码级）**：三件事一起做的。
+  ①**统计条**：卡片区上方一条 48px 横条，`完成 3/10 · 失败 1 · 中止 0 · 填兵 2`（数值在前、
+  名称在后，数字走等宽族以免刷新时抖动）。挂在**卡片页内部**而不是整页——空态/未开放页
+  不该顶着一条全 0 战绩。**状态色只承载语义**：0 次失败是中性灰，不是红色。
+  口径由 `RuntimeCoordinator.stats()` 给：`ok/failed/env/rounds/fills/target`，`target` =
+  `max_rounds × 在跑角色数`；填兵次数落在**进程级** `ActionLedger.fill_count`（SM 的 ctx
+  每轮重建会清零，累计数不能放那儿）。轮次按结局分开计数（`runner.rounds_ok/failed/env`），
+  以前只有一个 `rounds_done` 把三种结局混在一起，当「完成个数」显示会虚高。
+  ②**文字/图文模式**：模式页页头的分段开关，写进 `config.yaml` 的 `app.card_view`。
+  文字模式**连帧都不取**（不是画了再藏），卡片 440→278px，日志仍拿 160px 不裁切。
+  落盘走 `infra/config.set_card_view()`——**单键行内改写**，只动那一行、保住文件里的注释
+  （`yaml.safe_dump` 会把 config.yaml 里 7 行权重说明注释全抹掉）；解析不了就返回 False
+  **且不碰文件**，界面保留本次会话内的切换并在状态栏说明「未能写入」。
+  ③**启停卡顿**：主窗口的 `_running_mode` 换成**四相位**（空闲/启动中/运行中/停止中），
+  `_sync_ui_state` 从相位推导全部按钮态与文案（「启动中…」/「停止中…」），启停本身
+  `_run_async()` 丢到后台线程、结果经 Qt 信号回主线程。**点击当场返回**（有测试钉住
+  <0.2s）。另砍掉三笔白烧的活：空闲不取帧、文字模式不取帧、帧字节没变不重画；
+  `snapshot()` 编码前先把 1920×1080 缩到 480×270（卡片只有 298×150，原来白烧 16 倍）。
+  **实机复验未做**——要开窗看统计条版式与点开始/停止的手感（离屏探针只验几何，
+  中文是豆腐块）。详见 HISTORY 同日一节。
+- **日志复盘 run 12:07 的三处缺陷已修（2026-10-15，代码级）**：拿
+  `logs/rok_assistant_20261015_120747.log` 逐条落根因，修了三处、**撤回了一处我自己提错的**。
+  ①**归一化卡住不再抛异常**——两个 `_normalize_view` 的兜底以前是 `raise RuntimeError`，
+  而 runner 收到 step 异常**不重建 SM**、只退避 10s 重进同一状态，连续 6 次就停机
+  （实机已烧掉 4/6）。改成写 `fail_reason=NORMALIZE_STUCK_REASON` 走出口边，该原因进
+  `_ENV_FAIL_REASONS`（不计连续失败，冷却后重建 SM 重收残留面板）。②**成员重试路径补回残留清理**
+  ——`_join_missed` 以前直接回 `OPEN_WAR`，而该子图**没有任何一条边能回 `NORMALIZE`**，
+  一次验证失败就永久失去清理（实机 48 次「联盟旗帜不可见」+ 整波收空全出自这里）。
+  ③`capture()` 对「退出码 0 但字节解不出图」补一次重连重截（以前只覆盖非零退出）。
+  另修两处观测性：`_wave_done` 收波时计入当前目标（此前单目标配置恒报「已填 0 个」）、
+  runner 异常日志带「连续 N/M 次」。**实机复验未做**——三条都是「卡死 → 干净中止」，
+  要真跑到卡住才看得见。详见下表 10-15 一行与 HISTORY 同日一节。
 - **多模式框架已落地（2026-10-13，代码级）**：配置按**模式**分区——顶层 `app:`（公共）+ `zhaiduo:` /
   `gem:` / `quiz:`（各持 `instances`）；模拟器与角色从顶层 `instances:` 移到 **`zhaiduo.instances`**
   （**必填且至少 1 台**），`gem` / `quiz` 可空。**老配置（顶层 `instances:`）硬报错、不自动迁移**
@@ -48,6 +110,26 @@
   `docs/superpowers/specs/2026-10-13-企业级界面重构-design.md`。
   **业务代码零改动**（`infra/` `core/` `workers/` `coordination/` `_run_goal.py` 一行未碰）。
   **实机复验未做**——要开窗看一眼新界面（离屏探针只验了版式与几何）。
+- **全量回归已全绿（2026-10-19）**：`pytest tests/ -q` → **1194 passed / 0 failed / 0 error**
+  （4m14s）。较 10-18 的 1193 **+1**：宝石模式收尾 fix round（`373687f`，7 条已裁决项：
+  注释补全、寨子收工日志降 debug、两处参数透传用例改成非默认输入并断言全部参数、
+  删未用 import、`_on_mode_changed` 改**按需建卡**+一条「切走再切回日志还在」的用例）。
+- **全量回归已全绿（2026-10-18）**：`pytest tests/ -q` → **1193 passed / 0 failed / 0 error**
+  （5m41s）。较上一轮 1098 **+95**：宝石模式这一支（配置层 `GemConfig` 与 `InstanceBase`
+  抽取、manifest 6 条模板 + `gem_dialog_title` OCR、`workers/gem_sm.py` 状态机、
+  `BaseCoordinator` 抽取 + `GemCoordinator`、开放 `IMPLEMENTED_MODES`、
+  主窗口按模式建卡）。**注**：这一支**没换检测权重**，所以**不需要**重跑
+  `tools/calibrate_yolo_threshold.py`（那条「换权重后必须重跑」是通用规则，
+  不是对本次的提醒）；宝石模板自身的阈值标定见下面欠账 ③。
+- **全量回归已全绿（2026-10-16）**：`pytest tests/ -q` → **1098 passed / 0 failed / 0 error**
+  （5m28s）。较上一轮 1019 **+79**：统计条 + 文字/图文模式 + 启停异步化这一支
+  （`test_mode_page_stats` 10 / `test_run_phase` 7 / `test_refresh` 8 / `test_view_mode` 8 /
+  `test_runtime_snapshot` 5 / `test_theme` +5 / `test_controller` +4 / 其余散在各文件的改写）。
+  首跑红过一条 `test_runner_counts_rounds_by_outcome`，**是用例自己的竞态、不是回归**——
+  根因与改法见 HISTORY 同日「收尾跑出的一条假回归」一节。
+- **全量回归已全绿（2026-10-15）**：`pytest tests/ -q` → **1019 passed / 0 failed / 0 error**
+  （4m20s）。较上一轮 1010 **+9**：本次日志复盘 +6（捕获重试 ×2、收波计数、成员重试路径清理、
+  归一化出口边 ×2），其余来自 `test_normalize_view.py` 上一轮未提交的改写。
 - **全量回归已全绿（2026-10-13）**：`pytest tests/ -q` → **1010 passed / 0 failed / 0 error**
   （4m25s；基线 978）。较上一轮 999 **+11**，来自「多模式框架」这一支（新增
   `tests/unit/gui/test_mode_nav.py` 等：导航选中 / 页内按钮归属 / `_sync_ui_state()` 三输入推导 /
@@ -72,6 +154,7 @@
 
   | 日期 | 改动 | 一句话 | 实机 |
   |---|---|---|---|
+  | 10-15 | **归一化卡住改干净中止 + 成员重试路径补清理**（日志复盘） | 复盘 `logs/rok_assistant_20261015_120747.log` 的三处缺陷。①新增 `state_machine.NORMALIZE_STUCK_REASON`，两个 `_normalize_view` 的兜底由 `raise RuntimeError` 改为写 `fail_reason` 走出口边（leader→END，member→END/波次回 IDLE 并丢弃残留信号），并进 `runner._ENV_FAIL_REASONS`——以前抛异常会被 runner 当成可退避重放的步骤失败，**不重建 SM**、同状态重放 6 次即停机。②`_join_missed` 的两条边改回 `NORMALIZE` **并在动作里显式调 `_normalize_view`**（它是「进入 NORMALIZE 那条边」的动作，只切状态不会跑它）——`OPEN_WAR` 子图原先没有一条边能回 NORMALIZE，一次验证失败就永久失去残留清理。③`capture()` 对「退出码 0 但解不出图」补一次重连重截、异常带字节数。观测性：`_wave_done` 收波计入当前目标（单目标配置此前恒报「已填 0 个」）、runner 异常日志带「连续 N/M 次」。**只动 `workers/`（state_machine/leader_sm/member_sm/runner）+ `core/handle_source.py`** | **待实机** |
   | 10-13 | **多模式框架（寨多多/宝石/答题）** | 配置按模式分区：`app:`（公共）+ `zhaiduo`/`gem`/`quiz`（各持 `instances`）；`instances` 从顶层移到 **`zhaiduo.instances`**（必填 ≥1 台，`gem`/`quiz` 可空），**老配置硬报错、不自动迁移**。**模式不落盘**（无 `mode` 键），`GuiController.start(mode)` 唯一入口，`IMPLEMENTED_MODES` 只含寨多多。主窗口改「应用头 + **左导航**（`QListWidget`，每模式一项）+ 每模式一页」，**「开始运行」/「停止」下沉到各模式页头**（不再顶栏全局按钮），`_sync_ui_state()` 从「运行中模式 / 本页模式 / 有无角色」三输入推导全部控件状态（运行中锁导航）；宝石/答题页 LOCKED 占位、开始按钮置灰。配置对话框左树重排（公共配置 / 寨多多模式（含「模拟器 <名字>」实例子项，默认展开）/ 宝石模式 / 答题模式 / YAML 源码（高级））。**只动 `infra/config.py` + `gui/`**（+ 消费方：`coordination/runtime.py` 经 `instances_for(AppMode.ZHAIDUO)` 取实例；`tools/annotate_live.py` 直读 `config.zhaiduo.instances`） | **待开窗复验** |
   | 10-13 | **GUI 企业级界面重构** | 令牌层 `theme.py` + `flow_layout.py`；主窗口四段式（应用头/操作栏/卡片网格/状态栏）**（注：此版式同日被多模式框架改成「应用头 + 左导航 + 模式页」，见上一行；令牌层与 `flow_layout` 保留、`appHeader` 仍在用）** + 空态占位；卡片 300×440 白底描边、状态改标准标签（浅底+深字+圆点）、错误态由整块 `#500` 红底改 1px 红描边；配置/激活弹窗统一表单与按钮层级（每屏主按钮唯一）、配置页内可滚动；顶栏文案统一中文。**只动 `gui/`**，业务零改动 | **待开窗复验** |
   | 10-13 | **城寨等级扩到 1–15 · 两区间互斥** | 目标等级由 1–10 扩到 **1–15**，并把 **1–10 与 11–15 定为两个互斥区间**。`infra/config.py` 加 `RANGE_BOUNDARY=10` / `level_range()`，校验拒绝跨区间混选（报错含「不能混选两个等级区间」）；GUI 改 15 个复选框、两区间视觉分隔、**选满 3 个的锁定只作用于当前区间**（另一区间的框仍可点=换区间）；车头盲降落到**区间下界**（1–10 落 1、11–15 落 11）且点数随之变化（1–10 仍是 `(10-1)+3=12` 点、11–15 是 `(15-11)+3=7` 点），跨区间的等级缓存不再复用、回读跨区间判失败。**区间由账号所在大地图决定，不需要切换**（2026-10-13 用户实机确认：面板上没有可点的区间控件）——原设计的 `_switch_level_range` 与两张区间模板 PNG 已删除（Task 4 取消），不再有模板前置 | **待实机** |
@@ -112,14 +195,14 @@
 | 等待返城 | member END 后轮询队列徽标（30s 间隔 / 25min 上限） | 10-04 十轮闭环 |
 | 下一轮循环 | 回城→终态→runner 冷却 30s→重建 SM→下一轮 | 10-04 rounds=1→10 |
 | 停止条件 | 跑满 10 轮 / 连续 3 轮失败 / 6 连 step 异常断路器 | 设计内路径 |
-| 卡住时的退路 | 补不动体力 / 详情收不掉 → 本轮**干净中止**（`fail_reason`）→ 冷却 → 重建 SM 重来。这三类原因**不计连续失败**（否则一次卡顿 = 收工）；体力不足冷却 300s | 10-12 改，待实机 |
+| 卡住时的退路 | 补不动体力 / 详情收不掉 / **归一化收拾不了** → 本轮**干净中止**（`fail_reason`）→ 冷却 → 重建 SM 重来。这四类原因**不计连续失败**（否则一次卡顿 = 收工）；体力不足冷却 300s | 10-12 改，10-15 补第四类，待实机 |
 
 ### 阈值参考（manifest.yaml，2026-09-16 纯圆重采后实测）
 
 - 队列图标（正 / 负 → 阈值）：`queue_gather_icon` 1.00/≤0.49 (0.75) · `queue_march_icon` 1.000/≤0.47 (0.85)
   · `queue_flag_icon` 1.000/≤0.49 (0.8) · `queue_battle_icon` 0.534-1.0/≤0.466 (0.5)
   · `queue_return_icon` 0.619-1.0/≤0.509 (0.55) · `queue_recall_icon` 1.0,0.719/≤0.506 (0.65)
-  · `queue_fight_icon` 0.644-1.0/≤0.441 (0.6) · `queue_badge` 1.000,0.907/≤0.710 (0.85)
+  · `queue_fight_icon` 0.644-1.0/≤0.441 (0.6) · `queue_badge` 1.000/≤0.489 (0.85，10-16 重裁)
 - 其它：`replace_popup` 1.000/≤0.277 (0.9) · `join_create_btn`/`ap_refill`/`form_title` 均 1.000/≤0.42 (0.9)
 - **搜索面板页签**（模板只裁**文字**，134×32，ROI `[280,310,760,400]`，阈值均 0.9）：
   `tab_fortress`（中间「野蛮人城寨」页签的**灰**态）0.985 / 棕态 0.486、旧 2 页签布局 1.000；
@@ -132,6 +215,13 @@
 - **2026-10-07 防检测加固未改模板图、未换 YOLO 权重**（只新增了无图的 `text_fields.fortress_level`
   文本判据，见 HISTORY 2026-10-07），所以本分支**不需要**重跑 `calibrate_yolo_threshold`——上一条的「换权重后必须重跑」
   是通用规则，不是对本次的提醒。
+- **2026-10-16 `queue_badge` 重裁 46x46 → 30x30**（内缩 8px）：原裁剪四角是地图背景，而
+  `TM_CCOEFF_NORMED` 无掩膜，正样本随背景在 0.786~0.977 摆动、阈值 0.85 卡在摆幅中间——
+  车头行军点击后徽标真出现了却认不到，`_launch` 误判 `rally_rejected`。**阈值 0.85 未动**，
+  只改模板图；锚点测试 `tests/unit/core/test_queue_badge_anchor.py`。同样**不需要**重跑
+  `calibrate_yolo_threshold`（没换权重、YOLO 腿阈值没动），但**下次用
+  `tools/auto_label_yolo.py` 重标数据集时，`queue_badge` 的 GT 框会跟着变小 30x30**
+  （该工具用模板图当标注源）——重训前留意。
 - **2026-10-11 V12 训过但没换**：定标表证明 V12 把 `queue_march_icon` 的 YOLO 腿打死
   （21 帧带 GT 的帧上中位 conf 0.768 → 0.468、过 0.85 的帧 4 → 0），而它换来的新类
   `tab_raider`/`raider_search_tab` 本来就由模板腿兜（现役 V11 权重里连这两个类都没有，
@@ -290,9 +380,42 @@
 15. **有一类游戏界面完全认不出来**（10-12 复查日志发现，**未修**）。09-48 那次
     卡死的四帧是同一个**未识别模式**：红色虚线行军线、城墙/旗帜结构、11公里、
     绿色上箭头、底部「多选」「快捷战斗」。放大镜可见但 `search_icon` 不匹配 →
-    NORMALIZE 永远抛「归一化失败：卡在[未知]视图」→ 攒满 6 次异常停机。
-    **与体力弹窗无关**，是独立缺陷。要修得先拿到这个模式的稳定锚点
-    （`_view_probe` 的 `View` 枚举里没有它），**先实机复现再动手**。
+    NORMALIZE 判「卡在[未知]视图」。**与体力弹窗无关**，是独立缺陷。要修得先拿到这个
+    模式的稳定锚点（`_view_probe` 的 `View` 枚举里没有它），**先实机复现再动手**。
+    **10-15 起后果已降级**：这条路不再抛异常，而是写 `normalize_stuck` 干净中止本轮，
+    该原因不计连续失败（冷却 30s 后重建 SM 重试）——**不会再攒满 6 次异常停机**，
+    但仍会一直认不出来、每轮空转一次，所以缺陷本身依旧存在。
+
+16. **`queue_verdict` 的地图视图证明会被三个边缘判据同时落空卡住**（10-15 日志复盘发现，
+    **未修，缺真机帧**）。车头实机空转 14 分钟：该帧是**地图**视图（`map_btn` 0.997 @
+    (92,995) = 地图的「进入城市」城堡按钮、`search_icon` 0.747），但 `queue_verdict` 的地图
+    证明要求 `alliance_btn` **或** `search_icon` 匹配——简化模式隐藏了联盟旗帜（0.182）、
+    放大镜 0.747 < 0.9、`queue_badge` 0.339，三个独立判据同时落空 → fail-closed 到 30s 宽限
+    放行。**阈值要在一张真机在线帧上定标**，别照着失败帧改（那些帧的 HUD 常被面板盖住）。
+    **另记一处代码库内矛盾**：`queue_verdict` 的注释说 `map_btn` 是**地图**视图的城堡按钮
+    （有测量支持），而 `leader_sm.py`/`member_sm.py` 的 `_normalize_view` 注释说它是**城市**
+    视图的按钮（与测量矛盾）——定标那次一并裁定，别只改一处。
+
+17. **战争面板的 ✕ 点了、面板不开**（10-15 日志复盘发现，**未修，缺真机帧**）。
+    13:06:18/13:07:06/13:07:54 三帧上 `war_title` 匹配、✕ 按真实几何
+    （bbox (1654,46)-(1694,84)，与 (1671,64) 吻合）点到了，面板却一直开着，直到集结准备
+    倒计时在 ~13:07:57 归零才消失。静态帧分不清是「tap 没送达」还是「游戏在集结准备期拒绝
+    关面板」。抖动已排除（σ=8 裁剪 ±24px vs 40×38px 的 ✕ ≈ 2.5%）。**要真机在线复现**。
+
+18. **干净中止的轮次不留截图**（10-16 复查发现，**未修**）。`runner._save_failure_screenshot()`
+    只在 `except` 分支调用（`runner.py:225`），而 `fail_reason` 走 END 的那类**干净中止不留帧**。
+    后果：判据本身就是「某一帧认没认到」的问题（`rally_rejected` / `normalize_stuck` /
+    `no_action_points`）发生时，**恰好那一帧没留下**——10-16 那轮只能拿事后 5 分钟的帧反推。
+    绿色包跑（`user_dir()/recordings`）连这个目录都不存在，一条都没有。
+    修法：终态分支按 `fail_reason` 也存一张（可加节流/上限）。
+
+19. **`_last_thumb` 只按 char_id 存，跨模式会串**（10-18 宝石模式收尾评审发现，**未修，范围窄**）。
+    `main_window.py` 的 `self._last_thumb[char_id] = ...`（收到缩略图时写、`_apply_view_mode`
+    时读）与 `controller.snapshot(char_id)` 都**只认 char_id**，而 worker 的键是
+    `"实例id:角色id"`。宝石与寨子的角色 id 由用户各自起名，两边都叫 `c0` 完全可能。
+    症状：**两个模式同时有同名角色**时，某张卡可能显示另一模式那张卡的最后一帧缩略图。
+    **不做只改键的半修**——真正的修法是把 `snapshot()` 也带上 `mode`（一次 API 变更，
+    牵到 `GuiController` 与所有调用点），单独立项。当前**不同名就不会触发**。
 
 - **授权是离线方案，有硬上限**：三处存储全删干净仍可重置试用（旧延长码还能
   再吃一次）；改 exe 跳过校验可行；记录里的 HMAC 密钥可由主指纹推出来。
@@ -301,12 +424,88 @@
 ## 接下来需要做的
 
 ### 待办
+- [ ] **10-16 `queue_badge` 重裁的实机复验**：跑一轮车头开集结，确认
+      `grep -E "行军点击后队列徽标未出现|rally_rejected"` **不再出现**，且发射成功后账本写入
+      生效（后续日志里集结门槛的判据来源不再是「部队在家」的兜底）。
+      离线已验：旧模板漏检那帧（0.786）在生产链路上现在 **1.000 命中**，无徽标帧 0.436 不命中。
+- [ ] **10-15 三处修复的实机复验**（都是「卡死 → 干净中止」，不真跑到卡住看不见效果）：
+      ①归一化卡住时应出现 `归一化卡住，本轮中止（原因 normalize_stuck）` / `[归一化] 失败：卡在[某]视图`，
+      且**不再有**「连续 6 次 step 异常…停止」，worker 冷却后自己接着跑；
+      ②成员「加入未生效」之后应能重新收敛（`联盟旗帜不可见，重试 (N/10)` 不应再连成 48 条长串），
+      收波日志里的「已填 N 个」应反映真实填兵数（单目标配置下应为 1，不再是 0）；
+      ③`grep -E "连续 [0-9]+/[0-9]+ 次"` 能读出异常连击进度。
+      盯 `grep -E "卡在\[|normalize_stuck|加入未生效|已填" _driver.log`。
 - [ ] **多模式版式的实机复验**：开窗看**左导航**（每模式一项）+ 三个模式页的版式；点宝石/答题页
-      确认**开始按钮置灰**、内容区是「该模式尚未开放」占位；在寨多多模式页确认页头的
+      确认**开始按钮可点**、不再显示「该模式尚未开放」占位（宝石/答题页落到空态，配了角色的
+      答题页应出现「答题号（自动答题）」卡片）；在寨多多模式页确认页头的
       「开始运行」/「停止」与运行中锁导航。**离屏探针只验版式与几何，中文是豆腐块**——真机才看得出。
-- [ ] **宝石 / 答题模式待开发**：两模式现为**纯占位**（导航项 + 占位页），配置段为空壳
-      （`gem.instances` / `quiz.instances` 均为空）。加模式时把 `AppMode` 成员挪进
-      `IMPLEMENTED_MODES`（`infra/config.py`）即可放开开始按钮。
+- [x] ~~**答题模式待开发**~~ —— **2026-10-24 已实现到「能跑」（代码级）**，
+      见「当前状态」第一条；**真机端到端与入口探针仍待做**（见同段的待办）。
+- [ ] **答题模式的真机入口探针**：`tools/quiz_entry_probe.py` 只在真机上跑得出结果
+      （要一帧真实的「地图 / 活动」界面）。跑完把打印的坐标填进 `config.yaml` 的
+      `quiz.entry_taps`；在此之前入口导航只靠屏幕文字，找不到就是干净中止
+      （`quiz_entry_missing`，不计连续失败）。
+- [ ] **答题模式的半自动实机复验**：`quiz.auto_click: false` 跑一轮，把日志里的
+      「[答] 选项（来源：题库/大模型/随机）」与真实正确答案逐条对一遍；
+      认错题或点错位时先把 `-X utf8` 下的 `source=` 分布和 `min_green_ratio` 记下来再调。
+- [x] ~~**宝石模式待开发**~~ —— **2026-10-18 已实现到「能跑」**（阶段 0–4，
+      见「当前状态」的宝石模式一条）。**阶段 5（重训）与阶段 6（真机端到端）仍未做**。
+      下面是执行时确认的欠账，**收尾前必须补**：
+- [ ] **宝石模式欠账 ①（计划 Ruling 12）**：`back_from_detail` 模板**不存在**——
+      计划给的 `142720(1850,530)` 实测是地图资源点标记（蓝盘 + 镐头 + 白「7」徽章），
+      11 张帧里没有返回箭头。manifest 里因此**故意没有**这条：挂一条指向不存在 PNG 的
+      `template_match` 会让 `TemplateRegistry.build_recognizers` 抛 `FileNotFoundError`，
+      拖垮**全部**识别器的装配。Stage 0 抓帧时必须**补抓一张「详情面板已打开」的帧**，
+      在右缘/角落找真实的关闭控件（返回箭头 / X）再裁模板回填。
+- [ ] **宝石模式欠账 ②（spec §9）**：配置界面的宝石页仍是**锁死页**
+      （`gui/config_dialog.py:180` 的 `_make_locked_page`）。计划的 6 个阶段**有意不含**
+      这一步，放开 `IMPLEMENTED_MODES` 之后配置页会与「已实现」状态不一致，收尾前补上。
+- [ ] **宝石模式欠账 ③（Stage 5 复标定）**：两条模板判据**只在单一账号的 11 帧上标定过**，
+      跨账号/跨缩放未验：① `gem_icon` 阈值 **0.77** 落在实测可用区间 `[0.752, 0.796]` 内，
+      区间只有 **0.044 宽**——地图帧上最强的混淆物是白色「圆圈里一个 C」图标（0.75 上下），
+      最弱的真宝石是 0.796（142725，金褐地形）。取证脚本 `_probe_gem_icon_margin.py`，
+      联络表 `recordings/gem_probe/gem_icon_margin_sheet.png`。② `collect_dialog` 的裁切里
+      嵌着**可变文字**（X/Y 坐标、等级数字、储量、采集者/所属联盟的值，约占 2% 面积）。
+      两条都指望 Stage 5 的 YOLO 腿提供召回 + 换账号抓帧后重裁重标。
+- [ ] **宝石模式欠账 ④（spec §8.2 措辞 + 探针路径）**：设计文档 §8.2 对
+      「相对边缘密度」判据的描述与实现有一处措辞不一致（实现取的是**中点**，
+      文档写的是另一个口径）；`_probe_gem_threshold.py` 里还有 **CWD 相对路径**，
+      要改成 `infra/app_paths` 的 `resource_dir()` / `user_dir()`。
+- [ ] **宝石模式欠账 ⑤（`scan_drag_px` 的垂直拖拽会拖出屏外）**：回字形扫图的
+      拖拽中心 `_DRAG_CENTER` 固定，`scan_drag_px` 调大时垂直方向的拖拽起点/终点
+      会落到 1080 之外。**实机跑之前先核一遍**：要么把中心改成随方向偏移，
+      要么在配置层给 `scan_drag_px` 加一个上界校验。
+- [ ] **宝石模式欠账 ⑥（`queue_badge` 多截一帧的性能 + 识别器异常硬化）**：
+      数队列那一步比别处多截一帧；另外 `RecognizerChain` 里某条腿抛异常会冒到
+      `step()` 外面（按「绝不抛异常」的约定应改成记 `fail_reason`）。
+- [ ] **宝石模式欠账 ⑦（`scan_rings` 的覆盖范围）**：`scan_rings` 圈数与实际
+      覆盖面积的关系**只在离线推过**，没在真机上量过；另外要确认
+      **重新进资源视角时地图会不会回到中心**（不回的话第二轮扫的是同一片）。
+- [ ] **宝石模式欠账 ⑧（环形菜单的兜底坐标）**：环形菜单唤出失败时的兜底点
+      `(200,900)` **落在菜单自己的 ROI 里**，有误点风险，实机确认后要么挪走要么删掉。
+- [ ] **宝石模式欠账 ⑨（第二条识别腿的可观测性）**：`RecognizerChain` 的 YOLO 腿
+      判负时**不打日志**，所以「模板没中是因为 YOLO 也没中」这类问题现场看不出来。
+- [ ] **宝石模式欠账 ⑩（长按在 Win32 句柄源下不成立）**：`Win32HandleSource.swipe`
+      忽略 `duration_ms`、把 5 个插值点当 5 次**同点点击**回放——所以「长按唤出环形菜单」
+      在 Win32 下不是长按。**生产走 adb（`config.yaml` 设了 `mumu_index`），所以不影响
+      当前用法**，但换句柄源就会踩。
+- [ ] **宝石模式欠账 ⑪（`ocr_fallback` 的注册表说明）**：manifest 的
+      `ocr_fallback` 机制在 `TemplateRegistry` 里没有注释说明，读代码的人会以为
+      它是模板条目的一部分。
+- [ ] **宝石模式欠账 ⑫（「行军发出去了没」的验证是代理判据）**：
+      `_wait_for_gone("march_btn")` 用「行军按钮消失」代替「行军真的发出去了」——
+      是个代理判据，影响有界且能自愈，但真机上要确认一次。
+- [ ] **尚有 12 个文件没入库**（10-18 收尾时确认，**不是本次改动产生的**，是仓库主人
+      早先已完成的工作）：6 个测试文件
+      `tests/unit/coordination/test_runtime_snapshot.py`、`test_runtime_stats.py`、
+      `tests/unit/core/test_queue_badge_anchor.py`、
+      `tests/unit/gui/test_mode_page_stats.py`、`test_view_mode.py`、
+      `tests/unit/infra/test_config_card_view.py`，加 6 张夹具
+      `tests/fixtures/queue_col_badge_{visible,absent}_{a,b,c}.png`。
+      它们**影响全量测试结果**（本次 1193 passed 里有它们），却不在 `git ls-files` 里。
+      另外 `tests/unit/gui/test_refresh.py` 与 `test_run_phase.py` 原也在这批里，
+      因为它们被宝石模式改到，已随 `16e1685` **一并入库**。
+      **要不要把剩下这 12 个也入库，需要仓库主人拍板。**
 - [ ] **等级 11–15 区间的实机验收**：区间由账号所在大地图决定（1–10 或 11–15），程序
       **不需要切换**（2026-10-13 用户实机确认：搜索面板上没有可点的区间控件），因此
       **不再需要采任何模板 PNG**。配置里配 11–15 目前只对配置校验/GUI 生效，真机链路待验。
@@ -371,6 +570,11 @@
       新日志（`eaten` 数 + 弹窗是否仍在场）能直接区分前两种。
 - [ ] **未知界面模式补锚点**（见已知问题 15）：先实机复现那个「红色虚线行军线 / 多选」
       界面，再决定 `_view_probe` 加哪个 `View`。
+- [ ] **两处「缺真机帧」的定标**（见已知问题 16/17）：①在地图视图**在线**抓一帧（简化模式、
+      联盟旗帜被隐藏的那种），定 `queue_verdict` 地图证明该认哪个锚点（或调 `search_icon` 阈值）；
+      顺带裁定 `map_btn` 到底是地图还是城市视图的按钮（`queue_verdict` 与两个 `_normalize_view`
+      的注释互相矛盾）。②复现「战争面板 ✕ 点了不关」——在集结准备期内连抓帧，看是 tap 丢了
+      还是游戏拒绝关面板。
 - ~~验收剩余 3 项（§3.3/§3.4/§3.5）~~ **已删除**：用户 2026-10-04 裁定这三项不再要求单独验收，
   对应小节已从 `ACCEPTANCE.md` 移除（编号保留跳跃，代码注释仍引用 §3.3/§3.5）。
 
@@ -407,8 +611,9 @@
       **保留** `_run_goal.py` / `_kill_driver.ps1`（启停入口）、`_goal_run*.log`（验收证据）、`_train_v*.log`。
 - [x] 删 09-21/27 标注期的临时探针与渲染图（09-27）。**保留** `logs/_cmp_v8_v9.txt`（v8/v9 同 val 对比）、
       `logs/review/_relabel_*.png`（三遍补标叠框复核）、`logs/_boxcheck/`（污染源原始证据）。
-- [ ] 删临时脚本：`_capture_driver.py`、`_watch_join.py`、`_recapture_templates.py`、`_name_templates.py`、
+- [x] 删临时脚本：`_capture_driver.py`、`_watch_join.py`、`_recapture_templates.py`、`_name_templates.py`、
       `_collect_queues.py`、`_probe_queue.py`（10-04 验集结门槛用，只读打印队列各模板分数）。
+      （这些文件在 10-24 大清理时已不在盘上——更早的清理已删，本条只剩清单价值。）
       **保留**（换权重/换页签时要重跑的验证件）：`_probe_tabchain.py`（用生产识别器链判两个页签）、
       `_probe_march.py`（`queue_march_icon` 的 v11/v12 对照）、
       `_probe_nav.py`（断线后从城内视图导航回 3 页签搜索面板，复刻 NORMALIZE + SEARCH_FORTRESS）、
@@ -417,14 +622,35 @@
       （调生产 `_open_raider_detail()` 验修复，**不点 red_rally**，不发车）。
       **保留** `_probe_cwdfix.py`（解压目录被 adb 守护进程钉住的 A/B 对照，
       见已知问题 13）/ `_probe_cwdlocks.py`（更早的机制单点验证）。
-- [ ] 删 10-12 排查体力弹窗的一次性探针：`_probe_ap*.py`（12 个：模板电池 / 帧差分 /
+- [x] 删 10-12 排查体力弹窗的一次性探针（10-24 执行）：`_probe_ap*.py`（12 个：模板电池 / 帧差分 /
       坐标标定 / ROI 裁剪 / OCR / 失败帧）、`_probe_07.py`、`_probe_boxes.py`、
       `_probe_desc*.py`、`_probe_formfp.py`、`_probe_aptop.py`，
       以及 `logs/_ap*.png`、`logs/_probe_ap*.png`（裁剪图与画了坐标标记的失败帧）。
       **结论已写进 HISTORY 同日一节**（X 坐标 `(1638,120)` 实测正确、09-18 四帧逐像素冻结、
-      09-48 是未识别模式），脚本本身不必留。**删除前先确认没有别的脚本 import 它们。**
-- [ ] 删 `/tmp/kill_driver.ps1`；`recordings/failure_*.png` 酌情清理。
-- [ ] 未跟踪大件：`rok_assistant/datasets/`（5.2 GB 误落地 COCO，只加了 .gitignore、**没删**）。
+      09-48 是未识别模式），脚本本身不必留。删除前已确认没有别的脚本 import 它们。
+- [x] 10-15 复盘用的两个探针（10-24 执行）：`_probe_1015_chain.py` 已删；
+      `_probe_1015_fail.py` **保留**——把 `recordings/failure_*.png`
+      逐帧跑全锚点打分 + `ViewProbe` 判定、只打印数值不读图，下次复盘失败帧直接可用，
+      与 `_probe_nav.py` / `_probe_tabchain.py` 同类的「换阈值/换权重时的验证件」。
+- [x] `recordings/failure_*.png` 酌情清理（10-24 执行）：**9 月失败帧全删**
+      （463 张 ~850MB，问题均已在 9 月修复/冻结），保留 10 月帧（46 张，关联未决项）、
+      `gem_probe/`（欠账 ③ 联络表）、`failure_mumu1_char_jy_20260915_001019.png`
+      （`tools/audit_empty_frames.py` docstring 点名的负样本）；`recordings/diag/`（30MB）同删。
+- [x] 未跟踪大件：`rok_assistant/datasets/`（5.2 GB 误落地 COCO）**10-24 已删**——
+      真实数据集在 `dataset/`（1.2GB，含 images/labels/备份），两者互不相干。
+- [x] **10-24 上下文经济性大清理**（用户要求「剔除无用资源，避免占据上下文」）：
+      ① `logs/annotate/`（22MB 生成物）、`logs/_cap_raider/`（84MB 劫掠者抓帧，模板已裁）、
+      `logs/review/` 除 3 张 `_relabel_*.png` 外的 271 张覆盖图（421MB，可由 `raw_imgs/` 经
+      `tools/ingest_raw_imgs.py` 重生）——logs 合计 546MB→49MB；
+      ② 根目录 12 个不再引用的 ROI 截图（`_old_slider_roi/_panel_roi/_range_roi/_slider_roi/
+      _bak_queue_badge_46x46`）与 38 个一次性探针（geom/tabs/text/tmpl/old/x/lvl/pred/
+      perframe/panel/review/mktpl/runner_counts/roundtiming 系）；
+      ③ `.pytest_tmp/`（已知问题 7 的毒化源）与根 `__pycache__/`。
+      **保留**：`_q_16*.png`（HISTORY 10-16 queue_badge 重裁证据表点名的 4 帧）、
+      `_t_*.png`（未决项 17 的静态帧）、`logs/_probe_gate_live_mumu0.png`（未决项 16 的帧）、
+      `_probe_mkfix.py`（`test_queue_badge_anchor.py` 点名的夹具再生脚本）、
+      全部 `_calib_*.txt` / `_cmp_*.txt` / `_boxcheck/` / `_train_v*.log`。
+      清理后根目录条目 ~130→62，仓库总体积约 -6.6GB。
 
 ### v2 候选（未排期）
 同实例多账号切换（switcher 已有，每实例单角色限制在 either_sm）· 采集宝石 / 自动用体力道具 ·
@@ -514,8 +740,9 @@ grep -E "集结门槛" _driver.log | sort | uniq -c | sort -rn
 #   期望「放行（判据来源 ledger）」/「grace」并带原因；不再有「未知队列图标已持续 900.0s，放行搜索」
 #   已知例外：填兵方那一号仍走 900s 宽限（见「计划 A 已知缺口」）
 
-grep -E "卡在\[" _driver.log | tail
+grep -E "卡在\[|normalize_stuck" _driver.log | tail
 #   形如「归一化失败：卡在[创建部队]视图」；一轮跑完没出现也算通过
+#   10-15 起后面会跟一句「本轮中止」——**不再抛异常、不再攒 6 次异常停机**
 #   若「卡在[」明显变多 → 恢复 _search_fortress 的 3 次重试（Ruling 18）
 
 grep -E "预设槽|预设列基准" _driver.log | tail

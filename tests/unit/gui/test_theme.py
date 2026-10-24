@@ -223,3 +223,48 @@ def test_apply_theme_switches_to_fusion(qapp):
 def test_apply_theme_sets_body_font_size(qapp):
     theme.apply_theme(qapp)
     assert qapp.font().pixelSize() == theme.FONT_SIZE_BODY
+
+
+# ---------------------------------------------------------------- 统计条
+def test_stat_value_style_maps_each_kind_to_its_own_color():
+    """五种语义各有各的色。
+
+    并成同一个色就等于「失败」「中止」在界面上长得一样 —— 状态色存在的
+    唯一理由就是区分语义。
+    """
+    kinds = ["primary", "error", "warning", "default", "muted"]
+    styles = {k: theme.stat_value_style(k) for k in kinds}
+    assert len(set(styles.values())) == len(kinds)
+    for s in styles.values():
+        assert s.startswith("color:")
+
+
+def test_stat_value_style_unknown_kind_falls_back_to_default():
+    """未知语义回落到中性色，不抛 —— 界面不该因新语义变空白。"""
+    assert theme.stat_value_style("nope") == theme.stat_value_style("default")
+
+
+def test_stat_value_style_pulls_from_the_color_tokens():
+    """色值只能来自令牌（本模块是「全仓库色值唯一出处」）。"""
+    assert theme.PRIMARY in theme.stat_value_style("primary")
+    assert theme.ERROR in theme.stat_value_style("error")
+    assert theme.WARNING in theme.stat_value_style("warning")
+
+
+# ---------------------------------------------------------------- 分段开关
+def test_make_segment_marks_and_makes_checkable(qapp):
+    """分段按钮必须 checkable —— 不可勾选的话 `:checked` 选择器永远不成立，
+    选中态静默消失且不报错。"""
+    btn = QPushButton("文字模式")
+    theme.make_segment(btn)
+    assert btn.property("segment") is True
+    assert btn.isCheckable() is True
+
+
+def test_qss_declares_segment_and_stats_selectors():
+    """选择器名写错就退化成普通控件，且不会报错 —— 这里钉住名字。"""
+    qss = theme.QSS.template
+    assert 'QPushButton[segment="true"]:checked' in qss
+    assert "#statsBar" in qss
+    assert "QLabel#statsValue" in qss
+    assert "QLabel#statsName" in qss

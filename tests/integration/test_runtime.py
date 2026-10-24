@@ -252,7 +252,7 @@ def _fake_runner_coordinator(tmp_path, runner_cls=FakeRunner):
     FakeRunner.instances = []
     with patch("rok_assistant.coordination.preflight.create_handle_source",
                return_value=fake_handle), \
-         patch("rok_assistant.coordination.runtime.WorkerRunner", runner_cls):
+         patch("rok_assistant.coordination.base_runtime.WorkerRunner", runner_cls):
         coord = RuntimeCoordinator(cfg, event_bus=bus, template_dir=tmp_path)
         coord.start()
         yield coord
@@ -293,7 +293,7 @@ def test_partial_start_failure_rolls_back(tmp_path):
     BoomRunner.made = 0
     with patch("rok_assistant.coordination.preflight.create_handle_source",
                return_value=_fake_handle()), \
-         patch("rok_assistant.coordination.runtime.WorkerRunner", BoomRunner):
+         patch("rok_assistant.coordination.base_runtime.WorkerRunner", BoomRunner):
         coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
         with pytest.raises(RuntimeError):
             coord.start()
@@ -325,7 +325,7 @@ def test_start_error_names_the_emulator_that_failed(tmp_path, monkeypatch):
         return _fake_handle()
 
     with patch("rok_assistant.coordination.preflight.create_handle_source", _factory), \
-         patch("rok_assistant.coordination.runtime.WorkerRunner", FakeRunner):
+         patch("rok_assistant.coordination.base_runtime.WorkerRunner", FakeRunner):
         coord = RuntimeCoordinator(cfg, event_bus=EventBus(), template_dir=tmp_path)
         with pytest.raises(RuntimeError) as ei:
             coord.start()

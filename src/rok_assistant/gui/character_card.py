@@ -22,6 +22,9 @@ _PAD = theme.SP_LG
 # 缩略图宽度 = 卡片宽 - 左右内边距 - 左右各 1px 描边
 _THUMB_W = _CARD_W - 2 * _PAD - 2
 _THUMB_H = 150
+# 文字模式：整块截屏（含它与下一段之间的间距）拿掉，省下的高度还给卡片区
+# —— 一屏能多放一张卡，多号时明显更好用。
+_CARD_H_TEXT = _CARD_H - _THUMB_H - theme.SP_MD
 
 
 class CharacterCard(QFrame):
@@ -30,6 +33,7 @@ class CharacterCard(QFrame):
         self.setObjectName("characterCard")
         self.setFixedSize(_CARD_W, _CARD_H)
         self.error_state = False
+        self._view_mode = "image"
         self._build(name, role, status)
 
     def _build(self, name, role, status):
@@ -83,6 +87,17 @@ class CharacterCard(QFrame):
 
         self._apply_tag(state_kind(status))
 
+    # ---------------- 显示模式 ----------------
+    def set_view_mode(self, mode: str) -> None:
+        """`"image"` = 图文（截屏 + 日志）；`"text"` = 文字（不展示截屏）。
+
+        文字模式换的是**取景方式**，不是信息量：状态标签、日志、错误态照常。
+        """
+        self._view_mode = mode
+        text_mode = mode == "text"
+        self.thumbnail.setVisible(not text_mode)
+        self.setFixedSize(_CARD_W, _CARD_H_TEXT if text_mode else _CARD_H)
+
     # ---------------- 状态 ----------------
     def _apply_tag(self, kind: str) -> None:
         # 选择器限定到 #statusTag：裸声明会连子控件（圆点、文字）一起刷成同底色
@@ -111,6 +126,10 @@ class CharacterCard(QFrame):
         bar.setValue(bar.maximum())
 
     def set_thumbnail(self, img_bytes: bytes) -> None:
+        # 文字模式兜一道：取帧的短路在主窗口那侧（文字模式根本不调
+        # snapshot），两条路径任一漏了，用户都会看到一张不该出现的截屏。
+        if self._view_mode == "text":
+            return
         pix = QPixmap()
         pix.loadFromData(img_bytes)
         self.thumbnail.setPixmap(pix.scaled(

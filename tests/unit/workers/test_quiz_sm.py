@@ -1,0 +1,301 @@
+"""答题状态机：一轮 = 进答题界面 → 逐题作答 → 活动结束 → 冷却。
+
+测试用「按帧查表」的假 OCR（帧对象 → 块列表），不用真实模型：
+这里要验的是转移与判据，解析本身在 tests/unit/core/test_quiz_screen.py。
+"""
+import json
+import random
+
+import numpy as np
+import pytest
+
+from rok_assistant.core.quiz.bank import QuizBank
+from rok_assistant.core.quiz.screen import parse_question
+from rok_assistant.core.quiz.solver import Solver
+from rok_assistant.core.recognizer import BBox
+from rok_assistant.workers.quiz_sm import (
+    ANSWER_NOT_ACCEPTED_REASON, QUIZ_ENTRY_MISSING_REASON,
+    QUIZ_PARSE_FAILED_REASON, QUIZ_SCREEN_LOST_REASON, QuizStateMachine,
+)
+from rok_assistant.workers.runner import _ENV_FAIL_REASONS
+
+W, H = 2664, 1200
+MID = W // 2
+
+
+def _blocks(*rows):
+    return [(BBox(*r[:4]), r[4], r[5]) for r in rows]
+
+
+# 真实帧的几何（活动页 / Q1 / Q2），只保留有判据意义的块
+ACTIVITY = _blocks(
+    (1160, 24, 1507, 114, "国士无双", 0.78),
+    (1547, 388, 1688, 428, "习题演练", 0.73),
+    (399, 431, 530, 468, "习题演练", 0.76),
+    (687, 431, 817, 468, "习题演练", 0.74),
+    (1585, 878, 1648, 915, "进入", 0.67),
+)
+Q1 = _blocks(
+    (1092, 60, 1485, 116, "国士无双-复试", 0.75),
+    (752, 393, 809, 436, "Q1", 0.63),
+    (832, 394, 1197, 431, "统帅贝利撒留的昵称是？", 0.89),
+    (823, 597, 1032, 631, "最后的罗马人", 0.81),
+    (1554, 594, 1700, 634, "战火双刃", 0.79),
+    (821, 756, 965, 793, "天选之豹", 0.74),
+    (1557, 758, 1767, 791, "不的复兴者", 0.81),
+    (1357, 916, 1608, 948, "答题剩余时间：9s", 0.82),
+    (2245, 1151, 2316, 1192, "放弃", 0.67),
+)
+Q2 = _blocks(
+    (1092, 60, 1484, 116, "国士无双-复试", 0.75),
+    (749, 389, 813, 438, "Q2", 0.66),
+    (834, 397, 1686, 429, "联盟领土界面中，领土资源最多能储存多长时间的产量？", 0.90),
+    (818, 595, 936, 633, "24小时", 0.79),
+    (1555, 595, 1672, 633, "36小时", 0.74),
+    (817, 754, 937, 794, "12小时", 0.80),
+    (1551, 754, 1671, 795, "18小时", 0.80),
+    (1348, 914, 1616, 948, "答题剩余时间：15s", 0.86),
+)
+Q1_TEXT = parse_question(Q1, W).text
+Q2_TEXT = parse_question(Q2, W).text
+
+SHIPPED = [{"no": 1, "q": Q1_TEXT, "a": "最后的罗马人"}]
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, dt=1.0):
+        self.now += dt
+
+
+class ScriptedHandle:
+    """按顺序返回预置帧；用完后一直返回最后一帧。"""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self._i = 0
+        self.clicks = []
+
+    def capture(self):
+        frame = self._frames[min(self._i, len(self._frames) - 1)]
+        self._i += 1
+        return frame
+
+    def click(self, x, y, anchor=None, rapid=False):
+        self.clicks.append((int(x), int(y), anchor))
+
+    def is_alive(self):
+        return True
+
+
+class FrameOcr:
+    """帧对象 → OCR 块。同一帧永远读到同样的块（不按调用次数排队，稳）。"""
+
+    def __init__(self, table):
+        self._table = table
+
+    def detect_text(self, frame):
+        return list(self._table[id(frame)])
+
+
+def _frame(blocks, green=None, w=W, h=H):
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    if green is not None:
+        box = parse_question(blocks, w).options[green][1]
+        frame[box.y1:box.y2, box.x1:box.x2] = (0, 200, 0)
+    return frame
+
+
+def _bank(tmp_path) -> QuizBank:
+    shipped = tmp_path / "shipped.json"
+    shipped.write_text(json.dumps(SHIPPED, ensure_ascii=False), encoding="utf-8")
+    bank = QuizBank(shipped_path=shipped, learned_path=tmp_path / "learned.json")
+    bank.load()
+    return bank
+
+
+def _make(tmp_path, script, *, bank=None, solver=None, **kw):
+    """script: [(blocks, green_letter | None), ...] → (sm, handle, clock, bank)"""
+    frames = [_frame(b, g) for b, g in script]
+    table = {id(f): b for f, (b, _g) in zip(frames, script)}
+    handle = ScriptedHandle(frames)
+    clock = _Clock()
+    bank = bank or _bank(tmp_path)
+    solver = solver or Solver(bank, rng=random.Random(0))
+    sm = QuizStateMachine(handle, FrameOcr(table), bank, solver,
+                          clock=clock, sleeper=clock.advance,
+                          rng=random.Random(0), **kw)
+    return sm, handle, clock, bank
+
+
+def _drive(sm, clock, max_steps=400, dt=1.0):
+    for _ in range(max_steps):
+        if sm.is_terminal():
+            return
+        clock.advance(dt)
+        sm.step()
+    raise AssertionError(f"没在 {max_steps} 步内结束（当前 {sm.current}）")
+
+
+def _letter_of(blocks, click) -> str:
+    """点在哪条选项上。"""
+    q = parse_question(blocks, W)
+    for letter, (_text, box) in q.options.items():
+        if box.center() == (click[0], click[1]):
+            return letter
+    raise AssertionError(f"点击点 {click[:2]} 不落在任何选项上")
+
+
+def test_one_round_answers_two_questions_then_ends_cleanly(tmp_path):
+    script = [
+        (Q1, None),        # NORMALIZE：已在答题页
+        (Q1, None),        # OPEN_QUIZ：确认在答题页
+        (Q1, None),        # READ：第 1 题
+        (Q1, "A"),         # VERIFY：绿色 A（"最后的罗马人"）
+        (Q2, None),        # ADVANCE：翻到第 2 题
+        (Q2, None),        # READ：第 2 题
+        (Q2, "B"),         # VERIFY：绿色 B
+        (ACTIVITY, None),  # ADVANCE：读不出题 → 等 → 判本轮结束
+    ]
+    sm, handle, clock, bank = _make(tmp_path, script, round_cooldown_min=0.0)
+    _drive(sm, clock)
+
+    assert sm.current == "END"
+    assert sm.fail_reason is None
+    assert len(handle.clicks) == 2
+    assert all(c[2] == "quiz_option" for c in handle.clicks)
+    # 第 1 题：题库给 A（"最后的罗马人"；brief 原文误写 B）
+    assert _letter_of(Q1, handle.clicks[0]) == "A"
+    # 第 2 题：题库没有、LLM 关闭 → 随机（种子固定）
+    expected = random.Random(0).choice(["A", "B", "C", "D"])
+    assert _letter_of(Q2, handle.clicks[1]) == expected
+    # 第 2 题学到的必须是绿色那项（B. 36小时）
+    assert bank.lookup(Q2_TEXT).answer == "36小时"
+    # 随包条目权威：第 1 题不会被学习覆盖
+    assert bank.lookup(Q1_TEXT).answer == "最后的罗马人"
+
+
+def test_round_ends_on_the_activity_page_without_failure(tmp_path):
+    """活动结束后停在活动页（标题还是「国士无双」）：这是正常收尾，不是失败。"""
+    sm, _handle, clock, _bank = _make(
+        tmp_path, [(Q1, None), (Q1, None), (Q1, None), (Q1, "A"),
+                   (ACTIVITY, None)], round_cooldown_min=0.0)
+    _drive(sm, clock)
+    assert sm.current == "END" and sm.fail_reason is None
+
+
+def test_unparseable_question_before_any_answer_aborts_cleanly(tmp_path):
+    sm, handle, clock, _bank = _make(
+        tmp_path, [(Q1, None), (Q1, None), ([], None)], parse_retries=2)
+    _drive(sm, clock)
+    assert sm.current == "END"
+    assert sm.fail_reason == QUIZ_PARSE_FAILED_REASON
+    assert handle.clicks == []
+
+
+def test_persistent_net_error_popup_aborts_cleanly_and_boundedly(tmp_path):
+    """断网弹框点不掉：有限次尝试后按环境类原因收尾，绝不无限重试。
+
+    回归点（task-7 review round 1）：READ 的断网分支原先在 `_read_waits += 1`
+    之前 return，弹框一直被识别就会每秒点一次、永不写 fail_reason。
+    """
+    from rok_assistant.infra.anti_detection import (
+        AntiDetectionConfig, HumanProfile,
+    )
+
+    class _AlwaysMatched:
+        matched = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def recognize(self, frame):
+            self.calls += 1
+            return self
+
+    rec = _AlwaysMatched()
+    prof = HumanProfile(AntiDetectionConfig(debug_no_jitter=True))
+    prof.jitter = lambda base: 0.0   # _click_net_error 内部的 1.5s 等待不真睡
+    sm, handle, clock, _bank = _make(
+        tmp_path, [(Q1, None), (Q1, None), ([], None)],
+        recognizers={"net_error_confirm": rec}, parse_retries=2, human=prof)
+    _drive(sm, clock)
+
+    assert sm.current == "END"
+    assert sm.fail_reason in (QUIZ_SCREEN_LOST_REASON, QUIZ_PARSE_FAILED_REASON)
+    # 点击必须有界：每次重试最多 `_click_net_error` 内部的 3 次
+    assert 0 < len(handle.clicks) <= 3
+    assert all(c[2] is None for c in handle.clicks)   # 没有乱点选项
+    assert rec.calls <= 4                             # 识别次数同样有界
+
+
+def test_entry_missing_aborts_cleanly(tmp_path):
+    """屏幕上既没有入口文字、entry_taps 又是空的：报入口缺失，绝不乱点。"""
+    sm, handle, clock, _bank = _make(tmp_path, [(Q1, None), ([], None)])
+    _drive(sm, clock)
+    assert sm.current == "END"
+    assert sm.fail_reason == QUIZ_ENTRY_MISSING_REASON
+    assert handle.clicks == []
+
+
+def test_entry_taps_are_used_when_no_text_entry_is_found(tmp_path):
+    script = [(Q1, None), ([], None), (Q1, None)]
+    sm, handle, clock, _bank = _make(tmp_path, script, entry_taps=[(100, 200)])
+    for _ in range(40):
+        clock.advance(1.0)
+        sm.step()
+    assert (100, 200, "quiz_entry_tap") in handle.clicks
+
+
+def test_screen_that_never_advances_is_a_real_failure(tmp_path):
+    """点了选项后画面纹丝不动 → answer_not_accepted，且**计入连续失败**。"""
+    sm, handle, clock, _bank = _make(
+        tmp_path, [(Q1, None), (Q1, None), (Q1, None), (Q1, "A")])
+    _drive(sm, clock)
+    assert sm.current == "END"
+    assert sm.fail_reason == ANSWER_NOT_ACCEPTED_REASON
+    assert ANSWER_NOT_ACCEPTED_REASON not in _ENV_FAIL_REASONS
+    assert len(handle.clicks) == 1
+
+
+def test_env_reasons_are_not_counted_as_failures():
+    for reason in (QUIZ_ENTRY_MISSING_REASON, QUIZ_SCREEN_LOST_REASON,
+                   QUIZ_PARSE_FAILED_REASON):
+        assert reason in _ENV_FAIL_REASONS
+
+
+def test_cooldown_is_non_blocking_and_ends_after_the_window(tmp_path):
+    """冷却窗口**不 sleep**：Stop 要能在 2s 内 join 上（与宝石 WAIT 同套路）。"""
+    sm, _handle, clock, _bank = _make(
+        tmp_path, [(Q1, None), (Q1, None), (Q1, None), (Q1, "A"),
+                   (ACTIVITY, None)], round_cooldown_min=10.0)
+    for _ in range(200):
+        if sm.current == "COOLDOWN":
+            break
+        clock.advance(1.0)
+        sm.step()
+    assert sm.current == "COOLDOWN"
+
+    frozen = clock.now
+    for _ in range(5):
+        sm.step()                       # 不推进时钟
+    assert sm.current == "COOLDOWN"
+    assert clock.now == frozen          # 没有 sleep
+
+    clock.advance(601)
+    sm.step()
+    assert sm.current == "END" and sm.fail_reason is None
+
+
+def test_auto_click_false_only_logs_and_ends_the_round(tmp_path):
+    sm, handle, clock, bank = _make(
+        tmp_path, [(Q1, None)], auto_click=False, round_cooldown_min=0.0)
+    _drive(sm, clock)
+    assert handle.clicks == []
+    assert sm.current == "END" and sm.fail_reason is None
+    assert bank.size == 1               # 没点、没验、没学

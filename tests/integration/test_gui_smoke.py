@@ -38,7 +38,7 @@ class FakeController(QObject):
     def reload_config(self) -> None:
         pass
 
-    def characters(self):
+    def characters(self, mode=AppMode.ZHAIDUO):
         return list(self._chars)
 
     def start(self, mode=AppMode.ZHAIDUO) -> bool:
@@ -50,6 +50,18 @@ class FakeController(QObject):
 
     def snapshot(self, char_id):
         return self.snapshots.get(char_id)
+
+    def stats(self):
+        # 真控制器一定有这个方法（界面统计条每 2s 读一次）。替身缺了它，
+        # 定时器一响就是在 Qt 槽里抛 AttributeError —— PyQt6 直接 abort 进程。
+        return {}
+
+    def card_view(self):
+        # 真控制器从 config.yaml 读显示模式；替身固定图文。
+        return "image"
+
+    def set_card_view(self, mode):
+        return True
 
 
 def test_main_window_can_be_created(qapp):
@@ -85,22 +97,25 @@ def test_cards_built_per_character(qapp):
     w = MainWindow(controller=FakeController())
     assert set(w._cards) == {"boss", "worker"}
 
-def test_start_stop_buttons_drive_controller(qapp):
+def test_start_stop_buttons_drive_controller(qapp, wait_until):
     from rok_assistant.gui.main_window import MainWindow
     fake = FakeController()
     w = MainWindow(controller=fake)
     w._pages[AppMode.ZHAIDUO].start_btn.click()
+    # 2026-10-16 起启停在后台线程上跑（点击当场返回，界面先进「启动中」）
+    wait_until(lambda: w._phase == MainWindow.RUNNING)
     assert fake.started
     assert not w._pages[AppMode.ZHAIDUO].start_btn.isEnabled()
     assert w._pages[AppMode.ZHAIDUO].stop_btn.isEnabled()
     assert w.statusBar().currentMessage() == "运行中"
     w._pages[AppMode.ZHAIDUO].stop_btn.click()
+    wait_until(lambda: w._phase == MainWindow.IDLE)
     assert fake.stopped
     assert w._pages[AppMode.ZHAIDUO].start_btn.isEnabled()
     assert not w._pages[AppMode.ZHAIDUO].stop_btn.isEnabled()
     assert w.statusBar().currentMessage() == "已停止"
 
-def test_failed_start_leaves_buttons_in_stopped_state(qapp):
+def test_failed_start_leaves_buttons_in_stopped_state(qapp, wait_until):
     """启动失败（如 Start 前预检被拒）时界面不得谎报「运行中」。
 
     controller.start() 把异常吞进 error_occurred 后正常返回；界面若照旧置位，
@@ -111,6 +126,7 @@ def test_failed_start_leaves_buttons_in_stopped_state(qapp):
     fake = FakeController(start_result=False)
     w = MainWindow(controller=fake)
     w._pages[AppMode.ZHAIDUO].start_btn.click()
+    wait_until(lambda: w._phase == MainWindow.IDLE)      # 启动在后台线程上跑
     assert fake.started                       # 确实尝试启动了
     assert w._pages[AppMode.ZHAIDUO].start_btn.isEnabled() is True    # 仍可再点
     assert w._pages[AppMode.ZHAIDUO].stop_btn.isEnabled() is False    # 没东西在跑
@@ -150,6 +166,8 @@ def test_timer_pulls_snapshots_into_cards(qapp):
     assert ok
     fake.snapshots["boss"] = buf.tobytes()
     w = MainWindow(controller=fake)
+    # 2026-10-16 起空闲态不取帧（省掉每个周期白跑一趟全帧 JPEG），先切运行态
+    w._set_phase(MainWindow.RUNNING, AppMode.ZHAIDUO)
     w._on_refresh()   # 直接调用，避免依赖真实定时器时序
     assert not w._cards["boss"].thumbnail.pixmap().isNull()
 
@@ -194,12 +212,10 @@ def test_run_finished_resets_buttons(qapp):
     from rok_assistant.gui.main_window import MainWindow
     ctrl = FakeController()
     w = MainWindow(controller=ctrl)
-    # 运行态由 _running_mode 推导：直接戳按钮 setEnabled 会被下次 _sync_ui_state 覆盖
-    w._running_mode = AppMode.ZHAIDUO
-    w._sync_ui_state()
+    # 运行态由 _phase 推导：直接戳按钮 setEnabled 会被下次 _sync_ui_state 覆盖
+    w._set_phase(MainWindow.RUNNING, AppMode.ZHAIDUO)
     assert w._pages[AppMode.ZHAIDUO].stop_btn.isEnabled()
-    w._running_mode = None
-    w._sync_ui_state()
+    w._set_phase(MainWindow.IDLE)
     assert w._pages[AppMode.ZHAIDUO].stop_btn.isEnabled() is False
 
     ctrl.run_finished.emit({"reasons": {"inst0:boss": "已完成 10 轮，达到轮数上限"}})

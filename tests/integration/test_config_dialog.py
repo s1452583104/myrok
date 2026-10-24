@@ -6,7 +6,8 @@ import yaml
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QAbstractItemView, QMessageBox, QPlainTextEdit, QWidget,
+    QApplication, QAbstractItemView, QLabel, QMessageBox, QPlainTextEdit,
+    QWidget,
 )
 
 from rok_assistant.gui.config_dialog import ConfigDialog
@@ -44,6 +45,26 @@ def _write_config(tmp_path, data=None) -> Path:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(yaml.safe_dump(data or _valid_config_dict()), encoding="utf-8")
     return cfg
+
+
+def test_save_preserves_card_view(tmp_path, qapp, monkeypatch):
+    """配置对话框保存后，显示模式不能丢。
+
+    用户在主界面切到文字模式（落进 config.yaml），之后打开「⚙ 配置」改个别的
+    东西再保存——对话框要是丢了 card_view，界面会在下次开窗时静默变回图文，
+    而他没碰过那个开关。
+    """
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["app"]["card_view"] = "text"
+    cfg = _write_config(tmp_path, data)
+
+    dlg = ConfigDialog(cfg)
+    dlg._data["app"]["mumu_manager_path"] = "C:/other/MuMuManager.exe"
+    assert dlg.save() is True
+
+    loaded = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert loaded["app"]["card_view"] == "text"
 
 
 def test_dialog_loads_and_builds_tree(tmp_path, qapp, monkeypatch):
@@ -127,6 +148,23 @@ def test_tree_navigation_switches_stack(tmp_path, qapp, monkeypatch):
     _goto(2, "page:gem")
     _goto(3, "page:quiz")
     _goto(4, "yamlView", QPlainTextEdit)
+
+
+def test_gem_page_points_at_yaml_section(tmp_path, qapp, monkeypatch):
+    """宝石页还没有表单，不能再说「尚未开放」——模式已可跑。
+
+    用户看到「尚未开放」会以为整个模式还不能用，而实际只是没有表单；
+    文案必须指到 config.yaml 里的那一段。（答题页 2026-10-24 起有真表单，
+    见 test_quiz_* 系列。）
+    """
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dlg = ConfigDialog(_write_config(tmp_path))
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))
+    cur = dlg._stack.currentWidget()
+    hint = cur.findChild(QLabel, "emptyHint")
+    assert hint is not None
+    assert "gem:" in hint.text()
+    assert "尚未开放" not in hint.text()
 
 
 def test_gem_page_not_shadowed_by_instances(tmp_path, qapp, monkeypatch):
@@ -840,3 +878,387 @@ def test_preset_editor_requires_at_least_one_row(qapp):
     dlg = CharacterEditDialog(None, None, [])
     dlg.name_edit.setText("X")
     assert dlg.validate() == "至少配置一行行军预设"
+
+
+# ---- 答题模式配置页（2026-10-24 界面化）----
+
+def _quiz_dlg(tmp_path, qapp, monkeypatch, **quiz):
+    """带 quiz 段覆盖的对话框；未传的字段走 pydantic 默认值。"""
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["quiz"] = quiz
+    return ConfigDialog(_write_config(tmp_path, data))
+
+
+def _quiz_inst_dlg(tmp_path, qapp, monkeypatch, **quiz):
+    """带一台合法答题实例的对话框（可导航到实例页）。"""
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data.setdefault("quiz", {}).setdefault("instances", []).append(
+        {"id": "mumu0", "name": "答题号", "mumu_index": 0,
+         "characters": [{"id": "q1", "name": "答题号"}]})
+    data["quiz"].update(quiz)
+    return ConfigDialog(_write_config(tmp_path, data))
+
+
+def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
+    """答题页必须是真表单：策略字段一个不少，且都绑定了数据路径。"""
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
+    cur = dlg._stack.currentWidget()
+    assert cur.findChild(QWidget, "page:quiz") is not None
+    for path in (("quiz", "max_rounds"), ("quiz", "max_questions_per_round"),
+                 ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
+                 ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
+                 ("quiz", "parse_retries"), ("quiz", "auto_click"),
+                 ("quiz", "llm", "enabled"), ("quiz", "llm", "base_url"),
+                 ("quiz", "llm", "model"), ("quiz", "llm", "api_key"),
+                 ("quiz", "llm", "timeout_s")):
+        assert path in dlg._widgets, f"答题页缺少控件绑定 {path}"
+    assert dlg._entry_table.rowCount() == 0      # 默认无入口落点
+
+
+def test_quiz_spin_writes_to_data(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
+    assert dlg._data["quiz"]["fuzzy_threshold"] == 0.6
+    dlg._widgets[("quiz", "max_rounds")].setValue(5)
+    assert dlg._data["quiz"]["max_rounds"] == 5
+
+
+def test_quiz_auto_click_checkbox(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch, auto_click=False)
+    assert dlg._widgets[("quiz", "auto_click")].isChecked() is False
+    dlg._widgets[("quiz", "auto_click")].setChecked(True)
+    assert dlg._data["quiz"]["auto_click"] is True
+
+
+def test_quiz_llm_fields_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch,
+                    llm={"enabled": True, "base_url": "https://api.example.com/v1",
+                         "model": "m1", "api_key": "sk-x", "timeout_s": 5.0})
+    assert dlg._widgets[("quiz", "llm", "enabled")].isChecked() is True
+    dlg._widgets[("quiz", "llm", "base_url")].setText("https://other/v1")
+    assert dlg._data["quiz"]["llm"]["base_url"] == "https://other/v1"
+
+
+def test_quiz_entry_taps_table_edits_data(tmp_path, qapp, monkeypatch):
+    """落点表：加载显示、格子改数、增行、删行都落在 entry_taps 上。"""
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch, entry_taps=[[100, 200]])
+    table = dlg._entry_table
+    assert table.rowCount() == 1
+    spin = table.cellWidget(0, 0)
+    spin.setValue(300)
+    assert dlg._data["quiz"]["entry_taps"][0][0] == 300
+    dlg._add_entry_tap()
+    assert dlg._data["quiz"]["entry_taps"] == [[300, 200], [0, 0]]
+    table.setCurrentCell(1, 0)               # 选中第 2 行再删
+    dlg._delete_entry_tap()
+    assert dlg._data["quiz"]["entry_taps"] == [[300, 200]]
+
+
+def test_quiz_save_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._widgets[("quiz", "max_rounds")].setValue(7)
+    dlg._widgets[("quiz", "auto_click")].setChecked(False)
+    dlg._add_entry_tap()
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["max_rounds"] == 7
+    assert loaded["quiz"]["auto_click"] is False
+    assert loaded["quiz"]["entry_taps"] == [[0, 0]]
+
+
+def test_quiz_validation_error_is_humanized(tmp_path, qapp, monkeypatch):
+    """quiz 段字段校验失败也要说人话，不吐 fuzzy_threshold 这种英文键。"""
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical",
+                        lambda *a, **k: errors.append(a[2] if len(a) > 2 else ""))
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._data["quiz"]["fuzzy_threshold"] = "abc"
+    assert dlg.save() is False
+    joined = "\n".join(errors)
+    assert "答题模式 / 题库模糊匹配阈值" in joined
+    assert "fuzzy_threshold" not in joined
+
+
+def test_add_quiz_instance_builds_valid_instance(tmp_path, qapp, monkeypatch):
+    """添加答题模拟器：一台一个号当场建好；没接模拟器时保存被拒（同寨多多）。"""
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._add_quiz_instance()
+    insts = dlg._data["quiz"]["instances"]
+    assert len(insts) == 1
+    assert insts[0]["id"] == "mumu0"
+    assert len(insts[0]["characters"]) == 1
+    assert dlg.save() is False                  # 未选模拟器 → 不合法
+    insts[0]["adb_address"] = "127.0.0.1:16384"
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["instances"][0]["characters"][0]["name"] == "答题号"
+
+
+def test_add_quiz_instance_ids_do_not_collide(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._add_quiz_instance()
+    dlg._add_quiz_instance()
+    ids = [i["id"] for i in dlg._data["quiz"]["instances"]]
+    char_ids = [c["id"] for i in dlg._data["quiz"]["instances"]
+                for c in i["characters"]]
+    assert ids == ["mumu0", "mumu1"]
+    assert char_ids == ["q1", "q2"]
+
+
+def test_quiz_instance_tree_child_navigates_to_its_page(tmp_path, qapp, monkeypatch):
+    """答题实例是「答题模式」的树子项；点它要落到那一页（不能被寨多多实例页顶掉）。"""
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    quiz_item = dlg._tree.topLevelItem(3)
+    assert quiz_item.childCount() == 1
+    dlg._tree.setCurrentItem(quiz_item.child(0))
+    cur = dlg._stack.currentWidget()
+    assert cur.findChild(QWidget, "page:quiz_instance:0") is not None
+    assert cur.findChild(QWidget, "page:instance:0") is None
+
+
+def test_quiz_instance_character_name_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    w = dlg._widgets[("quiz", "instances", 0, "characters", 0, "name")]
+    w.setText("我的答题号")
+    assert dlg._data["quiz"]["instances"][0]["characters"][0]["name"] == "我的答题号"
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["instances"][0]["characters"][0]["name"] == "我的答题号"
+
+
+def test_delete_quiz_instance(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    dlg._delete_quiz_instance(0)
+    assert dlg._data["quiz"]["instances"] == []
+    assert dlg._tree.topLevelItem(3).childCount() == 0
+
+
+def test_quiz_instance_pick_by_name_and_autofill(tmp_path, qapp, monkeypatch):
+    """答题实例页与寨多多共用扫描机器：按名字选 → mumu_index，空显示名被顺手填上。"""
+    _stub_scan(monkeypatch)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["quiz"] = {"instances": [
+        {"id": "mumu0", "name": "", "mumu_index": None,
+         "adb_address": "127.0.0.1:16384",
+         "characters": [{"id": "q1", "name": "答题号"}]}]}
+    dlg = _open(_write_config(tmp_path, data), qapp)
+    ref = ("quiz", 0)
+    dlg._mode_combos[ref].setCurrentIndex(0)      # 切到「按模拟器选择」
+    dlg._instance_lists[ref].setCurrentRow(2)     # ○ 如愿-2 · 未启动
+    assert dlg._data["quiz"]["instances"][0]["mumu_index"] == 2
+    assert dlg._data["quiz"]["instances"][0]["name"] == "如愿-2"
+    # 自动填名的记账键带模式前缀：答题实例不许冲掉寨多多同名实例的记录
+    assert "quiz:mumu0" in dlg._autofilled_names
+    assert "zhaiduo:mumu0" not in dlg._autofilled_names
+
+
+def test_quiz_instances_do_not_shadow_fixed_pages(tmp_path, qapp, monkeypatch):
+    """有答题实例时，寨多多/宝石/答题三个固定页的索引都不能被顶掉。"""
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    for top, obj in ((1, "page:zhaiduo"), (2, "page:gem"), (3, "page:quiz")):
+        dlg._tree.setCurrentItem(dlg._tree.topLevelItem(top))
+        assert dlg._stack.currentWidget().findChild(QWidget, obj) is not None
+
+
+# ---- 答题模式配置页（2026-10-24 界面化）----
+
+def _quiz_dlg(tmp_path, qapp, monkeypatch, **quiz):
+    """带 quiz 段覆盖的对话框；未传的字段走 pydantic 默认值。"""
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["quiz"] = quiz
+    return ConfigDialog(_write_config(tmp_path, data))
+
+
+def _quiz_inst_dlg(tmp_path, qapp, monkeypatch, **quiz):
+    """带一台合法答题实例的对话框（可导航到实例页）。"""
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data.setdefault("quiz", {}).setdefault("instances", []).append(
+        {"id": "mumu0", "name": "答题号", "mumu_index": 0,
+         "characters": [{"id": "q1", "name": "答题号"}]})
+    data["quiz"].update(quiz)
+    return ConfigDialog(_write_config(tmp_path, data))
+
+
+def test_quiz_page_is_a_form_with_all_controls(tmp_path, qapp, monkeypatch):
+    """答题页必须是真表单：策略字段一个不少，且都绑定了数据路径。"""
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))
+    cur = dlg._stack.currentWidget()
+    assert cur.findChild(QWidget, "page:quiz") is not None
+    for path in (("quiz", "max_rounds"), ("quiz", "max_questions_per_round"),
+                 ("quiz", "round_cooldown_min"), ("quiz", "fuzzy_threshold"),
+                 ("quiz", "verify_delay"), ("quiz", "min_green_ratio"),
+                 ("quiz", "parse_retries"), ("quiz", "auto_click"),
+                 ("quiz", "llm", "enabled"), ("quiz", "llm", "base_url"),
+                 ("quiz", "llm", "model"), ("quiz", "llm", "api_key"),
+                 ("quiz", "llm", "timeout_s")):
+        assert path in dlg._widgets, f"答题页缺少控件绑定 {path}"
+    assert dlg._entry_table.rowCount() == 0      # 默认无入口落点
+
+
+def test_quiz_spin_writes_to_data(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._widgets[("quiz", "fuzzy_threshold")].setValue(0.6)
+    assert dlg._data["quiz"]["fuzzy_threshold"] == 0.6
+    dlg._widgets[("quiz", "max_rounds")].setValue(5)
+    assert dlg._data["quiz"]["max_rounds"] == 5
+
+
+def test_quiz_auto_click_checkbox(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch, auto_click=False)
+    assert dlg._widgets[("quiz", "auto_click")].isChecked() is False
+    dlg._widgets[("quiz", "auto_click")].setChecked(True)
+    assert dlg._data["quiz"]["auto_click"] is True
+
+
+def test_quiz_llm_fields_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch,
+                    llm={"enabled": True, "base_url": "https://api.example.com/v1",
+                         "model": "m1", "api_key": "sk-x", "timeout_s": 5.0})
+    assert dlg._widgets[("quiz", "llm", "enabled")].isChecked() is True
+    dlg._widgets[("quiz", "llm", "base_url")].setText("https://other/v1")
+    assert dlg._data["quiz"]["llm"]["base_url"] == "https://other/v1"
+
+
+def test_quiz_entry_taps_table_edits_data(tmp_path, qapp, monkeypatch):
+    """落点表：加载显示、格子改数、增行、删行都落在 entry_taps 上。"""
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch, entry_taps=[[100, 200]])
+    table = dlg._entry_table
+    assert table.rowCount() == 1
+    spin = table.cellWidget(0, 0)
+    spin.setValue(300)
+    assert dlg._data["quiz"]["entry_taps"][0][0] == 300
+    dlg._add_entry_tap()
+    assert dlg._data["quiz"]["entry_taps"] == [[300, 200], [0, 0]]
+    table.setCurrentCell(1, 0)               # 选中第 2 行再删
+    dlg._delete_entry_tap()
+    assert dlg._data["quiz"]["entry_taps"] == [[300, 200]]
+
+
+def test_quiz_save_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._widgets[("quiz", "max_rounds")].setValue(7)
+    dlg._widgets[("quiz", "auto_click")].setChecked(False)
+    dlg._add_entry_tap()
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["max_rounds"] == 7
+    assert loaded["quiz"]["auto_click"] is False
+    assert loaded["quiz"]["entry_taps"] == [[0, 0]]
+
+
+def test_quiz_validation_error_is_humanized(tmp_path, qapp, monkeypatch):
+    """quiz 段字段校验失败也要说人话，不吐 fuzzy_threshold 这种英文键。"""
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical",
+                        lambda *a, **k: errors.append(a[2] if len(a) > 2 else ""))
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._data["quiz"]["fuzzy_threshold"] = "abc"
+    assert dlg.save() is False
+    joined = "\n".join(errors)
+    assert "答题模式 / 题库模糊匹配阈值" in joined
+    assert "fuzzy_threshold" not in joined
+
+
+def test_add_quiz_instance_builds_valid_instance(tmp_path, qapp, monkeypatch):
+    """添加答题模拟器：一台一个号当场建好；没接模拟器时保存被拒（同寨多多）。"""
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._add_quiz_instance()
+    insts = dlg._data["quiz"]["instances"]
+    assert len(insts) == 1
+    assert insts[0]["id"] == "mumu0"
+    assert len(insts[0]["characters"]) == 1
+    assert dlg.save() is False                  # 未选模拟器 → 不合法
+    insts[0]["adb_address"] = "127.0.0.1:16384"
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["instances"][0]["characters"][0]["name"] == "答题号"
+
+
+def test_add_quiz_instance_ids_do_not_collide(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._add_quiz_instance()
+    dlg._add_quiz_instance()
+    ids = [i["id"] for i in dlg._data["quiz"]["instances"]]
+    char_ids = [c["id"] for i in dlg._data["quiz"]["instances"]
+                for c in i["characters"]]
+    assert ids == ["mumu0", "mumu1"]
+    assert char_ids == ["q1", "q2"]
+
+
+def test_quiz_instance_tree_child_navigates_to_its_page(tmp_path, qapp, monkeypatch):
+    """答题实例是「答题模式」的树子项；点它要落到那一页（不能被寨多多实例页顶掉）。"""
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    quiz_item = dlg._tree.topLevelItem(3)
+    assert quiz_item.childCount() == 1
+    dlg._tree.setCurrentItem(quiz_item.child(0))
+    cur = dlg._stack.currentWidget()
+    assert cur.findChild(QWidget, "page:quiz_instance:0") is not None
+    assert cur.findChild(QWidget, "page:instance:0") is None
+
+
+def test_quiz_instance_character_name_roundtrip(tmp_path, qapp, monkeypatch):
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    w = dlg._widgets[("quiz", "instances", 0, "characters", 0, "name")]
+    w.setText("我的答题号")
+    assert dlg._data["quiz"]["instances"][0]["characters"][0]["name"] == "我的答题号"
+    assert dlg.save() is True
+    loaded = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert loaded["quiz"]["instances"][0]["characters"][0]["name"] == "我的答题号"
+
+
+def test_delete_quiz_instance(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    dlg._delete_quiz_instance(0)
+    assert dlg._data["quiz"]["instances"] == []
+    assert dlg._tree.topLevelItem(3).childCount() == 0
+
+
+def test_quiz_instance_pick_by_name_and_autofill(tmp_path, qapp, monkeypatch):
+    """答题实例页与寨多多共用扫描机器：按名字选 → mumu_index，空显示名被顺手填上。"""
+    _stub_scan(monkeypatch)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    data = _valid_config_dict()
+    data["quiz"] = {"instances": [
+        {"id": "mumu0", "name": "", "mumu_index": None,
+         "adb_address": "127.0.0.1:16384",
+         "characters": [{"id": "q1", "name": "答题号"}]}]}
+    dlg = _open(_write_config(tmp_path, data), qapp)
+    ref = ("quiz", 0)
+    dlg._mode_combos[ref].setCurrentIndex(0)      # 切到「按模拟器选择」
+    dlg._instance_lists[ref].setCurrentRow(2)     # ○ 如愿-2 · 未启动
+    assert dlg._data["quiz"]["instances"][0]["mumu_index"] == 2
+    assert dlg._data["quiz"]["instances"][0]["name"] == "如愿-2"
+    # 寨多多那台同名实例的自动填名记录不许被答题实例冲掉（键带模式前缀）
+    assert "quiz:mumu0" in dlg._autofilled_names
+    assert "zhaiduo:mumu0" not in dlg._autofilled_names
+
+
+def test_quiz_instances_do_not_shadow_zhaiduo_pages(tmp_path, qapp, monkeypatch):
+    """有答题实例时，寨多多/宝石/答题固定页与寨多多实例页的索引都不能被顶掉。"""
+    dlg = _quiz_inst_dlg(tmp_path, qapp, monkeypatch)
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(1))      # 寨多多模式
+    assert dlg._stack.currentWidget().findChild(
+        QWidget, "page:zhaiduo") is not None
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(2))      # 宝石模式
+    assert dlg._stack.currentWidget().findChild(
+        QWidget, "page:gem") is not None
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))      # 答题模式
+    assert dlg._stack.currentWidget().findChild(
+        QWidget, "page:quiz") is not None

@@ -125,6 +125,38 @@ def dot_style(kind: str) -> str:
     return f"background:{TAG_DOT.get(kind, TAG_DOT['default'])};border-radius:3px;"
 
 
+def make_segment(button) -> None:
+    """把按钮标成分段开关的一段（QSS 选择器 `QPushButton[segment="true"]`）。
+
+    **顺带 setCheckable(True)**：不可勾选的话 `:checked` 永远不成立，选中态
+    静默消失且不报错——这类「看着对、其实没生效」的错最难查，索性由这一处
+    保证前提成立。
+    """
+    button.setCheckable(True)
+    _mark(button, "segment")
+
+
+# 统计条数字的语义色。**状态色只在语义成立时出现**：0 次失败是中性灰，
+# 不是红色——给 0 上红色等于让用户以为出了问题。
+STAT_VALUE_COLORS = {
+    "primary": PRIMARY,           # 完成数
+    "error": ERROR,               # 失败 > 0
+    "warning": WARNING,           # 中止 > 0
+    "default": TEXT_PRIMARY,      # 填兵次数等中性指标
+    "muted": TEXT_TERTIARY,       # 计数为 0 的指标
+}
+
+
+def stat_value_style(kind: str) -> str:
+    """统计条数字的颜色串；未知语义回落到 default（不抛）。
+
+    与 `tag_style` / `dot_style` 同一套做法：返回**显式样式串**而不是
+    QSS 动态属性——数值每次刷新都在变，属性变更要 unpolish/polish 才生效。
+    """
+    color = STAT_VALUE_COLORS.get(kind, STAT_VALUE_COLORS["default"])
+    return f"color:{color};background:transparent;"
+
+
 def make_mono(widget, point_size: int = 11) -> None:
     """等宽文本控件（机器码 / 激活码）：机器码里 `O` 和 `0`、`I` 和 `l` 要分得开。
 
@@ -284,6 +316,39 @@ QPushButton[danger="true"] { border-color: $error_color; color: $error_color; }
 QPushButton[danger="true"]:hover {
     background: $error_bg; border-color: $error_color; color: $error_color;
 }
+
+/* 分段开关：文字模式 / 图文模式（互斥二选一）。
+   属性选择器特异性高于裸 QPushButton，能盖住上面的默认态与 :hover ——
+   否则选中项一旦被鼠标划过就退回未选中样式，看着像没选中。 */
+QPushButton[segment="true"] {
+    border-radius: 0; padding: ${btn_pad_y}px $sp_md;
+    color: $text_secondary;
+}
+QPushButton[segment="true"]:hover {
+    border-color: $primary_hover; color: $primary; background: $bg_container;
+}
+QPushButton[segment="true"]:checked {
+    background: $select_bg; border-color: $primary; color: $primary_active;
+}
+QPushButton[segment="true"]:disabled {
+    background: $fill_base; border-color: $border_base; color: $text_disabled;
+}
+
+/* ============================ 统计条 ============================ */
+/* 卡片区上方一条横向汇总：分割线代替色块，白底与页面留白区分（design-tokens §4）。 */
+QFrame#statsBar {
+    background: $bg_container;
+    border: none;
+    border-bottom: 1px solid $border_split;
+}
+/* 数字走等宽族：定时刷新时字宽恒定，不会因数字变化左右抖动。 */
+QLabel#statsValue {
+    font-family: $mono_families;
+    font-size: ${font_subtitle}px;
+    font-weight: 600;
+    color: $text_primary;
+}
+QLabel#statsName { font-size: ${font_caption}px; color: $text_secondary; }
 
 /* ============================ 输入控件 ============================ */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
