@@ -462,7 +462,7 @@ class ConfigDialog(QDialog):
         rf.setSpacing(theme.SP_SM)
         rf.addRow("最多轮数", self._spin(("quiz", "max_rounds"),
                                         q["max_rounds"], 1, 999))
-        rf.addRow("一轮最多答题数", self._spin(("quiz", "max_questions_per_round"),
+        rf.addRow("一轮最多答题数(日常)", self._spin(("quiz", "max_questions_per_round"),
                                              q["max_questions_per_round"], 1, 999))
         rf.addRow("轮间冷却(分钟)", self._spin(("quiz", "round_cooldown_min"),
                                               q["round_cooldown_min"], 0.0, 1440.0,

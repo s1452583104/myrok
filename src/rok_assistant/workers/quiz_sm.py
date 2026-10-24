@@ -6,6 +6,11 @@
 入口带「距开始还有」倒计时时（进入按钮置灰）：原地轮询等开始，不点置灰
 按钮、不消耗导航步数（用户 2026-10-24 拍板：无限等待到开始）。
 
+三种场次（用户 2026-10-24 补充）：初试（周六，10 题）/ 终试（周日，
+20 题）固定时间入场、单题限时，题量上限按题目帧识别到的考试名自动
+封顶；周一到周五的日常答题任意时间可答、无单题时限，用配置的
+`max_questions_per_round` 兜底，补点预算也更宽。
+
 **本模块绝不抛异常**：所有失败都写成 `ctx["fail_reason"] = <常量>` + END 边。
 抛异常会让 WorkerRunner 在同一状态退避重放，攒满 6 次直接停机——一次
 「这题读不出来」不该升级成停机。
@@ -21,7 +26,8 @@ import time
 from ..core.quiz.bank import QuizBank, normalize
 from ..core.quiz.models import ScreenQuestion
 from ..core.quiz.screen import (
-    detect_quiz, entry_countdown_active, find_quiz_entry, parse_question,
+    EXAM_LABELS, EXAM_QUESTION_LIMITS, detect_exam_type, detect_quiz,
+    entry_countdown_active, find_quiz_entry, parse_question,
 )
 from ..core.quiz.solver import Solver
 from ..core.quiz.verify import pick_correct_option
@@ -48,11 +54,13 @@ _PARSE_INTERVAL = 1.0     # 读不出题时的重读间隔
 _ADVANCE_INTERVAL = 1.2   # 答完一题后等翻页的轮询间隔
 _ADVANCE_WAIT_MAX = 4     # 同一题最多再看几眼才判「没翻页」
 # 选项点击补点（2026-10-24 实机 0 分事故）：每题点击常发生在题目飞入
-# 动画中，游戏吞掉动画期间的点击；VERIFY 没绿色就原地再点同一个选项，
-# 最多补 `_CLICK_RETRIES` 次，仍不绿才按原逻辑走（不学这题，等倒计时
-# 归零自动翻页——那时 ADVANCE 会判「没翻页」累计真失败）。
-_CLICK_RETRIES = 2
-_RETRY_DELAY = 0.8        # 补点前让画面稳一稳
+# 动画中，游戏吞掉动画期间的点击；VERIFY 没绿色就原地再点同一个选项。
+# 初试/终试有单题限时（实机约 20s）：补点必须快而少；日常答题没有时限
+# （用户 2026-10-24 补充），可以多点几次、多等一会。
+EXAM_CLICK_RETRIES = 2        # 考试（初试/终试）的补点次数
+EXAM_RETRY_DELAY = 0.8        # 考试补点前让画面稳一稳（秒）
+PRACTICE_CLICK_RETRIES = 4    # 日常答题的补点次数
+PRACTICE_RETRY_DELAY = 1.0    # 日常答题补点前的稳定间隔（秒）
 
 # 归一化时要收掉的残留面板（与 gem_sm 同一套落点，理由见那边注释）
 _FORM_CLOSE_XY = (1716, 69)
@@ -95,8 +103,36 @@ class QuizStateMachine(StateMachine):
         self._advance_waits = 0
         self._nav_steps = 0
         self._countdown_logged = False   # 倒计时等待已记过日志（避免每 20s 一条）
+        self._exam_type: str | None = None   # 本轮识别到的考试类型（见 _update_exam_type）
         super().__init__(initial="IDLE", human=human)
         self.last_image = None
+
+    # ---- 考试类型与题量上限（初试 10 / 终试 20，用户 2026-10-24 补充） ----
+
+    def _exam_question_cap(self) -> int:
+        """单轮题数上限：初试 10 / 终试 20（真实题量），日常答题或识别不到
+        考试名时用 `quiz.max_questions_per_round` 配置值兜底。"""
+        return EXAM_QUESTION_LIMITS.get(self._exam_type, self._max_questions)
+
+    def _update_exam_type(self, blocks) -> None:
+        """从题目帧识别考试类型（一轮内 sticky，`_reset_nav` 清零重认）。
+
+        只在 READ 的题目帧上调用：入场弹窗和活动主页会同时出现「初试」
+        「终试」，`detect_exam_type` 对那种画面返回 None——这里保持原状，
+        不会把上限设错。
+        """
+        exam = detect_exam_type(blocks)
+        if exam is None or exam == self._exam_type:
+            return
+        self._exam_type = exam
+        logger.info("[答题 %s] 识别到%s，单轮按 %d 题上限跑",
+                    self._char_id, EXAM_LABELS[exam], self._exam_question_cap())
+
+    def _click_retry_budget(self) -> tuple[int, float]:
+        """补点预算（次数, 间隔秒）：考试限时从紧，日常答题从宽。"""
+        if self._exam_type is None:
+            return PRACTICE_CLICK_RETRIES, PRACTICE_RETRY_DELAY
+        return EXAM_CLICK_RETRIES, EXAM_RETRY_DELAY
 
     # ---- 转移表 ----
 
@@ -221,6 +257,7 @@ class QuizStateMachine(StateMachine):
     def _reset_nav(self, ctx):
         self._nav_steps = 0
         self._countdown_logged = False
+        self._exam_type = None            # 新一轮重新识别考试类型
         ctx.pop("fail_reason", None)
         ctx["in_quiz"] = False
 
@@ -284,13 +321,14 @@ class QuizStateMachine(StateMachine):
         ctx.pop("round_over", None)
         ctx.pop("parse_verdict", None)
         ctx.pop("cooldown_why", None)
-        if self._answered >= self._max_questions:
+        if self._answered >= self._exam_question_cap():
             ctx["round_over"] = True
-            ctx["cooldown_why"] = f"已达单轮上限 {self._max_questions} 题"
+            ctx["cooldown_why"] = f"已达单轮上限 {self._exam_question_cap()} 题"
             return
         img = self._handle.capture()
         self.last_image = img
         blocks = self._ocr.detect_text(img)
+        self._update_exam_type(blocks)
         question = parse_question(blocks, img.shape[1])
         if question is not None:
             if normalize(question.text) != self._answered_key:
@@ -392,14 +430,16 @@ class QuizStateMachine(StateMachine):
             # 点击发生在题目飞入动画中，游戏不响应）。补点计数还有额度
             # 就回 ANSWER 再点一次同一个选项；额度用完才按「不学习」
             # 放行（ADVANCE 会等翻页，始终不翻再判真失败）。
-            if self._q_clicks <= _CLICK_RETRIES:
+            # 额度按场类型分配：初试/终试单题限时从紧，日常答题无时限从宽。
+            retries, delay = self._click_retry_budget()
+            if self._q_clicks <= retries:
                 ctx["retry_click"] = True
-                self._wait_here("VERIFY", _RETRY_DELAY)
+                self._wait_here("VERIFY", delay)
                 logger.info("[答题] 没看到绿色高亮，%s 秒后补点（第 %d/%d 次）",
-                            _RETRY_DELAY, self._q_clicks + 1, _CLICK_RETRIES + 1)
+                            delay, self._q_clicks + 1, retries + 1)
             else:
                 logger.info("[答题] 没看到绿色高亮（补点 %d 次仍无结算），"
-                            "这道题不学习", _CLICK_RETRIES)
+                            "这道题不学习", retries)
             return
         ctx["correct_letter"] = correct
         text = question.options[correct][0]
