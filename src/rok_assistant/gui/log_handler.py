@@ -58,4 +58,19 @@ class QtLogHandler(logging.Handler, QObject):
             self.handleError(record)
             return
         cid = char_id_from_thread_name(threading.current_thread().name)
-        self.record_emitted.emit(cid, text)
+        try:
+            self.record_emitted.emit(cid, text)
+        except RuntimeError:
+            # Qt 先一步删掉了 QObject，而 Python 包装还挂在 root logger 上
+            # （窗口先于日志系统销毁时会出现）。这里不能再抛：logging 不吞
+            # 异常，worker 线程会整条挂掉——2026-10-25 全套测试里
+            # test_end_to_end 的 leader 线程就是这样卡在 IDLE。能做的只有
+            # 把自己从 root logger 摘掉（removeHandler 只动 Python 列表，
+            # 不碰已销毁的 C++ 对象）。
+            self._detach()
+
+    def _detach(self) -> None:
+        try:
+            logging.getLogger().removeHandler(self)
+        except Exception:                      # noqa: BLE001 - 摘不掉也不能炸
+            pass

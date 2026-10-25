@@ -66,3 +66,20 @@ def test_handler_uses_thread_name_for_attribution(qapp):
     # （brief 原文缺这一句，见 task-2-report.md 的偏差说明）
     qapp.processEvents()
     assert received[0][0] == "阑珊"
+
+
+def test_handler_detaches_itself_when_qt_object_is_deleted(qapp):
+    """窗口先于日志系统销毁时，root logger 上会留一个「Python 还在、C++ 已删」
+    的 handler。此后任何 logger.* 都会在 emit 里抛 RuntimeError——logging 不吞
+    它，worker 线程会整条挂掉（2026-10-25 全套测试：leader 线程卡在 IDLE）。
+    handler 必须自己摘掉，并且不再抛。"""
+    from PyQt6 import sip
+    from rok_assistant.gui.log_handler import QtLogHandler
+
+    root = logging.getLogger()
+    h = QtLogHandler()
+    root.addHandler(h)
+    sip.delete(h)                      # 模拟 Qt 销毁 C++ 对象
+    rec = logging.LogRecord("x", logging.INFO, __file__, 1, "boom", (), None)
+    h.emit(rec)                        # 不许抛
+    assert h not in root.handlers
