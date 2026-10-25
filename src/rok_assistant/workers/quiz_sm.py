@@ -49,9 +49,13 @@ QUIZ_PARSE_FAILED_REASON = "quiz_parse_failed"     # 一题都没答就连续读
 # 是「这票没被受理」（spec §6 的反例）。
 ANSWER_NOT_ACCEPTED_REASON = "answer_not_accepted"
 
-_NAV_MAX = 4              # 进活动最多点几拍
+# 进活动最多点几拍。实机路径（2026-10-25 探针）是
+# 地图→活动图标→左栏翻找「国士无双」→前往→进入，共 6 拍；
+# 留余量给「翻找多一次」的情况。
+_NAV_MAX = 10
 _NORMALIZE_ATTEMPTS = 5
 _NAV_SETTLE = 1.5         # 点完入口/落点后等动画
+_ACTIVITY_SETTLE = 2.0    # 点活动图标后等面板打开（比普通按钮慢）
 _COUNTDOWN_POLL = 20.0    # 入口「距开始还有」倒计时期间的轮询间隔（秒）
 _PARSE_INTERVAL = 1.0     # 读不出题时的重读间隔
 _ADVANCE_INTERVAL = 1.2   # 答完一题后等翻页的轮询间隔
@@ -69,6 +73,90 @@ PRACTICE_RETRY_DELAY = 1.0    # 日常答题补点前的稳定间隔（秒）
 _FORM_CLOSE_XY = (1716, 69)
 _WAR_CLOSE_XY = (1671, 64)
 _QUEUE_COLLAPSE_XY = (1550, 320)
+# 底部快捷菜单展开态：再点右下角 ☰ 收起（与 member_sm 同一落点，2026-09-16
+# 实机验证）。展开时整排「战役/道具/联盟/统帅/邮件」盖住左下/右下的地图按钮，
+# 联盟旗帜（alliance_btn）会整个消失。
+_MENU_COLLAPSE_XY = (1845, 1010)
+# 点 ☰ 之后必须**等菜单真的消失**再回主循环。收起有动画：立刻再抓的那一帧
+# 仍然判「展开」→ 又点一次 ☰ → 把刚收起的菜单点开（实机 2026-10-25 探针：
+# 归一化前后两帧完全一致，menu_expanded 0.995 不动，就是点了偶数次）。
+_MENU_SETTLE = 0.6        # 每拍等动画的间隔（秒）
+_MENU_SETTLE_MAX = 3      # 最多等几拍就放弃（放弃后主循环再判，不无限等）
+
+# ---- 地图 → 活动中心 → 国士无双（2026-10-25 实机探测出的唯一路径）----
+# 地图右侧「活动」卷轴图标：没有任何文字，OCR 找不到，靠模板 `activity_icon`
+# 在右上角 HUD 里定位（manifest 里有 ROI/阈值/实测分）。
+# `_ACTIVITY_ICON_XY` 只是**模板没命中时的退路**：1920×1080 实测 (1682,127)
+# 能打开活动中心（旁边是火把=征服赛季、奖杯=另开面板）。
+_ACTIVITY_ICON_XY = (1682, 127)
+# 活动面板左上角返回箭头（地图/活动中心/活动页同一位置）。BACK 键在 MuMu 上
+# 禁用（2026-09-16 记录），只能点这个。
+_ACTIVITY_BACK_XY = (44, 58)
+# 活动中心左栏是活动列表，默认停在「热门活动」顶部，「国士无双」常在折叠线
+# 以下——实机要往下滚 3 次才出现。返回键在这台模拟器上禁用（2026-09-16 记录），
+# 所以只滚不再开面板。
+_LEFT_LIST_SCROLL = (380, 900, 380, 380)
+_LEFT_LIST_SCROLL_MS = 600
+_LEFT_LIST_SCROLL_MAX = 4
+# 活动中心面板的自有文案，用来区分「面板开着」和「在地图上」。
+_ACTIVITY_CENTER_WORDS = ("活动负载", "热门活动", "活动日历", "活动中心")
+# 左栏列表占页面左侧的比例：详情页标题也常写「国士无双」，靠横向位置区分。
+_LIST_X_RATIO = 0.30
+# 国士无双标题的 OCR 变体（与 screen.py 的 TITLE_KEYWORDS 对齐）
+_QUIZ_TITLES = ("国士无双", "国王无双")
+
+
+def _label_center(blocks, label: str) -> tuple[int, int] | None:
+    """文本**恰好等于** label 的块的中心点。
+
+    导航按钮只认精确文本：`前往` 若按包含匹配会命中「前往其他活动」这类
+    说明文字，`进入` 会命中「进入条件」，点到就是别处。
+    """
+    for box, text, _conf in blocks:
+        if text.strip() == label:
+            return box.center()
+    return None
+
+
+def _is_quiz_title(text: str) -> bool:
+    return any(title in text for title in _QUIZ_TITLES)
+
+
+def _quiz_detail_visible(blocks, width: int) -> bool:
+    """是不是「国士无双」详情页：标题在页面中部（不在左侧列表栏）。
+
+    活动中心左栏也有同名条目，两者只靠横向位置区分（实机 1920 宽：左栏
+    x≈372，详情标题 x≈694；2664 宽时分别 ≈500 / ≈1092）。
+    """
+    return any(_is_quiz_title(text.strip()) and box.x1 > width * _LIST_X_RATIO
+               for box, text, _conf in blocks)
+
+
+def _quiz_list_row(blocks, width: int) -> tuple[int, int] | None:
+    """活动中心左栏的「国士无双」条目中心；不在左栏就是 None。"""
+    for box, text, _conf in blocks:
+        if text.strip() in _QUIZ_TITLES and box.x2 <= width * _LIST_X_RATIO:
+            return box.center()
+    return None
+
+
+def _activity_center_open(blocks) -> bool:
+    """画面是不是活动中心面板（地图 HUD 被面板盖住时用它判）。"""
+    return any(word in text for _box, text, _conf in blocks
+               for word in _ACTIVITY_CENTER_WORDS)
+
+
+def _activity_screen_open(blocks) -> bool:
+    """画面是不是活动中心或国士无双活动页（含时间轴）。
+
+    归一化用：这两种画面都是**上一轮的残留**，既没有地图 HUD 也不是答题
+    界面——不收掉就是 normalize_stuck（2026-10-25 实机：入口导航中止后
+    停在活动页，下一轮重建 SM 就卡在这）。
+    """
+    if _activity_center_open(blocks):
+        return True
+    return any(text.strip() in ("习题演练", "初试", "终试")
+               for _box, text, _conf in blocks)
 
 
 class QuizStateMachine(StateMachine):
@@ -101,6 +189,7 @@ class QuizStateMachine(StateMachine):
         self._read_waits = 0
         self._advance_waits = 0
         self._nav_steps = 0
+        self._list_scrolls = 0        # 活动中心左栏已翻了几次（找国士无双）
         self._countdown_logged = False   # 倒计时等待已记过日志（避免每 20s 一条）
         self._session: str = SESSION_DAILY   # 本场轮次的场次（_reset_nav 按星期几绑定）
         super().__init__(initial="IDLE", human=human)
@@ -204,6 +293,15 @@ class QuizStateMachine(StateMachine):
 
         与宝石模式的区别：**答题页也算归一化成功**。硬把画面收成地图会把
         已经打开的答题界面点掉，等于每轮重新找入口。
+
+        地图视图有两个判据，**任一可见即成功**：联盟旗帜 `alliance_btn`，
+        或左下角放大镜 `search_icon`（同为地图视图专属 HUD）。放大镜判的是
+        「地图 HUD 可用、能点右侧活动图标」，不是镜头位置——镜头停在自己城市
+        时它也常驻（2026-09-22 记录），这里正需要这个语义。只认旗帜会在
+        两种常见画面上误判：底部快捷菜单展开时整排按钮盖住旗帜（2026-10-25
+        实机：旗帜 0.212、放大镜 0.901、菜单 0.995），以及简化模式下联盟
+        快捷键根本不显示（member_sm 2026-09-18 实机）。菜单展开态先收起再判，
+        否则入口/地图按钮仍被它压着。
         """
         for _ in range(_NORMALIZE_ATTEMPTS):
             img = self._handle.capture()
@@ -213,12 +311,22 @@ class QuizStateMachine(StateMachine):
                     or detect_quiz(blocks):
                 ctx.pop("fail_reason", None)
                 return
-            if self._matched("alliance_btn", img):
-                ctx.pop("fail_reason", None)
-                return
             if self._matched("net_error_confirm", img):
                 self._click_net_error()
                 continue
+            if self._matched("menu_expanded", img):
+                self._collapse_menu()
+                continue
+            if _activity_screen_open(blocks):
+                # 上一轮停在活动中心/活动页（入口找不到就中止了）：点返回退回
+                # 地图。不处理的话这里既没有地图 HUD 也没有题目，5 拍后误判
+                # normalize_stuck。
+                self._close_activity()
+                continue
+            if self._matched("alliance_btn", img) \
+                    or self._matched("search_icon", img):
+                ctx.pop("fail_reason", None)
+                return
             if self._matched("form_title", img):
                 self._handle.click(*_FORM_CLOSE_XY)
                 continue
@@ -235,14 +343,62 @@ class QuizStateMachine(StateMachine):
         ctx["fail_reason"] = NORMALIZE_STUCK_REASON
         logger.warning("[答题] 归一化收拾不出地图或答题界面，本轮中止")
 
+    def _collapse_menu(self) -> None:
+        """点 ☰ 收起底部快捷菜单，并等到它**真的从画面消失**再返回。
+
+        只点不等会让主循环在动画帧上再点一次（见 `_MENU_SETTLE` 注释）。
+        等满 `_MENU_SETTLE_MAX` 拍还没收起就交回主循环重新判定——最多再点
+        一次，不会变成无休止连点。
+        """
+        self._handle.click(*_MENU_COLLAPSE_XY)
+        for _ in range(_MENU_SETTLE_MAX):
+            self._sleep(_MENU_SETTLE)
+            img = self._handle.capture()
+            self.last_image = img
+            if not self._matched("menu_expanded", img):
+                return
+
+    def _close_activity(self) -> None:
+        """点返回箭头退出活动面板，并等到面板真的消失再返回。
+
+        与 `_collapse_menu` 同一个坑：点完立刻抓的那帧还在退场动画里，
+        主循环再点一次返回——而那时人已经在地图上，(44,58) 落到左上角
+        玩家面板上（实机 2026-10-25：连点两次后 search_icon 掉到 0.38）。
+        """
+        self._handle.click(*_ACTIVITY_BACK_XY)
+        for _ in range(_MENU_SETTLE_MAX):
+            self._sleep(_MENU_SETTLE)
+            img = self._handle.capture()
+            self.last_image = img
+            if not _activity_screen_open(self._ocr.detect_text(img)):
+                return
+
     def _matched(self, rec_id: str, img) -> bool:
         rec = self._rec.get(rec_id)
         return rec is not None and rec.recognize(img).matched
+
+    def _activity_icon_point(self, img) -> tuple[int, int]:
+        """地图右侧「活动」卷轴图标的点击点。
+
+        优先用模板 `activity_icon` 的命中框中心——卷轴位置会随顶栏图标增减
+        横移（用户 2026-10-25 指出的风险），写死像素一旦挤偏就点空。模板没
+        命中（没装这个模板 / 主题改动太大）才退回 `_ACTIVITY_ICON_XY`，
+        并留一条日志说明用的是退路，免得以后误以为是模板在生效。
+        """
+        rec = self._rec.get("activity_icon")
+        if rec is not None:
+            res = rec.recognize(img)
+            if res.matched and res.bbox is not None:
+                return res.bbox.center()
+            logger.info("[答题] 活动图标模板未命中（%.3f），改用固定落点 %s",
+                        res.confidence, _ACTIVITY_ICON_XY)
+        return _ACTIVITY_ICON_XY
 
     # ---- NORMALIZE → OPEN_QUIZ ----
 
     def _reset_nav(self, ctx):
         self._nav_steps = 0
+        self._list_scrolls = 0
         self._countdown_logged = False
         # 场次按当天星期几绑定（用户 2026-10-24 拍板，不靠 OCR 识别）：
         # 周六=初试、周日=终试、周一至周五=日常答题。新一轮重新绑。
@@ -255,7 +411,15 @@ class QuizStateMachine(StateMachine):
         ctx["in_quiz"] = False
 
     def _open_quiz_step(self, ctx):
-        """一拍导航：已经在答题界面就停；否则点入口文字，再不行点固定落点。
+        """一拍导航：按实机唯一路径把画面推进到答题界面。
+
+        实机路径（2026-10-25 探针逐屏验证，1920×1080）：
+        地图 →〔右侧「活动」卷轴图标，模板 activity_icon 定位〕→ 活动中心
+             →〔左栏列表翻到「国士无双」点它〕→ 活动详情（右侧摘要）
+             →〔「前往」〕→ 活动全页（7 天时间轴）
+             →〔「进入」〕→ 答题界面。
+        「进入」只在活动开着的当天、且有资格时出现；没出现就是环境原因
+        （活动没开 / 初试没过拿不到终试资格），干净中止，别乱点。
 
         `parse_question`（而不是 `detect_quiz`）才是「已进答题界面」的判据：
         活动页标题里也有「国士无双」，`detect_quiz` 在活动页就是 True。
@@ -263,14 +427,15 @@ class QuizStateMachine(StateMachine):
         倒计时门禁（2026-10-24 用户截图 + 录屏）：初试/终试没到开始时间时，
         页面上是「距开始还有 hh:mm:ss」、进入按钮置灰——点了不生效。这时
         **不点、不耗导航步数**，按 `_COUNTDOWN_POLL` 原地轮询等它开始
-        （倒计时可能以小时计，耗光 4 拍导航就打不进去了）；时钟不推进就
+        （倒计时可能以小时计，耗光导航步数就打不进去了）；时钟不推进就
         什么都不做，Stop 随时响应。
         """
         ctx.pop("fail_reason", None)
         img = self._handle.capture()
         self.last_image = img
         blocks = self._ocr.detect_text(img)
-        question = parse_question(blocks, img.shape[1])
+        width = img.shape[1]
+        question = parse_question(blocks, width)
         ctx["in_quiz"] = question is not None
         if question is not None:
             self._pending_question = question
@@ -289,22 +454,82 @@ class QuizStateMachine(StateMachine):
             ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
             logger.warning("[答题] 导航 %s 步仍未进入答题界面，本轮中止", _NAV_MAX)
             return
+
+        # ① 国士无双详情页（标题在页面中部，不是左栏）：先「前往」进活动全页，
+        #    全页上才有「进入」。这一步走错会点到别的活动，所以只认国士无双。
+        if _quiz_detail_visible(blocks, width):
+            go = _label_center(blocks, "前往")
+            if go is not None:
+                self._nav_click(*go, what="前往")
+                return
+            enter = _label_center(blocks, "进入")
+            if enter is not None:
+                self._nav_click(*enter, what="进入")
+                return
+            ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
+            logger.warning("[答题] 国士无双活动页上没有「进入」——活动今天没开，"
+                           "或本号没有资格（初试未通过拿不到终试资格）。本轮中止")
+            return
+
+        # ② 活动中心左栏的「国士无双」行：点它把右侧详情切过去。
+        row = _quiz_list_row(blocks, width)
+        if row is not None:
+            self._nav_click(*row, what="国士无双")
+            return
+
+        # ③ 活动中心开着但左栏没找到：往下翻（默认停在热门活动顶部）。
+        if _activity_center_open(blocks):
+            if self._list_scrolls >= _LEFT_LIST_SCROLL_MAX:
+                ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
+                logger.warning("[答题] 活动中心左栏翻了 %s 次也没找到国士无双"
+                               "（活动可能不在本周期），本轮中止",
+                               self._list_scrolls)
+                return
+            logger.info("[答题] 活动中心左栏翻找国士无双（第 %s 次）",
+                        self._list_scrolls + 1)
+            self._handle.swipe(*_LEFT_LIST_SCROLL, _LEFT_LIST_SCROLL_MS)
+            self._list_scrolls += 1
+            self._nav_steps += 1
+            self._wait_here("OPEN_QUIZ", _NAV_SETTLE)
+            return
+
+        # ④ 屏幕上直接有入口文字（答题页的习题演练、活动页的进入等）。
         entry = find_quiz_entry(blocks)
         if entry is not None:
-            logger.info("[答题] 点入口 %s（第 %s 步）", entry, self._nav_steps + 1)
-            self._click_xy(*entry, anchor="quiz_entry")
-        elif self._nav_steps < len(self._entry_taps):
+            self._nav_click(*entry, what="入口文字")
+            return
+
+        # ⑤ config 里的固定落点：用户手工指定的路径优先于内置地图落点。
+        if self._nav_steps < len(self._entry_taps):
             x, y = self._entry_taps[self._nav_steps]
             logger.info("[答题] 点固定落点 (%s,%s)（第 %s 步）",
                         x, y, self._nav_steps + 1)
             self._click_xy(x, y, anchor="quiz_entry_tap")
-        else:
-            ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
-            logger.warning("[答题] 屏幕上没有入口文字，也没有可用的固定落点"
-                           "（config.quiz.entry_taps 为空或已用完），本轮中止")
+            self._nav_steps += 1
+            self._wait_here("OPEN_QUIZ", _NAV_SETTLE)
             return
+
+        # ⑥ 地图：点右侧「活动」图标打开活动中心（位置由模板给，见
+        #    `_activity_icon_point`）。
+        if self._matched("search_icon", img) or self._matched("alliance_btn", img):
+            self._nav_click(*self._activity_icon_point(img), what="活动图标",
+                            settle=_ACTIVITY_SETTLE)
+            return
+
+        ctx["fail_reason"] = QUIZ_ENTRY_MISSING_REASON
+        logger.warning("[答题] 屏幕上既没有入口文字、也不像地图或活动中心，"
+                       "也没有可用的固定落点（config.quiz.entry_taps 为空或已用完），"
+                       "本轮中止")
+        return
+
+    def _nav_click(self, x: int, y: int, *, what: str,
+                   settle: float = _NAV_SETTLE) -> None:
+        """入口导航的一次点击：记日志、点、计步、等动画。"""
+        logger.info("[答题] 点%s (%s,%s)（第 %s 步）", what, x, y,
+                    self._nav_steps + 1)
+        self._click_xy(x, y, anchor="quiz_entry")
         self._nav_steps += 1
-        self._wait_here("OPEN_QUIZ", _NAV_SETTLE)
+        self._wait_here("OPEN_QUIZ", settle)
 
     # ---- READ ----
 

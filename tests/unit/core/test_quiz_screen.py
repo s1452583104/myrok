@@ -193,6 +193,13 @@ def test_find_quiz_entry_prefers_the_enter_button():
     assert find_quiz_entry(ACTIVITY) == (1616, 896)
 
 
+def test_find_quiz_entry_clicks_the_exam_confirm_popup():
+    """初试/终试点「进入」后弹出二次确认「入场确认」（2026-10-24 实机录屏）。
+    这层不点掉，倒计时结束后也开不了考。"""
+    blocks = _blocks((700, 600, 900, 640, "入场确认", 0.88))
+    assert find_quiz_entry(blocks) == (800, 620)
+
+
 def test_find_quiz_entry_falls_back_to_the_most_confident_practice_card():
     """没有「进入」时，`习题演练` 这一级取**置信度**最高的块：
     可点卡片行 (399,431,530,468) conf 0.76，高于栏目头 (1547,388,1688,428)

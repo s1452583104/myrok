@@ -123,6 +123,7 @@ class ScriptedHandle:
         self._frames = list(frames)
         self._i = 0
         self.clicks = []
+        self.swipes = []
 
     def capture(self):
         frame = self._frames[min(self._i, len(self._frames) - 1)]
@@ -131,6 +132,9 @@ class ScriptedHandle:
 
     def click(self, x, y, anchor=None, rapid=False):
         self.clicks.append((int(x), int(y), anchor))
+
+    def swipe(self, x1, y1, x2, y2, duration_ms=300):
+        self.swipes.append((int(x1), int(y1), int(x2), int(y2), duration_ms))
 
     def is_alive(self):
         return True
@@ -174,6 +178,106 @@ def _make(tmp_path, script, *, bank=None, solver=None, **kw):
                           clock=clock, sleeper=clock.advance,
                           rng=random.Random(0), **kw)
     return sm, handle, clock, bank
+
+
+# ---- 归一化：地图视图的判据（2026-10-25 实机 normalize_stuck）----
+
+class _Rec:
+    """固定 matched 的识别器替身；matcher 可传 callable（依赖点击状态）。"""
+
+    def __init__(self, matched, bbox=None):
+        self._matcher = matched
+        self.matched = False
+        self.confidence = 0.0
+        self.bbox = bbox or BBox(0, 0, 1, 1)
+
+    def recognize(self, _img):
+        self.matched = (bool(self._matcher()) if callable(self._matcher)
+                        else bool(self._matcher))
+        self.confidence = 1.0 if self.matched else 0.0
+        return self
+
+
+_RESIDUAL_IDS = ("alliance_btn", "search_icon", "net_error_confirm",
+                 "form_title", "war_title", "queue_panel", "menu_expanded",
+                 "map_btn")
+
+
+def _recs(**overrides):
+    recs = {rid: _Rec(False) for rid in _RESIDUAL_IDS}
+    recs.update(overrides)
+    return recs
+
+
+def test_normalize_accepts_magnifier_when_alliance_btn_is_hidden(tmp_path):
+    """实机 2026-10-25 11:33：地图视图但底部快捷菜单展开，联盟旗帜被盖住
+    （alliance_btn 0.212），左下角放大镜清晰可见（search_icon 0.901）。
+    只认旗帜会让归一化在**正常地图**上 5 拍后误判 normalize_stuck。
+    放大镜是同为地图视图专属的 HUD（member_sm 2026-09-18 起就这么判）。"""
+    sm, _handle, _clock, _bank = _make(
+        tmp_path, [([], None)], recognizers=_recs(search_icon=_Rec(True)))
+    sm._normalize_view(sm._ctx)
+    assert "fail_reason" not in sm._ctx
+
+
+def test_normalize_collapses_expanded_quick_menu(tmp_path):
+    """快捷菜单展开态要收起（与寨子 SM 同一落点 1845,1010），
+    收起后旗帜可见 —— 这是实机那台模拟器的真实恢复路径。"""
+    recs = _recs(menu_expanded=_Rec(True))
+    sm, handle, _clock, _bank = _make(tmp_path, [([], None)], recognizers=recs)
+    # 点过 ☰ 之后菜单收起、联盟旗帜露出来（正常地图的收起态）
+    recs["menu_expanded"] = _Rec(lambda: not handle.clicks)
+    recs["alliance_btn"] = _Rec(lambda: bool(handle.clicks))
+    sm._normalize_view(sm._ctx)
+    assert handle.clicks and handle.clicks[0][:2] == (1845, 1010)
+    assert len(handle.clicks) == 1, "只许点一次 ☰"
+    assert "fail_reason" not in sm._ctx
+
+
+def test_normalize_backs_out_of_a_leftover_activity_center(tmp_path):
+    """上一轮停在活动中心（入口没找到就中止）：这里既没有地图 HUD 也没有
+    题目，不收掉就是 normalize_stuck。点左上角返回（BACK 键在 MuMu 上禁用）。"""
+    recs = _recs()
+    sm, handle, _clock, _bank = _make(
+        tmp_path, [(CENTER_NO_ROW, None), ([], None)], recognizers=recs)
+    recs["search_icon"] = _Rec(lambda: bool(handle.clicks))   # 返回后回到地图
+    sm._normalize_view(sm._ctx)
+    assert handle.clicks[0][:2] == quiz_sm._ACTIVITY_BACK_XY
+    assert "fail_reason" not in sm._ctx
+
+
+def test_normalize_does_not_double_click_back_while_panel_closes(tmp_path):
+    """退场动画期间那一帧还判「活动面板在」——旧实现会再点一次返回，
+    那时人已在地图上，(44,58) 落到左上角玩家面板（实机 2026-10-25）。"""
+    recs = _recs()
+    sm, handle, _clock, _bank = _make(
+        tmp_path, [(CENTER_NO_ROW, None), (CENTER_NO_ROW, None), ([], None)],
+        recognizers=recs)
+    recs["search_icon"] = _Rec(lambda: bool(handle.clicks))
+    sm._normalize_view(sm._ctx)
+    assert [c[:2] for c in handle.clicks] == [quiz_sm._ACTIVITY_BACK_XY]
+    assert "fail_reason" not in sm._ctx
+
+
+def test_normalize_clicks_menu_once_while_animation_settles(tmp_path):
+    """实机 2026-10-25 探针的反例：点完立刻抓的那帧还在收起动画里
+    （menu_expanded 仍判展开），旧实现再点一次 ☰ 又把菜单点开——归一化
+    「成功」了，画面却和点之前一模一样（点了偶数次）。收起必须等到
+    菜单真的消失，整个归一化过程只点一次。"""
+    recs = _recs(menu_expanded=_Rec(True))
+    sm, handle, _clock, _bank = _make(tmp_path, [([], None)], recognizers=recs)
+    seen = {"after_click": 0}
+
+    def still_expanded():
+        if not handle.clicks:
+            return True
+        seen["after_click"] += 1
+        return seen["after_click"] <= 1      # 第一帧仍在动画中
+    recs["menu_expanded"] = _Rec(still_expanded)
+    recs["alliance_btn"] = _Rec(lambda: bool(handle.clicks))
+    sm._normalize_view(sm._ctx)
+    assert [c[:2] for c in handle.clicks] == [(1845, 1010)]
+    assert "fail_reason" not in sm._ctx
 
 
 def _drive(sm, clock, max_steps=400, dt=1.0):
@@ -275,6 +379,91 @@ def test_persistent_net_error_popup_aborts_cleanly_and_boundedly(tmp_path):
     assert 0 < len(handle.clicks) <= 3
     assert all(c[2] is None for c in handle.clicks)   # 没有乱点选项
     assert rec.calls <= 4                             # 识别次数同样有界
+
+
+# ---- 入口导航：实机唯一路径（2026-10-25 逐屏探针）----
+#
+# 地图 →〔右侧活动卷轴图标 1682,127〕→ 活动中心 →〔左栏「国士无双」〕
+# →「前往」→ 活动全页 →〔「进入」〕。地图上**没有任何入口文字**，旧实现
+# 在真人号上必然 quiz_entry_missing。
+
+CENTER = _blocks(
+    (727, 46, 1010, 70, "活动负载：空闲", 0.80),
+    (371, 277, 480, 300, "热门活动", 0.80),
+    (372, 272, 470, 310, "国士无双", 0.71),      # 左栏条目（x2 在 30% 宽以内）
+)
+CENTER_NO_ROW = _blocks(
+    (727, 46, 1010, 70, "活动负载：空闲", 0.80),
+    (371, 277, 480, 300, "热门活动", 0.80),
+)
+DETAIL = _blocks(
+    (1092, 100, 1485, 150, "国士无双", 0.80),     # 详情页标题（页面中部）
+    (1130, 850, 1200, 880, "前往", 0.70),
+)
+DETAIL_NO_ENTRY = _blocks(
+    (1092, 100, 1485, 150, "国士无双", 0.80),
+    (1705, 389, 1780, 420, "终试", 0.54),
+)
+
+
+def _open_step(tmp_path, blocks, **kw):
+    sm, handle, _clock, _bank = _make(tmp_path, [(blocks, None)], **kw)
+    sm._open_quiz_step(sm._ctx)
+    return sm, handle
+
+
+def test_open_quiz_taps_the_activity_icon_on_the_map(tmp_path):
+    """地图上没有「活动」文字（图标是纯图形）：没装模板时点固定落点。"""
+    _sm, handle = _open_step(tmp_path, [],
+                             recognizers=_recs(search_icon=_Rec(True)))
+    assert [c[:2] for c in handle.clicks] == [quiz_sm._ACTIVITY_ICON_XY]
+    assert handle.clicks[0][2] == "quiz_entry"
+
+
+def test_open_quiz_taps_the_matched_activity_icon_center(tmp_path):
+    """卷轴位置不写死：模板在哪儿命中就点哪儿。
+
+    顶栏图标增减会把卷轴挤偏（用户 2026-10-25 指出的风险），写死像素会点空。
+    """
+    recs = _recs(search_icon=_Rec(True),
+                 activity_icon=_Rec(True, bbox=BBox(1712, 64, 1764, 138)))
+    _sm, handle = _open_step(tmp_path, [], recognizers=recs)
+    assert [c[:2] for c in handle.clicks] == [((1712 + 1764) // 2,
+                                               (64 + 138) // 2)]
+
+
+def test_open_quiz_falls_back_to_the_fixed_point_when_template_misses(tmp_path):
+    """模板没命中（主题大改 / 模板没打包）不能瞎点：退回实测固定点。"""
+    recs = _recs(search_icon=_Rec(True), activity_icon=_Rec(False))
+    _sm, handle = _open_step(tmp_path, [], recognizers=recs)
+    assert [c[:2] for c in handle.clicks] == [quiz_sm._ACTIVITY_ICON_XY]
+
+
+def test_open_quiz_selects_the_quiz_row_in_the_activity_list(tmp_path):
+    """活动中心默认停在「奥林匹亚之巅」，左栏点「国士无双」才切到答题活动。"""
+    _sm, handle = _open_step(tmp_path, CENTER)
+    assert handle.clicks[0][:2] == (421, 291)
+
+
+def test_open_quiz_clicks_go_on_the_quiz_detail_page(tmp_path):
+    """详情页的按钮叫「前往」，不是「进入」；点错活动会进别的活动页。"""
+    _sm, handle = _open_step(tmp_path, DETAIL)
+    assert handle.clicks[0][:2] == (1165, 865)
+
+
+def test_open_quiz_without_enter_button_aborts_with_clear_reason(tmp_path):
+    """活动页没有「进入」= 今天没开或本号没资格（初试没过）。不点习题演练。"""
+    sm, handle = _open_step(tmp_path, DETAIL_NO_ENTRY)
+    assert sm._ctx["fail_reason"] == QUIZ_ENTRY_MISSING_REASON
+    assert handle.clicks == []
+
+
+def test_open_quiz_scrolls_the_left_list_when_the_row_is_below_the_fold(tmp_path):
+    """实机左栏默认停在「热门活动」顶部，国士无双在折叠线以下，要往下翻。"""
+    _sm, handle = _open_step(tmp_path, CENTER_NO_ROW)
+    assert handle.swipes == [(*quiz_sm._LEFT_LIST_SCROLL,
+                              quiz_sm._LEFT_LIST_SCROLL_MS)]
+    assert handle.clicks == []
 
 
 def test_entry_missing_aborts_cleanly(tmp_path):

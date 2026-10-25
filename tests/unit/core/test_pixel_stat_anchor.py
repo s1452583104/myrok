@@ -57,7 +57,9 @@ def test_pixel_stat_ids_are_absent_from_the_template_table(registry):
             f"对每个 spec cv2.imread(spec.file)")
     # 55 -> 61（2026-10-17）：宝石模式加了 6 条模板。这个数是**变化哨兵**——
     # 变了要确认是有意的；`back_from_detail` 未裁（见 crop_gem_templates.py）。
-    assert len(registry._t) == 61, "templates: 条目数变了，确认是有意的"
+    # 61 -> 62（2026-10-25）：答题入口的 `activity_icon`（卷轴图标），
+    # 替掉 quiz_sm 里写死的 (1682,127)。
+    assert len(registry._t) == 62, "templates: 条目数变了，确认是有意的"
 
 
 def test_build_recognizers_includes_the_pixel_stats(registry):
