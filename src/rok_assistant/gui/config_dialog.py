@@ -222,6 +222,9 @@ class ConfigDialog(QDialog):
             self._stack.addWidget(self._scroll(self._make_quiz_instance_page(idx)))
 
         self._tree.expandItem(z)          # 实例默认展开，否则用户看不见它们
+        # 答题实例同理：只展开寨多多时，新增的「答题号 …」会藏在折叠节点下，
+        # 用户点完「＋ 添加答题模拟器」看不到任何变化（2026-10-25 反馈）。
+        self._tree.expandItem(q)
 
         # 重建后恢复先前的选中项（不存在则回落到公共配置）。实例现在是子项，
         # 得递归扫，只扫顶层会漏掉它们。
@@ -263,6 +266,15 @@ class ConfigDialog(QDialog):
             # 所以偏移要加上寨多多的实例数。
             self._stack.setCurrentIndex(
                 5 + len(self._data["zhaiduo"]["instances"]) + key)
+
+    def _page_item(self, index: int) -> QTreeWidgetItem | None:
+        """按固定页索引（0 公共 / 1 寨多多 / 2 宝石 / 3 答题 / 4 YAML）
+        取顶层树项。实例增删只会加子项，不改变顶层顺序。"""
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item.data(0, Qt.ItemDataRole.UserRole) == ("page", index):
+                return item
+        return None
 
     # ---------------- 小部件帮手 ----------------
     def _bind(self, path: tuple, widget: QWidget) -> QWidget:
@@ -761,6 +773,12 @@ class ConfigDialog(QDialog):
             "adb_address": "", "window_title_pattern": "",
             "characters": [{"id": f"q{k}", "name": "答题号"}]})
         self._reload_tree()
+        # 添加完直接落到新实例页：打开对话框时已扫过模拟器，列表就在这一页，
+        # 点一台就配完了。停在作答策略页等用户自己去左侧找条目，就是
+        # 「点了没反应、加不了模拟器」的观感（2026-10-25 用户反馈）。
+        quiz_item = self._page_item(3)
+        if quiz_item is not None and quiz_item.childCount():
+            self._tree.setCurrentItem(quiz_item.child(quiz_item.childCount() - 1))
 
     def _delete_quiz_instance(self, idx: int):
         inst = self._data["quiz"]["instances"][idx]

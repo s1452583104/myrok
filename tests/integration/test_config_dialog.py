@@ -1280,6 +1280,27 @@ def test_quiz_instances_do_not_shadow_zhaiduo_pages(tmp_path, qapp, monkeypatch)
         QWidget, "page:quiz") is not None
 
 
+def test_add_quiz_instance_is_visible_and_selected(tmp_path, qapp, monkeypatch):
+    """添加答题模拟器后必须看得见、且直接落到新实例页。
+
+    回归（2026-10-25 用户反馈「答题模式无法添加模拟器」）：`_reload_tree`
+    原先只展开寨多多节点，答题节点始终折叠——新增的「答题号 …」子项藏在
+    折叠节点下，页面也还停在作答策略页；用户点完「＋ 添加答题模拟器」看不到
+    任何变化，再点保存又因未选模拟器被拒，于是判定「添加不了」。
+    答题目录要与寨多多一样默认展开，并把选中项移到新实例上，
+    让扫描到的模拟器列表直接出现在眼前（点一台就配完了）。
+    """
+    dlg = _quiz_dlg(tmp_path, qapp, monkeypatch)
+    dlg._tree.setCurrentItem(dlg._tree.topLevelItem(3))   # 用户点左侧答题模式
+    dlg._add_quiz_instance()
+
+    quiz_item = dlg._tree.topLevelItem(3)
+    assert quiz_item.isExpanded(), "添加后答题节点必须展开，否则新条目看不见"
+    assert quiz_item.childCount() == 1
+    assert dlg._tree.currentItem() is quiz_item.child(0), "应直接落到新实例页"
+    assert dlg._stack.currentWidget().widget().objectName() == "page:quiz_instance:0"
+
+
 @pytest.mark.parametrize("session,label,cap_text", [
     (SESSION_PRELIM, "初试", "固定 10 题"),
     (SESSION_FINAL, "终试", "固定 20 题"),
